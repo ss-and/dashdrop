@@ -174,7 +174,57 @@ async function main() {
     }
   }
 
-  console.log(`✅ Seeded workspace "${workspace.name}" with demo inquiries & tasks.`);
+  // --- Example dashboards over the seeded collections, so the gallery feature
+  // is visible immediately on login (sidebar shows real, populated dashboards).
+  await db.dashboard.create({
+    data: {
+      workspaceId: workspace.id,
+      name: "問い合わせサマリー",
+      category: "support",
+      description: "受付から解決までの状況をひと目で。",
+      icon: "inbox",
+      color: "info",
+      source: "template:seed",
+      position: 0,
+      collectionSlugs: ["inquiries"],
+      layout: [
+        { id: "k1", type: "kpi", title: "今週の新規問い合わせ", collection: "inquiries", span: 1, measure: { kind: "count" }, delta: { dateField: "received_at", period: "week" }, icon: "inbox" },
+        { id: "k2", type: "kpi", title: "対応済み率", collection: "inquiries", span: 1, measure: { kind: "count" }, rateNumerator: [{ field: "status", op: "eq", value: "resolved" }] },
+        { id: "k3", type: "kpi", title: "未対応", collection: "inquiries", span: 1, measure: { kind: "count" }, filters: [{ field: "status", op: "in", value: ["new", "in_progress"] }] },
+        { id: "k4", type: "kpi", title: "総問い合わせ", collection: "inquiries", span: 1, measure: { kind: "count" } },
+        { id: "s1", type: "area", title: "問い合わせ推移", collection: "inquiries", span: 2, dateField: "received_at", bucket: "day", rangeCount: 14, measures: [{ label: "受付", measure: { kind: "count" }, color: "khaki" }, { label: "解決", measure: { kind: "count" }, filters: [{ field: "status", op: "eq", value: "resolved" }], color: "success" }] },
+        { id: "b1", type: "donut", title: "受付経路", collection: "inquiries", span: 1, groupBy: "channel", measure: { kind: "count" }, limit: 5 },
+        { id: "b2", type: "donut", title: "対応状況", collection: "inquiries", span: 1, groupBy: "status", measure: { kind: "count" }, limit: 5 },
+        { id: "t1", type: "table", title: "直近の問い合わせ", collection: "inquiries", span: 4, columns: ["customer", "channel", "subject", "status"], sort: { field: "received_at", dir: "desc" }, limit: 8 },
+      ],
+    },
+  });
+
+  await db.dashboard.create({
+    data: {
+      workspaceId: workspace.id,
+      name: "タスク状況",
+      category: "operations",
+      description: "担当・優先度・進捗の管理ビュー。",
+      icon: "check-square",
+      color: "khaki",
+      source: "template:seed",
+      position: 1,
+      collectionSlugs: ["tasks"],
+      layout: [
+        { id: "k1", type: "kpi", title: "完了率", collection: "tasks", span: 1, measure: { kind: "count" }, rateNumerator: [{ field: "status", op: "eq", value: "done" }] },
+        { id: "k2", type: "kpi", title: "未完了", collection: "tasks", span: 1, measure: { kind: "count" }, filters: [{ field: "status", op: "in", value: ["todo", "doing"] }] },
+        { id: "k3", type: "kpi", title: "今週作成", collection: "tasks", span: 1, measure: { kind: "count" }, delta: { period: "week" } },
+        { id: "k4", type: "kpi", title: "総タスク", collection: "tasks", span: 1, measure: { kind: "count" } },
+        { id: "s1", type: "bar", title: "作成推移", collection: "tasks", span: 2, bucket: "day", rangeCount: 14, measures: [{ label: "作成数", measure: { kind: "count" }, color: "khaki" }] },
+        { id: "b1", type: "donut", title: "進捗", collection: "tasks", span: 1, groupBy: "status", measure: { kind: "count" }, limit: 4 },
+        { id: "b2", type: "donut", title: "優先度", collection: "tasks", span: 1, groupBy: "priority", measure: { kind: "count" }, limit: 4 },
+        { id: "t1", type: "table", title: "直近のタスク", collection: "tasks", span: 4, columns: ["title", "assignee", "priority", "status"], sort: { field: "due_date", dir: "asc" }, limit: 8 },
+      ],
+    },
+  });
+
+  console.log(`✅ Seeded workspace "${workspace.name}" with demo inquiries, tasks & 2 dashboards.`);
   console.log(`   Login → ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
 }
 
