@@ -60,7 +60,9 @@ export function TaskDonut({ data }: { data: TaskBreakdown }) {
             outerRadius="90%"
             paddingAngle={empty ? 0 : 2}
             stroke="none"
-            isAnimationActive={!empty}
+            startAngle={90}
+            endAngle={-270}
+            isAnimationActive={false}
           >
             {slices.map((s) => (
               <Cell key={s.name} fill={s.color} />

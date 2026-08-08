@@ -44,6 +44,7 @@ export function ApplyButton({
     <div className={className}>
       <Button
         size="sm"
+        variant="outline"
         onClick={apply}
         disabled={loading}
         className="w-full"

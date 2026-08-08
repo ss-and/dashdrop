@@ -9,7 +9,7 @@
  * validated end to end.
  */
 import { z } from "zod";
-import { FIELD_TYPES } from "./field-types";
+import { FIELD_TYPES, type SelectOption } from "./field-types";
 
 /* ------------------------------- measures ------------------------------- */
 
@@ -197,7 +197,12 @@ export interface BreakdownData {
 }
 export interface TableData {
   type: "table";
-  columns: Array<{ key: string; name: string; type: string }>;
+  columns: Array<{
+    key: string;
+    name: string;
+    type: string;
+    options?: SelectOption[] | null;
+  }>;
   rows: Array<Record<string, unknown>>;
 }
 export type WidgetData =

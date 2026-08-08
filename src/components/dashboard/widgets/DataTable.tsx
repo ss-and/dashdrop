@@ -1,18 +1,60 @@
-import { displayValue, isFieldType } from "@/lib/field-types";
+import { displayValue, isFieldType, type SelectOption } from "@/lib/field-types";
+import { Badge, toneFromColor } from "@/components/ui/Badge";
 import type { TableData } from "@/lib/widgets";
 
 /**
  * Compact data table widget: sticky header, zebra rows, low radius. Cells are
- * formatted through the field-type registry so numbers/currency/dates render
- * consistently with the rest of the app. Scrolls inside its own container so a
- * wide table never widens the page.
+ * rendered the same way as the spreadsheet grid — select/multiselect values map
+ * to their option labels and render as Badges; numbers/currency/dates format
+ * through the field-type registry. Scrolls inside its own container so a wide
+ * table never widens the page.
  */
 
-function renderCell(type: string, value: unknown): string {
-  if (value === null || value === undefined || value === "") return "—";
-  if (isFieldType(type)) return displayValue(type, value) || "—";
-  return String(value);
+type Column = TableData["columns"][number];
+
+function optionFor(options: SelectOption[] | null | undefined, value: unknown) {
+  if (!options) return undefined;
+  return options.find((o) => o.value === String(value));
 }
+
+function Cell({ col, value }: { col: Column; value: unknown }) {
+  if (value === null || value === undefined || value === "") {
+    return <span className="text-ink-faint">—</span>;
+  }
+
+  if (col.type === "select") {
+    const opt = optionFor(col.options, value);
+    return (
+      <Badge tone={toneFromColor(opt?.color)}>{opt?.label ?? String(value)}</Badge>
+    );
+  }
+
+  if (col.type === "multiselect" && Array.isArray(value)) {
+    return (
+      <span className="inline-flex flex-wrap gap-1">
+        {value.map((v) => {
+          const opt = optionFor(col.options, v);
+          return (
+            <Badge key={String(v)} tone={toneFromColor(opt?.color)}>
+              {opt?.label ?? String(v)}
+            </Badge>
+          );
+        })}
+      </span>
+    );
+  }
+
+  if (col.type === "checkbox") {
+    return value ? <span className="text-success">✓</span> : <span className="text-ink-faint">—</span>;
+  }
+
+  const text = isFieldType(col.type)
+    ? displayValue(col.type, value) || "—"
+    : String(value);
+  return <span>{text}</span>;
+}
+
+const NUMERIC = new Set(["number", "currency"]);
 
 export function DataTable({ data }: { data: TableData }) {
   const { columns, rows } = data;
@@ -33,7 +75,9 @@ export function DataTable({ data }: { data: TableData }) {
             {columns.map((c) => (
               <th
                 key={c.key}
-                className="whitespace-nowrap border-b border-ink-line px-3 py-2 text-left text-xs font-semibold text-ink-soft"
+                className={`whitespace-nowrap border-b border-ink-line px-3 py-2 text-xs font-semibold text-ink-soft ${
+                  NUMERIC.has(c.type) ? "text-right" : "text-left"
+                }`}
               >
                 {c.name}
               </th>
@@ -42,16 +86,15 @@ export function DataTable({ data }: { data: TableData }) {
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr
-              key={i}
-              className={i % 2 === 1 ? "bg-paper-sunken/40" : undefined}
-            >
+            <tr key={i} className="hover:bg-paper-sunken/50">
               {columns.map((c) => (
                 <td
                   key={c.key}
-                  className="whitespace-nowrap border-b border-ink-line px-3 py-2 text-ink tabular-nums"
+                  className={`whitespace-nowrap border-b border-ink-line px-3 py-2 text-ink ${
+                    NUMERIC.has(c.type) ? "text-right tabular-nums" : "text-left"
+                  }`}
                 >
-                  {renderCell(c.type, row[c.key])}
+                  <Cell col={c} value={row[c.key]} />
                 </td>
               ))}
             </tr>

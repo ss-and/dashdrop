@@ -10,6 +10,7 @@ import { db } from "@/lib/db";
 import { getCollectionForUser } from "@/lib/workspace";
 import { Topbar } from "@/components/app/Topbar";
 import { CollectionIcon, NavIcon } from "@/components/app/icons";
+import { HelpTip } from "@/components/ui/HelpTip";
 import { DataGrid } from "@/components/grid/DataGrid";
 
 export default async function CollectionPage({
@@ -50,9 +51,15 @@ export default async function CollectionPage({
                 />
               </span>
               <div>
-                <h2 className="text-lg font-semibold text-ink">
-                  {collection.name}
-                </h2>
+                <div className="flex items-center gap-1.5">
+                  <h2 className="text-lg font-semibold text-ink">
+                    {collection.name}
+                  </h2>
+                  <HelpTip label="テーブルの使い方">
+                    セルをクリックすると直接編集できます（Enterで確定 / Escで取消）。
+                    一番下の行から新規追加、列見出しの「…」から項目の追加・変更ができます。
+                  </HelpTip>
+                </div>
                 {collection.description && (
                   <p className="text-sm text-ink-muted">
                     {collection.description}

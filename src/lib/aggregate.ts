@@ -332,7 +332,12 @@ function computeTable(w: TableWidget, col: AggCollection): WidgetData {
 
   const columns = w.columns.map((key) => {
     const f = col.fields.find((x) => x.key === key);
-    return { key, name: f?.name ?? key, type: f?.type ?? "text" };
+    return {
+      key,
+      name: f?.name ?? key,
+      type: f?.type ?? "text",
+      options: f?.options ?? null,
+    };
   });
 
   return {

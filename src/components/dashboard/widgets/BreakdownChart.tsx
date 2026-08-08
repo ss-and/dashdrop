@@ -91,7 +91,7 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
               width={96}
             />
             <Tooltip cursor={{ fill: "rgba(138,130,80,0.06)" }} contentStyle={tooltipStyle} />
-            <Bar dataKey="value" radius={[0, 2, 2, 0]} maxBarSize={26}>
+            <Bar dataKey="value" radius={[0, 2, 2, 0]} maxBarSize={26} isAnimationActive={false}>
               {rows.map((r) => (
                 <Cell key={r.label} fill={r.fill} />
               ))}
@@ -122,6 +122,9 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
             outerRadius="88%"
             paddingAngle={2}
             stroke="none"
+            startAngle={90}
+            endAngle={-270}
+            isAnimationActive={false}
           >
             {rows.map((r) => (
               <Cell key={r.label} fill={r.fill} />

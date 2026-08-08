@@ -69,30 +69,41 @@ function ChartTooltip({
   );
 }
 
-const commonAxes = (
-  <>
-    <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+// NOTE: Recharts identifies axes/grid/legend by walking its DIRECT children and
+// does NOT look through React Fragments — so these MUST be returned as a keyed
+// array (flattened into the chart's children), never wrapped in <>…</>.
+function commonAxes(showLegend: boolean) {
+  return [
+    <CartesianGrid key="grid" stroke={GRID} strokeDasharray="3 3" vertical={false} />,
     <XAxis
+      key="x"
       dataKey="x"
       tick={axisTick}
       tickLine={false}
       axisLine={{ stroke: GRID }}
-    />
+      minTickGap={16}
+    />,
     <YAxis
+      key="y"
       allowDecimals={false}
       tick={axisTick}
       tickLine={false}
       axisLine={false}
       width={36}
       domain={[0, "auto"]}
-    />
-    <Tooltip content={<ChartTooltip />} cursor={{ stroke: GRID, strokeWidth: 1 }} />
-    <Legend
-      iconType="plainline"
-      wrapperStyle={{ fontSize: 12, color: TEXT, paddingTop: 8 }}
-    />
-  </>
-);
+    />,
+    <Tooltip key="tip" content={<ChartTooltip />} cursor={{ stroke: GRID, strokeWidth: 1 }} />,
+    ...(showLegend
+      ? [
+          <Legend
+            key="legend"
+            iconType="plainline"
+            wrapperStyle={{ fontSize: 12, color: TEXT, paddingTop: 8 }}
+          />,
+        ]
+      : []),
+  ];
+}
 
 export function SeriesChart({ data }: { data: SeriesData }) {
   const { type, points, series, stacked } = data;
@@ -106,13 +117,15 @@ export function SeriesChart({ data }: { data: SeriesData }) {
   }
 
   const margin = { top: 8, right: 12, bottom: 0, left: -8 };
+  const showLegend = series.length > 1;
+  const axes = commonAxes(showLegend);
 
   return (
     <div className="h-60 w-full">
       <ResponsiveContainer width="100%" height="100%">
         {type === "area" ? (
           <AreaChart data={points} margin={margin}>
-            {commonAxes}
+            {axes}
             {series.map((s, i) => {
               const hex = hexFor(s.color, i);
               return (
@@ -127,13 +140,14 @@ export function SeriesChart({ data }: { data: SeriesData }) {
                   fillOpacity={0.15}
                   strokeWidth={2}
                   dot={false}
+                  isAnimationActive={false}
                 />
               );
             })}
           </AreaChart>
         ) : type === "bar" ? (
           <BarChart data={points} margin={margin}>
-            {commonAxes}
+            {axes}
             {series.map((s, i) => (
               <Bar
                 key={s.label}
@@ -143,12 +157,13 @@ export function SeriesChart({ data }: { data: SeriesData }) {
                 fill={hexFor(s.color, i)}
                 radius={[2, 2, 0, 0]}
                 maxBarSize={40}
+                isAnimationActive={false}
               />
             ))}
           </BarChart>
         ) : (
           <LineChart data={points} margin={margin}>
-            {commonAxes}
+            {axes}
             {series.map((s, i) => {
               const hex = hexFor(s.color, i);
               return (
@@ -161,6 +176,7 @@ export function SeriesChart({ data }: { data: SeriesData }) {
                   strokeWidth={2}
                   dot={{ r: 2, fill: hex }}
                   activeDot={{ r: 4 }}
+                  isAnimationActive={false}
                 />
               );
             })}
