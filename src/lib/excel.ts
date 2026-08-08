@@ -17,12 +17,28 @@ import {
   type FieldType,
 } from "@/lib/field-types";
 
+/**
+ * Hard ceiling on rows parsed from any single sheet. `.xlsx` is zip-compressed
+ * XML, so a small upload can inflate to an enormous matrix; `sheetRows` makes
+ * the parser stop early instead of materialising the whole sheet into memory
+ * (decompression-bomb / OOM guard). Includes the header row.
+ */
+export const MAX_IMPORT_ROWS = 50000;
+
 /** Coerce either input flavour into something XLSX.read can consume. */
-function toWorkbook(buffer: ArrayBuffer | Buffer): XLSX.WorkBook {
+function toWorkbook(
+  buffer: ArrayBuffer | Buffer,
+  maxRows: number = MAX_IMPORT_ROWS,
+): XLSX.WorkBook {
   // Buffer is a Uint8Array subclass, so "array" reads both flavours safely.
   const data =
     buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
-  return XLSX.read(data, { type: "array", cellDates: true });
+  // +1 so we still read the header row on top of the data-row budget.
+  return XLSX.read(data, {
+    type: "array",
+    cellDates: true,
+    sheetRows: maxRows + 1,
+  });
 }
 
 /** Trim a cell to a clean string, treating null/undefined as empty. */
@@ -70,8 +86,9 @@ const MAX_SAMPLES = 50;
 export function readSheet(
   buffer: ArrayBuffer | Buffer,
   sheetName?: string,
+  maxRows: number = MAX_IMPORT_ROWS,
 ): ReadSheetResult {
-  const wb = toWorkbook(buffer);
+  const wb = toWorkbook(buffer, maxRows);
   const names = wb.SheetNames ?? [];
   const chosen =
     sheetName && names.includes(sheetName) ? sheetName : names[0];

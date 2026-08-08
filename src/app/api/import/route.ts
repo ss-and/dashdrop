@@ -14,9 +14,9 @@ import { db, toJson } from "@/lib/db";
 import { slugify, uniqueName, toFieldKey } from "@/lib/utils";
 import {
   assertCanCreateCollection,
-  assertCanAddRecords,
   logActivity,
 } from "@/lib/workspace";
+import { getPlan } from "@/lib/plans";
 import {
   isFieldType,
   coerceValue,
@@ -124,8 +124,16 @@ export const POST = withAuth(async (req, { user }) => {
       required: false,
     }));
 
-  // --- Plan limit: can this workspace create another collection? ---
+  // --- Plan limits (checked BEFORE any write so we never leave an orphan
+  // collection behind on a limit violation) ---
   await assertCanCreateCollection(user);
+  const plan = getPlan(user.workspace.plan);
+  if (rows.length > plan.limits.recordsPerCollection) {
+    throw new ApiError(
+      `プラン「${plan.name}」の1テーブルあたり行数上限（${plan.limits.recordsPerCollection.toLocaleString()}）を超えます。`,
+      403,
+    );
+  }
 
   const nameInput = form.get("collectionName");
   const collectionName =
@@ -167,9 +175,6 @@ export const POST = withAuth(async (req, { user }) => {
     include: { fields: { orderBy: { position: "asc" } } },
   });
 
-  // --- Plan limit: can we add this many rows? ---
-  await assertCanAddRecords(user, collection.id, rows.length);
-
   // Map each sheet row -> Record.data, coercing per field type. Header order
   // aligns with field order, so we resolve the source cell by position first
   // and fall back to name/key lookups for robustness.
@@ -195,20 +200,27 @@ export const POST = withAuth(async (req, { user }) => {
   });
 
   // Bulk insert in batched transactions — createMany can't carry Json well on
-  // SQLite, so we loop create()s inside a transaction per batch.
-  for (let i = 0; i < recordData.length; i += BATCH_SIZE) {
-    const batch = recordData.slice(i, i + BATCH_SIZE);
-    await db.$transaction(
-      batch.map((data) =>
-        db.record.create({
-          data: {
-            collectionId: collection.id,
-            createdById: user.id,
-            data: toJson(data),
-          },
-        }),
-      ),
-    );
+  // SQLite, so we loop create()s inside a transaction per batch. If any batch
+  // fails, delete the just-created collection so we don't leave a partial
+  // import (and a consumed collection slot) behind.
+  try {
+    for (let i = 0; i < recordData.length; i += BATCH_SIZE) {
+      const batch = recordData.slice(i, i + BATCH_SIZE);
+      await db.$transaction(
+        batch.map((data) =>
+          db.record.create({
+            data: {
+              collectionId: collection.id,
+              createdById: user.id,
+              data: toJson(data),
+            },
+          }),
+        ),
+      );
+    }
+  } catch (err) {
+    await db.collection.delete({ where: { id: collection.id } }).catch(() => {});
+    throw new ApiError("インポート中にエラーが発生しました", 500);
   }
 
   await logActivity(user.workspace.id, "collection.created", {

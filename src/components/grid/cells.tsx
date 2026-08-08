@@ -72,30 +72,43 @@ export function CellView({
     ) : null;
   }
 
+  // Only turn a URL cell into a link when it is a safe http(s) URL. A value
+  // stored as plain text before the field was switched to "url" could contain
+  // a `javascript:`/`data:` scheme, which React won't block — so we render such
+  // values as inert text instead of an anchor.
   if (field.type === "url" && value) {
-    return (
-      <a
-        href={String(value)}
-        target="_blank"
-        rel="noreferrer"
-        onClick={(e) => e.stopPropagation()}
-        className="truncate text-khaki-700 underline decoration-khaki-300 underline-offset-2 hover:text-khaki-800"
-      >
-        {String(value)}
-      </a>
-    );
+    const s = String(value);
+    if (/^https?:\/\//i.test(s)) {
+      return (
+        <a
+          href={s}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="truncate text-khaki-700 underline decoration-khaki-300 underline-offset-2 hover:text-khaki-800"
+        >
+          {s}
+        </a>
+      );
+    }
+    return <span className="truncate">{s}</span>;
   }
 
   if (field.type === "email" && value) {
-    return (
-      <a
-        href={`mailto:${String(value)}`}
-        onClick={(e) => e.stopPropagation()}
-        className="truncate text-khaki-700 hover:text-khaki-800"
-      >
-        {String(value)}
-      </a>
-    );
+    const s = String(value);
+    // Guard against scheme injection when a text field is retyped as email.
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) {
+      return (
+        <a
+          href={`mailto:${s}`}
+          onClick={(e) => e.stopPropagation()}
+          className="truncate text-khaki-700 hover:text-khaki-800"
+        >
+          {s}
+        </a>
+      );
+    }
+    return <span className="truncate">{s}</span>;
   }
 
   const text = displayValue(field.type, value);

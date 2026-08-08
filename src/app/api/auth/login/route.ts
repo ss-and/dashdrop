@@ -12,6 +12,11 @@ import { loginSchema } from "@/lib/validation";
 
 const GENERIC_401 = "メールアドレスまたはパスワードが正しくありません";
 
+// A valid cost-12 bcrypt hash of a throwaway string. When the email doesn't
+// exist we still run a comparison against this so the response time matches the
+// "wrong password" path — preventing user-enumeration via timing.
+const DUMMY_HASH = "$2a$12$xZrwqwBSJd/3pGc6sIUFUeu.3y0YQ4gPkewpcKvRM6s5PcMgrAW8W";
+
 export async function POST(req: Request) {
   try {
     let body: unknown;
@@ -27,8 +32,13 @@ export async function POST(req: Request) {
       where: { email: email.toLowerCase() },
     });
 
-    // Generic failure whether the user is missing OR the password is wrong.
-    if (!user || !(await verifyPassword(password, user.passwordHash))) {
+    // Always run a bcrypt comparison (against a dummy hash when the user is
+    // missing) so both failure paths take the same time — no timing oracle.
+    const passwordOk = await verifyPassword(
+      password,
+      user?.passwordHash ?? DUMMY_HASH,
+    );
+    if (!user || !passwordOk) {
       return fail(GENERIC_401, 401);
     }
 

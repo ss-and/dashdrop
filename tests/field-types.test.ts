@@ -1,0 +1,241 @@
+import { describe, it, expect } from "vitest";
+import {
+  coerceValue,
+  displayValue,
+  inferFieldType,
+  isFieldType,
+  FIELD_TYPES,
+  type SelectOption,
+} from "@/lib/field-types";
+
+describe("coerceValue", () => {
+  it("normalises empty / null / undefined to null (ok)", () => {
+    for (const raw of [null, undefined, ""]) {
+      expect(coerceValue("text", raw)).toEqual({ ok: true, value: null });
+      expect(coerceValue("number", raw)).toEqual({ ok: true, value: null });
+      expect(coerceValue("checkbox", raw)).toEqual({ ok: true, value: null });
+    }
+  });
+
+  it("keeps boolean false and number 0 (not treated as empty)", () => {
+    expect(coerceValue("checkbox", false)).toEqual({ ok: true, value: false });
+    expect(coerceValue("number", 0)).toEqual({ ok: true, value: 0 });
+  });
+
+  describe("text / longtext / phone", () => {
+    it("trims strings", () => {
+      expect(coerceValue("text", "  hi  ")).toEqual({ ok: true, value: "hi" });
+      expect(coerceValue("longtext", "  a b ")).toEqual({ ok: true, value: "a b" });
+      expect(coerceValue("phone", " 090-1234 ")).toEqual({ ok: true, value: "090-1234" });
+    });
+  });
+
+  describe("number / currency", () => {
+    it("parses plain numbers and numeric strings", () => {
+      expect(coerceValue("number", 42)).toEqual({ ok: true, value: 42 });
+      expect(coerceValue("number", "42")).toEqual({ ok: true, value: 42 });
+      expect(coerceValue("number", "3.14")).toEqual({ ok: true, value: 3.14 });
+    });
+
+    it("strips thousands separators", () => {
+      expect(coerceValue("number", "1,000")).toEqual({ ok: true, value: 1000 });
+    });
+
+    it("strips currency symbols like ¥", () => {
+      expect(coerceValue("currency", "¥500")).toEqual({ ok: true, value: 500 });
+      expect(coerceValue("currency", "¥1,000")).toEqual({ ok: true, value: 1000 });
+      expect(coerceValue("currency", "$2,500")).toEqual({ ok: true, value: 2500 });
+    });
+
+    it("rejects non-numbers", () => {
+      const r = coerceValue("number", "abc");
+      expect(r.ok).toBe(false);
+      expect(r.error).toBeDefined();
+    });
+  });
+
+  describe("email", () => {
+    it("accepts valid and trims", () => {
+      expect(coerceValue("email", "  a@b.com ")).toEqual({ ok: true, value: "a@b.com" });
+    });
+    it("rejects invalid", () => {
+      expect(coerceValue("email", "not-an-email").ok).toBe(false);
+      expect(coerceValue("email", "a@b").ok).toBe(false);
+    });
+  });
+
+  describe("url", () => {
+    it("auto-prefixes https:// and validates", () => {
+      expect(coerceValue("url", "example.com")).toEqual({
+        ok: true,
+        value: "https://example.com",
+      });
+    });
+    it("keeps an existing scheme", () => {
+      expect(coerceValue("url", "http://x.io")).toEqual({ ok: true, value: "http://x.io" });
+    });
+    it("rejects a url containing whitespace", () => {
+      expect(coerceValue("url", "has space.com").ok).toBe(false);
+    });
+  });
+
+  describe("date", () => {
+    it("accepts ISO date strings verbatim", () => {
+      expect(coerceValue("date", "2024-01-15")).toEqual({ ok: true, value: "2024-01-15" });
+    });
+    it("accepts Date instances", () => {
+      const d = new Date("2024-06-15T00:00:00Z");
+      expect(coerceValue("date", d)).toEqual({ ok: true, value: "2024-06-15" });
+    });
+    it("accepts parseable datetime strings (TZ-safe absolute instant)", () => {
+      expect(coerceValue("date", "2024-06-15T12:00:00Z")).toEqual({
+        ok: true,
+        value: "2024-06-15",
+      });
+    });
+    it("rejects garbage", () => {
+      expect(coerceValue("date", "garbage!!!").ok).toBe(false);
+    });
+  });
+
+  describe("checkbox", () => {
+    it("passes through booleans", () => {
+      expect(coerceValue("checkbox", true)).toEqual({ ok: true, value: true });
+      expect(coerceValue("checkbox", false)).toEqual({ ok: true, value: false });
+    });
+    it("maps ascii truthy tokens", () => {
+      for (const t of ["true", "1", "yes", "y", "✓", "done"]) {
+        expect(coerceValue("checkbox", t).value).toBe(true);
+      }
+    });
+    it("maps ascii falsy tokens", () => {
+      for (const f of ["false", "0", "no", "n"]) {
+        expect(coerceValue("checkbox", f).value).toBe(false);
+      }
+    });
+    it("maps Japanese tokens はい / 済 -> true, 未 / いいえ -> false", () => {
+      expect(coerceValue("checkbox", "はい").value).toBe(true);
+      expect(coerceValue("checkbox", "済").value).toBe(true);
+      expect(coerceValue("checkbox", "未").value).toBe(false);
+      expect(coerceValue("checkbox", "いいえ").value).toBe(false);
+    });
+  });
+
+  describe("select", () => {
+    const options: SelectOption[] = [
+      { label: "High", value: "h" },
+      { label: "Low", value: "l" },
+    ];
+    it("maps a label to its value (case-insensitive)", () => {
+      expect(coerceValue("select", "high", options).value).toBe("h");
+      expect(coerceValue("select", "High", options).value).toBe("h");
+    });
+    it("passes through a matching value", () => {
+      expect(coerceValue("select", "l", options).value).toBe("l");
+    });
+    it("returns the raw string when no option matches", () => {
+      expect(coerceValue("select", "Other", options).value).toBe("Other");
+    });
+    it("returns the trimmed string with no options", () => {
+      expect(coerceValue("select", "  x ").value).toBe("x");
+    });
+  });
+
+  describe("multiselect", () => {
+    it("splits on comma, semicolon and Japanese、", () => {
+      expect(coerceValue("multiselect", "a, b; c、d").value).toEqual(["a", "b", "c", "d"]);
+    });
+    it("drops empty fragments", () => {
+      expect(coerceValue("multiselect", "a,,b, ").value).toEqual(["a", "b"]);
+    });
+    it("accepts arrays and trims elements", () => {
+      expect(coerceValue("multiselect", [" a ", "b"]).value).toEqual(["a", "b"]);
+    });
+  });
+});
+
+describe("displayValue", () => {
+  it("renders empty for null/undefined/empty", () => {
+    expect(displayValue("text", null)).toBe("");
+    expect(displayValue("number", undefined)).toBe("");
+    expect(displayValue("text", "")).toBe("");
+  });
+
+  it("formats currency with grouping and yen sign", () => {
+    const out = displayValue("currency", 1000);
+    expect(out).toContain("1,000");
+    expect(out).toContain("¥");
+  });
+
+  it("formats numbers with thousands separators", () => {
+    expect(displayValue("number", 1234567)).toBe("1,234,567");
+  });
+
+  it("renders checkbox as ✓ / empty", () => {
+    expect(displayValue("checkbox", true)).toBe("✓");
+    expect(displayValue("checkbox", false)).toBe("");
+  });
+
+  it("joins multiselect arrays", () => {
+    expect(displayValue("multiselect", ["a", "b", "c"])).toBe("a, b, c");
+  });
+
+  it("falls back to String for plain text", () => {
+    expect(displayValue("text", "hello")).toBe("hello");
+  });
+});
+
+describe("inferFieldType", () => {
+  it("empty column -> text", () => {
+    expect(inferFieldType([])).toBe("text");
+    expect(inferFieldType([null, "", undefined])).toBe("text");
+  });
+
+  it("all numbers -> number", () => {
+    expect(inferFieldType([10, 20, 30, 40])).toBe("number");
+    expect(inferFieldType(["100", "200", "1,000"])).toBe("number");
+  });
+
+  it("booleans -> checkbox", () => {
+    expect(inferFieldType([true, false, true])).toBe("checkbox");
+  });
+
+  it("yes/no -> checkbox", () => {
+    expect(inferFieldType(["yes", "no", "yes", "no"])).toBe("checkbox");
+  });
+
+  it("emails -> email", () => {
+    expect(inferFieldType(["a@x.com", "b@y.co.jp", "c@z.org"])).toBe("email");
+  });
+
+  it("dates -> date", () => {
+    expect(inferFieldType(["2024-01-01", "2024-06-15", "2025-12-31"])).toBe("date");
+  });
+
+  it("low-cardinality strings -> select", () => {
+    expect(
+      inferFieldType(["Red", "Blue", "Red", "Blue", "Red", "Blue"]),
+    ).toBe("select");
+  });
+
+  it("long distinct strings -> longtext", () => {
+    const long = (n: number) => `entry-${n}-` + "x".repeat(90);
+    expect(inferFieldType([long(1), long(2), long(3)])).toBe("longtext");
+  });
+
+  it("short distinct strings -> text", () => {
+    expect(inferFieldType(["alpha", "bravo", "charlie", "delta", "echo"])).toBe("text");
+  });
+});
+
+describe("isFieldType", () => {
+  it("accepts every known field type", () => {
+    for (const t of FIELD_TYPES) expect(isFieldType(t)).toBe(true);
+  });
+  it("rejects unknown / non-string values", () => {
+    expect(isFieldType("nope")).toBe(false);
+    expect(isFieldType(42)).toBe(false);
+    expect(isFieldType(null)).toBe(false);
+    expect(isFieldType(undefined)).toBe(false);
+  });
+});
