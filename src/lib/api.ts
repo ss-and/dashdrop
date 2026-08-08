@@ -40,7 +40,7 @@ type Handler = (
 export function withAuth(handler: Handler) {
   return async (
     req: Request,
-    segmentData?: { params: Promise<Record<string, string>> },
+    context: { params: Promise<Record<string, string>> },
   ): Promise<NextResponse> => {
     let user: CurrentUser | null;
     try {
@@ -50,7 +50,7 @@ export function withAuth(handler: Handler) {
     }
     if (!user) return fail("Not authenticated", 401);
 
-    const params = segmentData?.params ? await segmentData.params : {};
+    const params = context?.params ? await context.params : {};
 
     try {
       return await handler(req, { user, params });

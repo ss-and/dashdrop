@@ -49,7 +49,10 @@ export const isSecureAuthSecret =
   env.AUTH_SECRET !== "dev-insecure-secret-change-me" &&
   !env.AUTH_SECRET.startsWith("dev-only-secret");
 
-if (env.NODE_ENV === "production" && !isSecureAuthSecret) {
+// Enforce a strong secret when actually serving in production — but not during
+// `next build` (NEXT_PHASE=phase-production-build), where secrets may be absent.
+const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build";
+if (env.NODE_ENV === "production" && !isBuildPhase && !isSecureAuthSecret) {
   throw new Error(
     "AUTH_SECRET must be a strong 32+ char secret in production. Generate one with `openssl rand -base64 48`.",
   );
