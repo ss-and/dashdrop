@@ -1,0 +1,132 @@
+// DashDrop data model.
+//
+// The heart of the product is a *metadata-driven database*: a Workspace owns
+// Collections (think "sheets"/"tables"), each Collection owns typed Fields
+// (the metadata), and Records hold the actual rows as flexible JSON keyed by
+// field key. Built-in templates (Inquiries, Tasks) are just Collections seeded
+// with a predefined set of Fields.
+//
+// Dev uses SQLite. To go to production, switch `provider` to "postgresql" and
+// point DATABASE_URL at Postgres — the schema is written to port cleanly
+// (String-typed enums validated in the app layer via Zod, Json for row data).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  memberships  Membership[]
+  records      Record[]     @relation("RecordAuthor")
+
+  @@index([email])
+}
+
+model Workspace {
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  // Plan: "free" | "pro" | "business"
+  plan        String       @default("free")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  memberships Membership[]
+  collections Collection[]
+  activities  Activity[]
+}
+
+model Membership {
+  id          String    @id @default(cuid())
+  userId      String
+  workspaceId String
+  // Role: "owner" | "admin" | "member"
+  role        String    @default("member")
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+}
+
+model Collection {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  slug        String
+  description String    @default("")
+  icon        String    @default("table")
+  color       String    @default("khaki")
+  // Template origin: "inquiry" | "task" | "custom"
+  template    String    @default("custom")
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  fields      Field[]
+  records     Record[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId])
+}
+
+model Field {
+  id           String     @id @default(cuid())
+  collectionId String
+  // Stable machine key used inside Record.data JSON
+  key          String
+  name         String
+  // Type: text | longtext | number | currency | select | multiselect
+  //       | date | checkbox | email | phone | url
+  type         String     @default("text")
+  required     Boolean    @default(false)
+  // For select/multiselect: JSON array of { label, value, color }
+  options      Json?
+  // Extra per-type config (e.g. number precision, date format)
+  config       Json?
+  position     Int        @default(0)
+  createdAt    DateTime   @default(now())
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, key])
+  @@index([collectionId])
+}
+
+model Record {
+  id           String     @id @default(cuid())
+  collectionId String
+  // Row payload keyed by Field.key
+  data         Json
+  createdById  String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  createdBy    User?      @relation("RecordAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([collectionId])
+  @@index([collectionId, createdAt])
+}
+
+// Lightweight event stream powering the weekly performance charts.
+model Activity {
+  id          String    @id @default(cuid())
+  workspaceId String
+  // Type: "record.created" | "record.updated" | "record.deleted"
+  //       | "inquiry.resolved" | "task.completed" | "import.completed"
+  type        String
+  meta        Json?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+}

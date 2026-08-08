@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: "Inter", system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-paper text-ink antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  /* Honest, visible focus — accessibility over minimalism. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-khaki-500/50 ring-offset-1 ring-offset-paper;
+  }
+
+  ::selection {
+    @apply bg-khaki-200 text-ink;
+  }
+
+  h1, h2, h3, h4 {
+    @apply text-ink font-semibold tracking-tight;
+  }
+
+  /* Thin, calm scrollbars */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-ink-line rounded;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-faint;
+  }
+}
+
+@layer components {
+  /* Reusable primitives kept minimal; components live in /components/ui. */
+  .card {
+    @apply bg-paper-raised border border-ink-line rounded-md shadow-card;
+  }
+
+  .input-base {
+    @apply w-full rounded bg-paper-raised border border-ink-line px-3 py-2 text-sm text-ink
+      placeholder:text-ink-faint transition-colors
+      focus:border-khaki-400 focus:ring-2 focus:ring-khaki-500/25 focus:outline-none;
+  }
+
+  .label-base {
+    @apply block text-sm font-medium text-ink-soft mb-1.5;
+  }
+}
