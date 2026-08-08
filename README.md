@@ -38,15 +38,14 @@ DashDrop は、中小企業の経営者のための **シンプルな SaaS ダ�
 # 1. 依存関係
 npm install
 
-# 2. 環境変数（.env.example をコピーして値を設定）
-cp .env.example .env
-#   AUTH_SECRET は本番で必ず変更:  openssl rand -base64 48
+# 2. データベース初期化 + デモデータ投入
+#    （.env が無ければ .env.example から自動生成されます）
+npm run setup      # = ensure-env && prisma generate && prisma db push && seed
 
-# 3. データベース初期化 + デモデータ投入
-npm run setup      # = prisma generate && prisma db push && seed
-
-# 4. 開発サーバー
+# 3. 開発サーバー
 npm run dev        # http://localhost:3000
+
+# 本番公開時のみ、.env の AUTH_SECRET を強い値へ:  openssl rand -base64 48
 ```
 
 ### デモアカウント
