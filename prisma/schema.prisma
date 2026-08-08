@@ -43,6 +43,7 @@ model Workspace {
   memberships Membership[]
   collections Collection[]
   activities  Activity[]
+  dashboards  Dashboard[]
 }
 
 model Membership {
@@ -107,6 +108,9 @@ model Record {
   collectionId String
   // Row payload keyed by Field.key
   data         Json
+  // True for rows seeded by a dashboard template so the user can bulk-clear
+  // sample data once they start entering real records.
+  isSampleData Boolean    @default(false)
   createdById  String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
@@ -115,6 +119,32 @@ model Record {
 
   @@index([collectionId])
   @@index([collectionId, createdAt])
+}
+
+// A saved dashboard bound to a workspace: a titled arrangement of widgets
+// (KPI tiles + charts) computed from the workspace's collections. Created by
+// applying a gallery template or by the AI "from attachment" flow. The concrete
+// widget layout lives in `layout` (validated by src/lib/widgets.ts).
+model Dashboard {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  name            String
+  category        String    @default("custom")
+  description     String    @default("")
+  icon            String    @default("dashboard")
+  color           String    @default("khaki")
+  // Slugs of the collections this dashboard reads (resolved within workspace).
+  collectionSlugs Json
+  // Array of widget specs (see WidgetSpec in src/lib/widgets.ts).
+  layout          Json
+  // Origin: "template:<key>" | "ai" | "custom"
+  source          String    @default("custom")
+  position        Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
 }
 
 // Lightweight event stream powering the weekly performance charts.

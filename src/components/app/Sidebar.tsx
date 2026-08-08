@@ -9,11 +9,18 @@ import { CollectionIcon, NavIcon } from "./icons";
  * so it never depends on a client fetch. Shared by every /(app) page.
  */
 export async function Sidebar({ user }: { user: CurrentUser }) {
-  const collections = await db.collection.findMany({
-    where: { workspaceId: user.workspace.id },
-    orderBy: { position: "asc" },
-    select: { id: true, name: true, icon: true, color: true },
-  });
+  const [collections, dashboards] = await Promise.all([
+    db.collection.findMany({
+      where: { workspaceId: user.workspace.id },
+      orderBy: { position: "asc" },
+      select: { id: true, name: true, icon: true, color: true },
+    }),
+    db.dashboard.findMany({
+      where: { workspaceId: user.workspace.id },
+      orderBy: { position: "asc" },
+      select: { id: true, name: true, icon: true },
+    }),
+  ]);
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-ink-line bg-paper-raised">
@@ -24,8 +31,42 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 py-3">
-        <NavLink href="/dashboard" icon="dashboard" label="ダッシュボード" />
+        <NavLink href="/dashboard" icon="dashboard" label="サマリー" />
         <NavLink href="/import" icon="upload" label="Excel取り込み" />
+
+        <div className="flex items-center justify-between px-3 pt-5 pb-1.5">
+          <p className="text-2xs font-semibold uppercase tracking-wider text-ink-faint">
+            ダッシュボード
+          </p>
+          <Link
+            href="/dashboards"
+            className="text-2xs font-medium text-khaki-600 hover:text-khaki-700"
+          >
+            ギャラリー
+          </Link>
+        </div>
+        <ul className="space-y-0.5">
+          {dashboards.map((d) => (
+            <li key={d.id}>
+              <Link
+                href={`/d/${d.id}`}
+                className="flex items-center gap-2.5 rounded px-3 py-2 text-sm text-ink-soft hover:bg-paper-sunken hover:text-ink transition-colors"
+              >
+                <CollectionIcon name={d.icon} className="h-4 w-4 text-khaki-500" />
+                <span className="truncate">{d.name}</span>
+              </Link>
+            </li>
+          ))}
+          <li>
+            <Link
+              href="/dashboards"
+              className="flex items-center gap-2 rounded px-3 py-2 text-sm font-medium text-khaki-600 hover:text-khaki-700"
+            >
+              <NavIcon name="plus" className="h-4 w-4" />
+              ダッシュボードを追加
+            </Link>
+          </li>
+        </ul>
 
         <p className="px-3 pt-5 pb-1.5 text-2xs font-semibold uppercase tracking-wider text-ink-faint">
           テーブル

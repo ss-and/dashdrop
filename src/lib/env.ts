@@ -20,7 +20,10 @@ const schema = z.object({
   STRIPE_PRICE_PRO: z.string().optional().default(""),
   STRIPE_PRICE_BUSINESS: z.string().optional().default(""),
 
+  ANTHROPIC_API_KEY: z.string().optional().default(""),
+  ANTHROPIC_MODEL: z.string().optional().default("claude-sonnet-4-5"),
   OPENAI_API_KEY: z.string().optional().default(""),
+  OPENAI_MODEL: z.string().optional().default("gpt-4o-mini"),
   GOOGLE_SHEETS_CLIENT_ID: z.string().optional().default(""),
   GOOGLE_SHEETS_CLIENT_SECRET: z.string().optional().default(""),
 
@@ -60,3 +63,11 @@ if (env.NODE_ENV === "production" && !isBuildPhase && !isSecureAuthSecret) {
 
 /** Billing is only active when Stripe keys are present. */
 export const billingEnabled = env.STRIPE_SECRET_KEY.length > 0;
+
+/** Which AI provider (if any) is configured for dashboard generation. */
+export const aiProvider: "anthropic" | "openai" | null =
+  env.ANTHROPIC_API_KEY.length > 0
+    ? "anthropic"
+    : env.OPENAI_API_KEY.length > 0
+      ? "openai"
+      : null;
