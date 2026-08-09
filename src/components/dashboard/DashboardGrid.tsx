@@ -59,8 +59,8 @@ export function DashboardGrid({ computed }: { computed: ComputedWidget[] }) {
             className={`flex flex-col ${SPAN_CLASS[span]}`}
           >
             {isKpi ? (
-              <CardBody className="flex flex-1 flex-col gap-2">
-                <p className="text-sm font-medium text-ink-soft">
+              <CardBody className="flex flex-1 flex-col gap-2.5 py-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">
                   {widget.title}
                 </p>
                 <div className="flex-1">

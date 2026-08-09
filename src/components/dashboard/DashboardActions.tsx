@@ -50,7 +50,7 @@ export function DashboardActions({
   async function deleteDashboard() {
     if (
       !confirm(
-        "このダッシュボードを削除します。テーブルとデータは残ります。よろしいですか？",
+        "このダッシュボードを削除します。スプレッドシートとデータは残ります。よろしいですか？",
       )
     )
       return;
@@ -89,7 +89,7 @@ export function DashboardActions({
             className="inline-flex h-8 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
           >
             <NavIcon name="table" className="h-4 w-4" />
-            テーブルを開く
+            スプレッドシートを開く
           </Link>
         )}
         <Button

@@ -1,7 +1,7 @@
 /**
- * Dashboard gallery — browse ready-made dashboard templates by category and
- * apply one (which seeds sample data + a live dashboard). Also lists the
- * workspace's already-created dashboards and links to the AI (image/PDF) flow.
+ * Dashboard gallery — browse ready-made dashboard templates and open a preview
+ * before adding one. Calm, typography-first cards grouped by category; the
+ * loud per-card badges/buttons were removed in favour of a "見てから使う" flow.
  */
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -16,12 +16,9 @@ import {
 } from "@/lib/dashboard-templates";
 import type { DashboardTemplate } from "@/lib/widgets";
 import { Topbar } from "@/components/app/Topbar";
-import { Card, CardBody } from "@/components/ui/Card";
-import { Badge, toneFromColor } from "@/components/ui/Badge";
 import { CollectionIcon, NavIcon } from "@/components/app/icons";
-import { ApplyButton } from "@/components/dashboard/ApplyButton";
 
-/** Short human hint of a template's widget mix, e.g. "KPI 4 ・ チャート 3 ・ 表 1". */
+/** Short human hint of a template's widget mix, e.g. "KPI 4 ・ グラフ 3 ・ 表 1". */
 function widgetHint(t: DashboardTemplate): string {
   let kpi = 0;
   let chart = 0;
@@ -33,9 +30,29 @@ function widgetHint(t: DashboardTemplate): string {
   }
   const parts: string[] = [];
   if (kpi) parts.push(`KPI ${kpi}`);
-  if (chart) parts.push(`チャート ${chart}`);
+  if (chart) parts.push(`グラフ ${chart}`);
   if (table) parts.push(`表 ${table}`);
   return parts.join(" ・ ");
+}
+
+function TemplateCard({ t }: { t: DashboardTemplate }) {
+  return (
+    <Link
+      href={`/dashboards/preview/${t.key}`}
+      className="group flex flex-col rounded-md border border-ink-line bg-paper-raised p-4 transition-colors hover:border-khaki-300 hover:bg-paper-raised/60"
+    >
+      <div className="flex items-center gap-2">
+        <CollectionIcon name={t.icon} className="h-4 w-4 shrink-0 text-khaki-500" />
+        <h3 className="truncate font-medium text-ink group-hover:text-khaki-800">
+          {t.name}
+        </h3>
+      </div>
+      <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-ink-muted">
+        {t.description}
+      </p>
+      <p className="mt-3 text-2xs tabular-nums text-ink-faint">{widgetHint(t)}</p>
+    </Link>
+  );
 }
 
 export default async function DashboardsGalleryPage({
@@ -51,172 +68,114 @@ export default async function DashboardsGalleryPage({
 
   const counts = templateCounts();
   const total = getAllTemplates().length;
-  const templates = activeCat
-    ? getTemplatesByCategory(activeCat)
-    : getAllTemplates();
 
   const dashboards = await db.dashboard.findMany({
     where: { workspaceId: user.workspace.id },
     orderBy: [{ position: "asc" }, { createdAt: "asc" }],
-    select: {
-      id: true,
-      name: true,
-      description: true,
-      icon: true,
-      color: true,
-      category: true,
-    },
+    select: { id: true, name: true, description: true, icon: true },
   });
 
-  const chipBase =
-    "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors";
+  // Sections to render: one per category (all) or just the active category.
+  const sections = (activeCat ? [getCategory(activeCat)!] : CATEGORIES)
+    .map((c) => ({ category: c, templates: getTemplatesByCategory(c.id) }))
+    .filter((s) => s.templates.length > 0);
+
+  const tab = (active: boolean) =>
+    `rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+      active
+        ? "bg-khaki-100 text-khaki-800"
+        : "text-ink-soft hover:bg-paper-sunken"
+    }`;
 
   return (
     <>
-      <Topbar user={user} title="ダッシュボード ギャラリー" />
+      <Topbar user={user} title="ダッシュボード" />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-6xl space-y-8">
           {/* Created dashboards */}
           {dashboards.length > 0 && (
             <section className="space-y-3">
               <h2 className="text-sm font-semibold text-ink-soft">作成済み</h2>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {dashboards.map((d) => (
-                  <Link key={d.id} href={`/d/${d.id}`} className="group">
-                    <Card className="h-full transition-colors group-hover:border-khaki-300">
-                      <CardBody className="flex items-center gap-3">
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-ink-line bg-paper-raised">
-                          <CollectionIcon
-                            name={d.icon}
-                            className="h-5 w-5 text-khaki-500"
-                          />
+                  <Link
+                    key={d.id}
+                    href={`/d/${d.id}`}
+                    className="group flex items-center gap-2.5 rounded-md border border-ink-line bg-paper-raised px-4 py-3 transition-colors hover:border-khaki-300"
+                  >
+                    <CollectionIcon name={d.icon} className="h-4 w-4 shrink-0 text-khaki-500" />
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium text-ink group-hover:text-khaki-800">
+                        {d.name}
+                      </span>
+                      {d.description && (
+                        <span className="block truncate text-xs text-ink-muted">
+                          {d.description}
                         </span>
-                        <div className="min-w-0">
-                          <p className="truncate font-medium text-ink">
-                            {d.name}
-                          </p>
-                          {d.description && (
-                            <p className="truncate text-xs text-ink-muted">
-                              {d.description}
-                            </p>
-                          )}
-                        </div>
-                      </CardBody>
-                    </Card>
+                      )}
+                    </span>
                   </Link>
                 ))}
               </div>
             </section>
           )}
 
-          {/* Intro + AI card */}
-          <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <div className="lg:col-span-2 space-y-2">
-              <h2 className="text-lg font-semibold text-ink">
-                テンプレートから始める
-              </h2>
-              <p className="max-w-xl text-sm text-ink-muted">
-                適用するとサンプルデータ付きでテーブルとダッシュボードが作成され、
-                そのまま自分のデータに置き換えられます。
+          {/* Header + AI entry */}
+          <section className="flex flex-wrap items-end justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="text-lg font-semibold text-ink">テンプレートから始める</h2>
+              <p className="text-sm text-ink-muted">
+                カードを選ぶとプレビューを表示します。内容を確認してから追加できます。
               </p>
             </div>
             <Link
               href="/dashboards/new"
-              className="group flex items-center gap-3 rounded-md border border-khaki-300 bg-khaki-50 px-4 py-3 transition-colors hover:bg-khaki-100"
+              className="group inline-flex items-center gap-2.5 rounded-md border border-ink-line bg-paper-raised px-3.5 py-2 transition-colors hover:border-khaki-300"
             >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-khaki-500 text-white">
-                <NavIcon name="sparkles" className="h-5 w-5" />
+              <NavIcon name="sparkles" className="h-4 w-4 text-khaki-500" />
+              <span className="text-sm">
+                <span className="font-medium text-ink">画像・PDFから作成</span>
+                <span className="ml-1.5 text-ink-muted">AIで読み取り</span>
               </span>
-              <div className="min-w-0">
-                <p className="font-medium text-khaki-800">画像・PDFから作成</p>
-                <p className="text-xs text-khaki-700">
-                  手元の資料をAIで読み取ってダッシュボード化
-                </p>
-              </div>
             </Link>
           </section>
 
-          {/* Category chips */}
-          <nav className="flex flex-wrap gap-2">
-            <Link
-              href="/dashboards"
-              className={`${chipBase} ${
-                !activeCat
-                  ? "border-khaki-400 bg-khaki-100 text-khaki-800"
-                  : "border-ink-line bg-paper-raised text-ink-soft hover:bg-paper-sunken"
-              }`}
-            >
+          {/* Category filter (calm tabs) */}
+          <nav className="flex flex-wrap gap-1 border-b border-ink-line pb-2">
+            <Link href="/dashboards" className={tab(!activeCat)}>
               すべて
-              <span className="tabular-nums text-ink-faint">{total}</span>
+              <span className="ml-1.5 tabular-nums text-ink-faint">{total}</span>
             </Link>
-            {CATEGORIES.map((c) => {
-              const n = counts[c.id] ?? 0;
-              const active = activeCat === c.id;
-              return (
-                <Link
-                  key={c.id}
-                  href={`/dashboards?cat=${c.id}`}
-                  className={`${chipBase} ${
-                    active
-                      ? "border-khaki-400 bg-khaki-100 text-khaki-800"
-                      : "border-ink-line bg-paper-raised text-ink-soft hover:bg-paper-sunken"
-                  }`}
-                >
-                  <CollectionIcon name={c.icon} className="h-4 w-4" />
-                  {c.label}
-                  <span className="tabular-nums text-ink-faint">{n}</span>
-                </Link>
-              );
-            })}
+            {CATEGORIES.map((c) => (
+              <Link key={c.id} href={`/dashboards?cat=${c.id}`} className={tab(activeCat === c.id)}>
+                {c.label}
+                <span className="ml-1.5 tabular-nums text-ink-faint">
+                  {counts[c.id] ?? 0}
+                </span>
+              </Link>
+            ))}
           </nav>
 
-          {/* Template grid */}
-          {templates.length === 0 ? (
+          {/* Grouped template sections */}
+          {sections.length === 0 ? (
             <p className="py-12 text-center text-sm text-ink-muted">
               このカテゴリのテンプレートはまだありません。
             </p>
           ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {templates.map((t) => {
-                const category = getCategory(t.category);
-                return (
-                  <Card key={t.key} className="flex h-full flex-col">
-                    <CardBody className="flex flex-1 flex-col gap-3">
-                      <div className="flex items-start gap-3">
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-ink-line bg-paper-raised">
-                          <CollectionIcon
-                            name={t.icon}
-                            className="h-5 w-5 text-khaki-500"
-                          />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <h3 className="font-semibold leading-tight text-ink">
-                            {t.name}
-                          </h3>
-                          {category && (
-                            <Badge
-                              tone={toneFromColor(category.color)}
-                              className="mt-1"
-                            >
-                              {category.label}
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-
-                      <p className="flex-1 text-sm text-ink-muted">
-                        {t.description}
-                      </p>
-
-                      <p className="text-2xs uppercase tracking-wide text-ink-faint">
-                        {widgetHint(t)}
-                      </p>
-
-                      <ApplyButton templateKey={t.key} className="mt-1" />
-                    </CardBody>
-                  </Card>
-                );
-              })}
+            <div className="space-y-8">
+              {sections.map(({ category, templates }) => (
+                <section key={category.id} className="space-y-3">
+                  <div className="flex items-baseline gap-2">
+                    <h3 className="text-sm font-semibold text-ink">{category.label}</h3>
+                    <span className="text-xs text-ink-faint">{category.description}</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                    {templates.map((t) => (
+                      <TemplateCard key={t.key} t={t} />
+                    ))}
+                  </div>
+                </section>
+              ))}
             </div>
           )}
         </div>

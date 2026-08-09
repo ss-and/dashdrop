@@ -69,7 +69,7 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
         </ul>
 
         <p className="px-3 pt-5 pb-1.5 text-2xs font-semibold uppercase tracking-wider text-ink-faint">
-          テーブル
+          スプレッドシート
         </p>
         <ul className="space-y-0.5">
           {collections.map((c) => (
@@ -85,7 +85,7 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
           ))}
           {collections.length === 0 && (
             <li className="px-3 py-2 text-xs text-ink-faint">
-              まだテーブルがありません
+              まだスプレッドシートがありません
             </li>
           )}
         </ul>
@@ -96,7 +96,7 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
             className="flex items-center gap-2 rounded px-1 py-1.5 text-sm font-medium text-khaki-600 hover:text-khaki-700"
           >
             <NavIcon name="plus" className="h-4 w-4" />
-            テーブルを追加
+            スプレッドシートを追加
           </Link>
         </div>
       </nav>

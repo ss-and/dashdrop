@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/Button";
+import { Button, type ButtonProps } from "@/components/ui/Button";
 
 /**
  * Applies a template to the workspace, then navigates to the new dashboard.
@@ -12,9 +12,15 @@ import { Button } from "@/components/ui/Button";
 export function ApplyButton({
   templateKey,
   className,
+  variant = "primary",
+  size = "md",
+  label = "このダッシュボードを使う",
 }: {
   templateKey: string;
   className?: string;
+  variant?: ButtonProps["variant"];
+  size?: ButtonProps["size"];
+  label?: string;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -42,14 +48,8 @@ export function ApplyButton({
 
   return (
     <div className={className}>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={apply}
-        disabled={loading}
-        className="w-full"
-      >
-        {loading ? "作成中…" : "このダッシュボードを使う"}
+      <Button size={size} variant={variant} onClick={apply} disabled={loading}>
+        {loading ? "作成中…" : label}
       </Button>
       {error && (
         <p className="mt-1.5 text-xs text-danger" role="alert">

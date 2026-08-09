@@ -31,7 +31,7 @@ const STEPS = [
 const LINKS = [
   { href: "/dashboards", icon: "dashboard", label: "ダッシュボード ギャラリー", desc: "30種のテンプレートから選ぶ" },
   { href: "/import", icon: "upload", label: "Excel / CSV を取り込む", desc: "列を自動でフィールド化" },
-  { href: "/c/new", icon: "plus", label: "テーブルを追加", desc: "空 or テンプレートで作成" },
+  { href: "/c/new", icon: "plus", label: "スプレッドシートを追加", desc: "空 or テンプレートで作成" },
   { href: "/dashboards/new", icon: "sparkles", label: "画像・PDFから作成", desc: "資料をAIでダッシュボード化" },
 ];
 

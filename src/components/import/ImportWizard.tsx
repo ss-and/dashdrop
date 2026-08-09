@@ -166,7 +166,7 @@ export function ImportWizard() {
           </CardHeader>
           <CardBody>
             <p className="mb-4 text-sm text-ink-muted">
-              Excel/CSVをアップロードすると、列を自動でフィールド化してテーブルを作成します。
+              Excel/CSVをアップロードすると、列を自動でフィールド化してスプレッドシートを作成します。
             </p>
 
             <div
@@ -229,12 +229,12 @@ export function ImportWizard() {
             <CardBody className="space-y-5">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <Label htmlFor="tableName">テーブル名</Label>
+                  <Label htmlFor="tableName">スプレッドシート名</Label>
                   <Input
                     id="tableName"
                     value={collectionName}
                     onChange={(e) => setCollectionName(e.target.value)}
-                    placeholder="テーブル名を入力"
+                    placeholder="スプレッドシート名を入力"
                   />
                 </div>
                 <div>

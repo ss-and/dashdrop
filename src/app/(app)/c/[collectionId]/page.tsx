@@ -51,13 +51,17 @@ export default async function CollectionPage({
                 />
               </span>
               <div>
+                <p className="text-2xs font-semibold uppercase tracking-wider text-ink-faint">
+                  スプレッドシート
+                </p>
                 <div className="flex items-center gap-1.5">
                   <h2 className="text-lg font-semibold text-ink">
                     {collection.name}
                   </h2>
-                  <HelpTip label="テーブルの使い方">
+                  <HelpTip label="スプレッドシートの使い方">
                     セルをクリックすると直接編集できます（Enterで確定 / Escで取消）。
-                    一番下の行から新規追加、列見出しの「…」から項目の追加・変更ができます。
+                    一番下の行から新規追加、列見出しの「…」から項目の追加・変更、
+                    右上からExcel書き出しができます。
                   </HelpTip>
                 </div>
                 {collection.description && (

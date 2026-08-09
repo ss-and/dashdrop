@@ -36,8 +36,8 @@ export const PLANS: Record<PlanId, Plan> = {
       apiAccess: false,
     },
     features: [
-      "テーブル 3個まで",
-      "1テーブル 500行まで",
+      "スプレッドシート 3個まで",
+      "1シート 500行まで",
       "メンバー 2名まで",
       "Excel / CSV インポート・エクスポート",
       "週間パフォーマンス ダッシュボード",
@@ -57,8 +57,8 @@ export const PLANS: Record<PlanId, Plan> = {
       apiAccess: true,
     },
     features: [
-      "テーブル 50個まで",
-      "1テーブル 50,000行まで",
+      "スプレッドシート 50個まで",
+      "1シート 50,000行まで",
       "メンバー 15名まで",
       "API アクセス",
       "無制限に近いインポート",
@@ -78,8 +78,8 @@ export const PLANS: Record<PlanId, Plan> = {
       apiAccess: true,
     },
     features: [
-      "テーブル 実質無制限",
-      "1テーブル 100万行まで",
+      "スプレッドシート 実質無制限",
+      "1シート 100万行まで",
       "メンバー 100名まで",
       "API アクセス + Webhook",
       "監査ログ・権限管理",

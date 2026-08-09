@@ -46,7 +46,7 @@ const CHOICES: {
   },
   {
     id: "custom",
-    name: "空のテーブル",
+    name: "空のスプレッドシート",
     description: "項目を自由に定義して、ゼロから作成します",
     icon: "table",
   },
@@ -82,7 +82,7 @@ export function NewCollectionForm() {
 
   async function submit() {
     if (!name.trim()) {
-      setError("テーブル名を入力してください");
+      setError("スプレッドシート名を入力してください");
       return;
     }
     setSaving(true);
@@ -133,7 +133,7 @@ export function NewCollectionForm() {
       <div>
         <h2 className="text-base font-semibold text-ink">出発点を選ぶ</h2>
         <p className="mt-1 text-sm text-ink-muted">
-          用意されたテンプレートから始めるか、空のテーブルを作成します。
+          用意されたテンプレートから始めるか、空のスプレッドシートを作成します。
         </p>
       </div>
 
@@ -168,7 +168,7 @@ export function NewCollectionForm() {
 
       <div className="card space-y-4 p-5">
         <div>
-          <Label htmlFor="table-name">テーブル名</Label>
+          <Label htmlFor="table-name">スプレッドシート名</Label>
           <Input
             id="table-name"
             value={name}
@@ -245,7 +245,7 @@ export function NewCollectionForm() {
 
         <div className="flex justify-end gap-2 pt-1">
           <Button onClick={submit} disabled={saving}>
-            {saving ? "作成中…" : "テーブルを作成"}
+            {saving ? "作成中…" : "スプレッドシートを作成"}
           </Button>
         </div>
       </div>

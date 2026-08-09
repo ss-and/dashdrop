@@ -90,7 +90,7 @@ export default async function DashboardPage() {
                     ようこそ、DashDrop へ
                   </h2>
                   <p className="max-w-md text-sm text-ink-muted">
-                    まだデータがありません。Excel を取り込むか、テーブルを追加すると、
+                    まだデータがありません。Excel を取り込むか、スプレッドシートを追加すると、
                     週間パフォーマンスの推移がここに表示されます。
                   </p>
                 </div>
@@ -107,7 +107,7 @@ export default async function DashboardPage() {
                     className="inline-flex h-10 items-center justify-center gap-2 rounded border border-khaki-300 px-4 text-sm font-medium text-khaki-700 transition-colors hover:bg-khaki-50"
                   >
                     <NavIcon name="plus" className="h-4 w-4" />
-                    テーブルを追加
+                    スプレッドシートを追加
                   </Link>
                 </div>
               </CardBody>

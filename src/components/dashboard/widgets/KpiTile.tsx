@@ -38,25 +38,25 @@ export function KpiTile({ data }: { data: KpiData }) {
 
   return (
     <div className="flex h-full flex-col justify-between gap-3">
-      <div className="flex items-end justify-between gap-2">
-        <span className="text-3xl font-semibold tabular-nums leading-none text-ink">
+      <div className="flex items-end gap-2">
+        <span className="text-[2rem] font-semibold tabular-nums leading-none text-ink">
           {formatValue(value, unit)}
         </span>
         {hasDelta && (
-          <span
-            className={cn(
-              "inline-flex items-center gap-0.5 rounded-sm border px-1.5 py-0.5 text-xs font-medium tabular-nums",
-              deltaTone === "up" &&
-                "border-success/20 bg-success-soft text-success",
-              deltaTone === "down" &&
-                "border-danger/20 bg-danger-soft text-danger",
-              deltaTone === "neutral" &&
-                "border-ink-line bg-paper-sunken text-ink-muted",
-            )}
-            aria-label={`前期比 ${deltaPercent}%`}
-          >
-            {deltaTone === "up" ? "▲" : deltaTone === "down" ? "▼" : "±"}
-            {Math.abs(deltaPercent as number)}%
+          <span className="mb-0.5 inline-flex items-center gap-1">
+            <span
+              className={cn(
+                "inline-flex items-center gap-0.5 rounded-sm px-1 text-xs font-semibold tabular-nums",
+                deltaTone === "up" && "text-success",
+                deltaTone === "down" && "text-danger",
+                deltaTone === "neutral" && "text-ink-muted",
+              )}
+              aria-label={`前週比 ${deltaPercent}%`}
+            >
+              {deltaTone === "up" ? "▲" : deltaTone === "down" ? "▼" : "±"}
+              {Math.abs(deltaPercent as number)}%
+            </span>
+            <span className="text-2xs text-ink-faint">前週比</span>
           </span>
         )}
       </div>
