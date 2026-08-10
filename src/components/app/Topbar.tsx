@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { NavIcon } from "./icons";
+import { NotificationBell } from "./NotificationBell";
 import { HelpButton } from "./HelpButton";
 import { getPlanBadge } from "./plan-badge";
 import type { CurrentUser } from "@/lib/auth";
@@ -40,6 +41,8 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
             {plan.label}
           </span>
         </span>
+
+        <NotificationBell />
 
         <HelpButton />
 
