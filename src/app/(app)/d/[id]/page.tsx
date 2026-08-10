@@ -69,6 +69,7 @@ export default async function DashboardRendererPage({
               dashboardId={dashboard.id}
               firstCollectionId={firstCollectionId}
               hasSampleData={hasSampleData}
+              initialShareToken={dashboard.shareToken}
             />
           </div>
 

@@ -140,6 +140,10 @@ model Dashboard {
   // Origin: "template:<key>" | "ai" | "custom"
   source          String    @default("custom")
   position        Int       @default(0)
+  // When set, the dashboard is viewable read-only at /share/d/<shareToken>
+  // without authentication. Null = private. Revoking clears it.
+  shareToken      String?   @unique
+  sharedAt        DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
