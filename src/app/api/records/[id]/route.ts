@@ -8,7 +8,16 @@ import { withAuth, ok, readJson, ApiError } from "@/lib/api";
 import { db, toJson } from "@/lib/db";
 import { updateRecordSchema } from "@/lib/validation";
 import { getRecordForUser, logActivity } from "@/lib/workspace";
-import { coerceValue, type FieldType, type SelectOption } from "@/lib/field-types";
+import {
+  coerceValue,
+  isComputedField,
+  type FieldType,
+  type SelectOption,
+} from "@/lib/field-types";
+import {
+  validateRelationWrites,
+  type EngineField,
+} from "@/lib/relations";
 import { RESOLVED_VALUES } from "@/lib/templates";
 
 /** Does this row's data count as resolved/completed for its template? */
@@ -30,6 +39,7 @@ export const PATCH = withAuth(async (req, { user, params }) => {
   // Only validate/coerce the fields present in the payload.
   for (const field of record.collection.fields) {
     if (!(field.key in input.data)) continue;
+    if (isComputedField(field.type)) continue; // lookup/rollup are read-only
     const options = (field.options as SelectOption[] | null) ?? undefined;
     const result = coerceValue(
       field.type as FieldType,
@@ -51,6 +61,12 @@ export const PATCH = withAuth(async (req, { user, params }) => {
       merged[field.key] = result.value;
     }
   }
+
+  await validateRelationWrites(
+    user.workspace.id,
+    record.collection.fields as unknown as EngineField[],
+    merged,
+  );
 
   const wasResolved = isResolved(record.collection.template, existing);
 

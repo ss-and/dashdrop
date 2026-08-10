@@ -57,12 +57,19 @@ export function withAuth(handler: Handler) {
     } catch (err) {
       if (err instanceof ApiError) return fail(err.message, err.status);
       if (err instanceof ZodError) {
-        return fail("Validation failed", 422, {
+        // Surface the first concrete reason so the user knows what to fix.
+        const first = err.issues[0];
+        const path = first?.path?.filter((p) => p !== "data").join(".");
+        const reason = first?.message ?? "入力内容が正しくありません";
+        return fail(path ? `${path}: ${reason}` : reason, 422, {
           issues: err.flatten().fieldErrors,
         });
       }
       console.error("Unhandled API error:", err);
-      return fail("Internal server error", 500);
+      return fail(
+        "サーバーでエラーが発生しました。しばらくして再度お試しください。",
+        500,
+      );
     }
   };
 }

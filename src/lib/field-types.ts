@@ -19,9 +19,19 @@ export const FIELD_TYPES = [
   "email",
   "phone",
   "url",
+  // Cross-spreadsheet types (see src/lib/relations.ts):
+  "relation", // link to record(s) in another spreadsheet; value = target record id(s)
+  "lookup", // pull a field from linked records (computed, read-only)
+  "rollup", // aggregate a field across linked records (computed, read-only)
 ] as const;
 
 export type FieldType = (typeof FIELD_TYPES)[number];
+
+/** Field types whose value is computed from links and never written directly. */
+export const COMPUTED_FIELD_TYPES: readonly FieldType[] = ["lookup", "rollup"];
+export function isComputedField(type: string): boolean {
+  return type === "lookup" || type === "rollup";
+}
 
 export interface SelectOption {
   label: string;
@@ -115,6 +125,27 @@ export const FIELD_TYPE_META: Record<FieldType, FieldTypeMeta> = {
     label: "URL",
     description: "Web link",
     numeric: false,
+    optioned: false,
+  },
+  relation: {
+    type: "relation",
+    label: "リンク（他シート参照）",
+    description: "別スプレッドシートのレコードにリンク",
+    numeric: false,
+    optioned: false,
+  },
+  lookup: {
+    type: "lookup",
+    label: "ルックアップ（参照値）",
+    description: "リンク先のフィールド値を表示（自動）",
+    numeric: false,
+    optioned: false,
+  },
+  rollup: {
+    type: "rollup",
+    label: "ロールアップ（集計）",
+    description: "リンク先の値を合計/件数などで集計（自動）",
+    numeric: true,
     optioned: false,
   },
 };
@@ -213,6 +244,20 @@ export function coerceValue(
             .filter(Boolean);
       return { ok: true, value: arr };
     }
+    case "relation": {
+      // Store as an array of linked target-record ids (validated elsewhere).
+      const arr = Array.isArray(raw)
+        ? raw.map((v) => String(v).trim()).filter(Boolean)
+        : String(raw)
+            .split(/[,;、]/)
+            .map((v) => v.trim())
+            .filter(Boolean);
+      return { ok: true, value: arr };
+    }
+    case "lookup":
+    case "rollup":
+      // Computed on read from linked records; never written directly.
+      return { ok: true, value: null };
     default:
       return { ok: true, value: String(raw) };
   }
@@ -237,7 +282,21 @@ export function displayValue(type: FieldType, value: unknown): string {
         ? new Intl.NumberFormat("en-US").format(value)
         : String(value);
     case "multiselect":
+    case "lookup":
       return Array.isArray(value) ? value.join(", ") : String(value);
+    case "rollup":
+      return typeof value === "number"
+        ? new Intl.NumberFormat("en-US").format(value)
+        : value === null || value === undefined
+          ? ""
+          : String(value);
+    case "relation":
+      // Grid resolves ids -> labels; fallback shows the count.
+      return Array.isArray(value)
+        ? value.length
+          ? `${value.length}件`
+          : ""
+        : String(value ?? "");
     default:
       return String(value);
   }

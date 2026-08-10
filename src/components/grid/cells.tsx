@@ -9,7 +9,8 @@
  *                — the DataGrid owns persistence; editors just surface a draft
  *                value and signal commit / cancel.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/Button";
 import { Input, Textarea, Select } from "@/components/ui/Input";
 import { Badge, toneFromColor } from "@/components/ui/Badge";
 import { cn } from "@/lib/utils";
@@ -27,7 +28,16 @@ export interface GridField {
   type: FieldType;
   required: boolean;
   options: SelectOption[] | null;
+  /** relation/lookup/rollup config (see src/lib/relations.ts). */
+  config: Record<string, unknown> | null;
   position: number;
+}
+
+/** Shape of a relation field's config, as read on the client. */
+interface RelationFieldConfig {
+  targetCollectionId?: string;
+  displayFieldKey?: string;
+  multiple?: boolean;
 }
 
 /* ------------------------------ read display ------------------------------ */
@@ -35,10 +45,48 @@ export interface GridField {
 export function CellView({
   field,
   value,
+  relationLabels,
 }: {
   field: GridField;
   value: unknown;
+  /** For relation cells: map of linked record id -> human label. */
+  relationLabels?: Record<string, string>;
 }) {
+  // Links to records in another spreadsheet: one khaki chip per linked id.
+  if (field.type === "relation") {
+    const ids = Array.isArray(value) ? (value as string[]) : [];
+    if (ids.length === 0) return <span className="text-ink-faint">—</span>;
+    return (
+      <span className="flex flex-wrap gap-1">
+        {ids.map((id) => (
+          <Badge key={id} tone="khaki">
+            {relationLabels?.[id] ?? id}
+          </Badge>
+        ))}
+      </span>
+    );
+  }
+
+  // Read-only pulled value from linked records. `value` is record.computed[key].
+  if (field.type === "lookup") {
+    const text = displayValue("lookup", value);
+    return text ? (
+      <span className="truncate">{text}</span>
+    ) : (
+      <span className="text-ink-faint">—</span>
+    );
+  }
+
+  // Read-only aggregate across linked records. `value` is record.computed[key].
+  if (field.type === "rollup") {
+    const text = displayValue("rollup", value);
+    return text ? (
+      <span className="truncate tabular-nums">{text}</span>
+    ) : (
+      <span className="text-ink-faint">—</span>
+    );
+  }
+
   if (field.type === "select") {
     if (value === null || value === undefined || value === "") return null;
     const opt = field.options?.find((o) => o.value === value);
@@ -126,6 +174,8 @@ export interface CellEditorProps {
   onChange: (value: unknown) => void;
   onCommit: () => void;
   onCancel: () => void;
+  /** For relation cells: map of linked record id -> human label (initial chips). */
+  relationLabels?: Record<string, string>;
 }
 
 export function CellEditor(props: CellEditorProps) {
@@ -144,6 +194,8 @@ export function CellEditor(props: CellEditorProps) {
       return <SelectEditor {...props} />;
     case "multiselect":
       return <MultiSelectEditor {...props} />;
+    case "relation":
+      return <RelationEditor {...props} />;
     case "email":
       return <SimpleInputEditor {...props} inputType="email" />;
     case "phone":
@@ -344,5 +396,236 @@ function MultiSelectEditor({
         <span className="text-xs text-ink-faint">選択肢がありません</span>
       )}
     </div>
+  );
+}
+
+/* ------------------------------ relation picker --------------------------- */
+
+interface LinkOption {
+  id: string;
+  label: string;
+}
+
+/**
+ * Modal link picker for a relation cell. Fetches candidate records from the
+ * target spreadsheet (with server-side search), lets the user pick one
+ * (single) or many (multiple), shows the current selection as removable chips,
+ * and commits the chosen id array through the grid's normal record-PATCH path.
+ */
+function RelationEditor({
+  field,
+  value,
+  onChange,
+  onCommit,
+  onCancel,
+  relationLabels,
+}: CellEditorProps) {
+  const cfg = (field.config ?? {}) as RelationFieldConfig;
+  const multiple = cfg.multiple === true;
+
+  const [selected, setSelected] = useState<string[]>(
+    Array.isArray(value) ? (value as string[]) : [],
+  );
+  const [q, setQ] = useState("");
+  const [options, setOptions] = useState<LinkOption[]>([]);
+  const [labels, setLabels] = useState<Record<string, string>>({
+    ...(relationLabels ?? {}),
+  });
+  const [collectionName, setCollectionName] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch (debounced) candidate options as the search query changes.
+  useEffect(() => {
+    if (!cfg.targetCollectionId) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `/api/collections/${cfg.targetCollectionId}/link-options?q=${encodeURIComponent(q)}`,
+        );
+        const json = await res.json();
+        if (cancelled) return;
+        if (res.ok && json.ok) {
+          const opts: LinkOption[] = json.data.options ?? [];
+          setOptions(opts);
+          setCollectionName(json.data.collectionName ?? "");
+          setLabels((m) => {
+            const next = { ...m };
+            for (const o of opts) next[o.id] = o.label;
+            return next;
+          });
+        } else {
+          setError(json.error ?? "リンク候補を取得できませんでした");
+        }
+      } catch {
+        if (!cancelled) setError("通信エラーが発生しました");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [q, cfg.targetCollectionId]);
+
+  function commitWith(ids: string[]) {
+    onChange(ids);
+    onCommit();
+  }
+
+  function choose(id: string) {
+    if (multiple) {
+      setSelected((s) =>
+        s.includes(id) ? s.filter((x) => x !== id) : [...s, id],
+      );
+    } else {
+      // Single-select: choosing one replaces and commits immediately.
+      commitWith([id]);
+    }
+  }
+
+  const missingTarget = !cfg.targetCollectionId;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30 p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div
+        className="flex max-h-[80vh] w-full max-w-md flex-col animate-fade-in rounded-md border border-ink-line bg-paper-raised shadow-raised"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+      >
+        <div className="border-b border-ink-line px-5 py-3">
+          <h3 className="text-base font-semibold text-ink">
+            リンクを選択{collectionName ? `：${collectionName}` : ""}
+          </h3>
+          <p className="mt-0.5 text-xs text-ink-faint">
+            {multiple
+              ? "複数のレコードを選べます。"
+              : "1件のレコードを選択します。"}
+          </p>
+        </div>
+
+        {missingTarget ? (
+          <div className="px-5 py-6 text-sm text-ink-muted">
+            リンク先が未設定です。列の設定から選んでください。
+          </div>
+        ) : (
+          <>
+            <div className="space-y-2 px-5 py-3">
+              <Input
+                autoFocus
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="検索…"
+              />
+              {selected.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {selected.map((id) => (
+                    <span
+                      key={id}
+                      className="inline-flex items-center gap-1 rounded-sm border border-khaki-200 bg-khaki-100 px-2 py-0.5 text-xs font-medium text-khaki-800"
+                    >
+                      {labels[id] ?? id}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelected((s) => s.filter((x) => x !== id))
+                        }
+                        className="text-khaki-600 hover:text-khaki-800"
+                        aria-label="リンクを外す"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto border-t border-ink-line">
+              {loading && (
+                <p className="px-5 py-3 text-sm text-ink-faint">読み込み中…</p>
+              )}
+              {!loading && options.length === 0 && (
+                <p className="px-5 py-3 text-sm text-ink-faint">
+                  候補が見つかりません。
+                </p>
+              )}
+              {options.map((o) => {
+                const on = selected.includes(o.id);
+                return (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => choose(o.id)}
+                    className={cn(
+                      "flex w-full items-center gap-2 px-5 py-2 text-left text-sm hover:bg-khaki-50",
+                      on ? "bg-khaki-50/70 text-ink" : "text-ink-soft",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border",
+                        on
+                          ? "border-khaki-500 bg-khaki-500 text-white"
+                          : "border-ink-line bg-paper",
+                        !multiple && "rounded-full",
+                      )}
+                    >
+                      {on && <CheckMark />}
+                    </span>
+                    <span className="truncate">{o.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {error && (
+              <p className="px-5 pt-2 text-sm text-danger">{error}</p>
+            )}
+          </>
+        )}
+
+        <div className="flex justify-end gap-2 border-t border-ink-line px-5 py-3">
+          <Button variant="ghost" size="sm" onClick={onCancel}>
+            キャンセル
+          </Button>
+          {!missingTarget && (
+            <Button size="sm" onClick={() => commitWith(selected)}>
+              確定
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CheckMark() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-3 w-3"
+      aria-hidden="true"
+    >
+      <path d="M5 13l4 4L19 7" />
+    </svg>
   );
 }

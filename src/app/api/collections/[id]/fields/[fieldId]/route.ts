@@ -7,6 +7,7 @@ import { withAuth, ok, readJson, ApiError } from "@/lib/api";
 import { db, toJson } from "@/lib/db";
 import { fieldInputSchema } from "@/lib/validation";
 import { getCollectionForUser } from "@/lib/workspace";
+import { validateFieldConfig, type EngineField } from "@/lib/relations";
 import type { Prisma } from "@prisma/client";
 
 // Partial variant — any subset of field attributes may be updated.
@@ -15,7 +16,7 @@ const updateFieldSchema = fieldInputSchema.partial();
 export const PATCH = withAuth(async (req, { user, params }) => {
   const collection = await getCollectionForUser(user, params.id);
   const field = collection.fields.find((f) => f.id === params.fieldId);
-  if (!field) throw new ApiError("Field not found", 404);
+  if (!field) throw new ApiError("フィールドが見つかりません。", 404);
 
   const input = await readJson(req, updateFieldSchema);
 
@@ -24,7 +25,17 @@ export const PATCH = withAuth(async (req, { user, params }) => {
   if (input.type !== undefined) data.type = input.type;
   if (input.required !== undefined) data.required = input.required;
   if (input.options !== undefined) data.options = toJson(input.options);
-  if (input.config !== undefined) data.config = toJson(input.config);
+  if (input.config !== undefined || input.type !== undefined) {
+    // Re-validate relation/lookup/rollup config against the effective type.
+    const effectiveType = input.type ?? field.type;
+    const cfg = await validateFieldConfig(
+      user.workspace.id,
+      effectiveType,
+      input.config ?? field.config,
+      collection.fields as unknown as EngineField[],
+    );
+    data.config = cfg ? toJson(cfg) : undefined;
+  }
   if (input.position !== undefined) data.position = input.position;
 
   const updated = await db.field.update({

@@ -20,6 +20,8 @@ import { FieldEditor } from "./FieldEditor";
 interface GridRecord {
   id: string;
   data: Record<string, unknown>;
+  /** Computed lookup/rollup values, keyed by field key. */
+  computed: Record<string, unknown>;
 }
 
 interface RawField {
@@ -30,15 +32,26 @@ interface RawField {
   type: string;
   required: boolean;
   options: unknown;
+  config?: unknown;
   position: number;
 }
 
 interface RawRecord {
   id: string;
   data: unknown;
+  computed?: unknown;
+}
+
+/** Other spreadsheets in the workspace — passed to the field editor so it can
+ *  configure relation / lookup / rollup targets. */
+export interface WorkspaceCollection {
+  id: string;
+  name: string;
+  fields: Array<{ key: string; name: string; type: string; config?: unknown }>;
 }
 
 const DRAFT_ID = "__draft__";
+const EMPTY_COMPUTED: Record<string, unknown> = {};
 
 function toGridField(f: RawField): GridField {
   return {
@@ -48,6 +61,7 @@ function toGridField(f: RawField): GridField {
     type: f.type as GridField["type"],
     required: f.required,
     options: (f.options as SelectOption[] | null) ?? null,
+    config: (f.config as Record<string, unknown> | null) ?? null,
     position: f.position,
   };
 }
@@ -56,10 +70,14 @@ export function DataGrid({
   collection,
   fields: initialFields,
   initialRecords,
+  relationLabels: initialRelationLabels,
+  workspaceCollections,
 }: {
   collection: { id: string; template: string };
   fields: RawField[];
   initialRecords: RawRecord[];
+  relationLabels: Record<string, Record<string, string>>;
+  workspaceCollections: WorkspaceCollection[];
 }) {
   const [fields, setFields] = useState<GridField[]>(() =>
     initialFields.map(toGridField),
@@ -68,8 +86,12 @@ export function DataGrid({
     initialRecords.map((r) => ({
       id: r.id,
       data: (r.data as Record<string, unknown>) ?? {},
+      computed: (r.computed as Record<string, unknown>) ?? {},
     })),
   );
+  const [relationLabels, setRelationLabels] = useState<
+    Record<string, Record<string, string>>
+  >(initialRelationLabels ?? {});
   const [draft, setDraft] = useState<Record<string, unknown>>({});
 
   // Cell being edited + a ref-backed draft value so instant-commit editors
@@ -120,12 +142,46 @@ export function DataGrid({
     }
   }, [collection.id]);
 
+  /**
+   * Re-fetch records + relation labels. Needed after a relation changes (or a
+   * relation/lookup/rollup field is added/edited) so lookup/rollup values
+   * recompute and new link labels appear.
+   */
+  const refreshRecords = useCallback(async () => {
+    const res = await fetch(`/api/collections/${collection.id}/records`);
+    const json = await res.json();
+    if (res.ok && json.ok) {
+      setRecords(
+        (json.data.records as RawRecord[]).map((r) => ({
+          id: r.id,
+          data: (r.data as Record<string, unknown>) ?? {},
+          computed: (r.computed as Record<string, unknown>) ?? {},
+        })),
+      );
+      setRelationLabels(
+        (json.data.relationLabels as Record<
+          string,
+          Record<string, string>
+        >) ?? {},
+      );
+    }
+  }, [collection.id]);
+
+  /** After a field is added/edited: refresh both schema and computed values. */
+  const handleFieldSaved = useCallback(async () => {
+    await refetchFields();
+    await refreshRecords();
+  }, [refetchFields, refreshRecords]);
+
   /** Commit the active editor: PATCH an existing row or POST the draft row. */
   const commitEdit = useCallback(async () => {
     if (!editing) return;
     const { rowId, key } = editing;
     const value = editValueRef.current;
     setEditing(null);
+
+    const committedField = fields.find((f) => f.key === key);
+    const isRelation = committedField?.type === "relation";
 
     if (rowId === DRAFT_ID) {
       const nextData = { ...draft, [key]: value };
@@ -140,11 +196,13 @@ export function DataGrid({
         const json = await res.json();
         if (res.ok && json.ok) {
           setRecords((rs) => [
-            { id: json.data.id, data: json.data.data ?? {} },
+            { id: json.data.id, data: json.data.data ?? {}, computed: {} },
             ...rs,
           ]);
           setDraft({}); // reset the trailing new-row for the next entry
           setError(null);
+          // A new relation link needs a refresh to compute labels/rollups.
+          if (isRelation) await refreshRecords();
         } else {
           // Likely a missing required field — keep the draft so the user can
           // finish filling it in. Surface the reason subtly.
@@ -180,6 +238,8 @@ export function DataGrid({
           rs.map((r) => (r.id === rowId ? { ...r, data: json.data.data ?? {} } : r)),
         );
         setError(null);
+        // Relation changed -> recompute dependent lookup/rollup + labels.
+        if (isRelation) await refreshRecords();
       } else {
         setRecords((rs) =>
           rs.map((r) => (r.id === rowId ? { ...r, data: prevData } : r)),
@@ -194,7 +254,7 @@ export function DataGrid({
     } finally {
       bump(-1);
     }
-  }, [editing, draft, records, collection.id, bump]);
+  }, [editing, draft, records, collection.id, bump, fields, refreshRecords]);
 
   /** Delete a row (with confirm) — optimistic removal, restore on failure. */
   const deleteRecord = useCallback(
@@ -253,25 +313,44 @@ export function DataGrid({
   const isEditing = (rowId: string, key: string) =>
     editing?.rowId === rowId && editing.key === key;
 
-  function renderCell(rowId: string, field: GridField, value: unknown) {
+  function renderCell(
+    rowId: string,
+    field: GridField,
+    data: Record<string, unknown>,
+    computed: Record<string, unknown>,
+  ) {
+    const relLabels = relationLabels[field.key];
+    const isComputed = field.type === "lookup" || field.type === "rollup";
+
     if (isEditing(rowId, field.key)) {
       return (
         <CellEditor
           field={field}
           value={editValue}
+          relationLabels={relLabels}
           onChange={setDraftValue}
           onCommit={commitEdit}
           onCancel={cancelEdit}
         />
       );
     }
+
+    // Lookup / rollup are read-only: render a non-interactive cell.
+    if (isComputed) {
+      return (
+        <div className="flex h-full min-h-[34px] w-full items-center px-2 py-1 text-left text-sm text-ink-muted">
+          <CellView field={field} value={computed[field.key]} />
+        </div>
+      );
+    }
+
     return (
       <button
         type="button"
-        onClick={() => startEdit(rowId, field.key, value)}
+        onClick={() => startEdit(rowId, field.key, data[field.key])}
         className="flex h-full min-h-[34px] w-full items-center px-2 py-1 text-left text-sm text-ink hover:bg-khaki-50/60 focus:bg-khaki-50 focus:outline-none"
       >
-        <CellView field={field} value={value} />
+        <CellView field={field} value={data[field.key]} relationLabels={relLabels} />
       </button>
     );
   }
@@ -291,8 +370,10 @@ export function DataGrid({
           <FieldEditor
             collectionId={collection.id}
             field={fieldModal.mode === "edit" ? fieldModal.field : undefined}
+            collectionFields={fields}
+            workspaceCollections={workspaceCollections}
             onClose={() => setFieldModal(null)}
-            onSaved={refetchFields}
+            onSaved={handleFieldSaved}
           />
         )}
       </div>
@@ -433,7 +514,7 @@ export function DataGrid({
                     key={field.id}
                     className="border-r border-ink-line/70 p-0 align-middle"
                   >
-                    {renderCell(rec.id, field, rec.data[field.key])}
+                    {renderCell(rec.id, field, rec.data, rec.computed)}
                   </td>
                 ))}
                 <td className="bg-transparent" />
@@ -450,7 +531,7 @@ export function DataGrid({
                   key={field.id}
                   className="border-r border-ink-line/70 p-0 align-middle"
                 >
-                  {renderCell(DRAFT_ID, field, draft[field.key])}
+                  {renderCell(DRAFT_ID, field, draft, EMPTY_COMPUTED)}
                 </td>
               ))}
               <td className="bg-transparent" />
@@ -467,8 +548,10 @@ export function DataGrid({
         <FieldEditor
           collectionId={collection.id}
           field={fieldModal.mode === "edit" ? fieldModal.field : undefined}
+          collectionFields={fields}
+          workspaceCollections={workspaceCollections}
           onClose={() => setFieldModal(null)}
-          onSaved={refetchFields}
+          onSaved={handleFieldSaved}
         />
       )}
     </div>

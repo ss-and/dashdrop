@@ -7,6 +7,7 @@ import { db, toJson } from "@/lib/db";
 import { toFieldKey, uniqueName } from "@/lib/utils";
 import { fieldInputSchema } from "@/lib/validation";
 import { getCollectionForUser } from "@/lib/workspace";
+import { validateFieldConfig, type EngineField } from "@/lib/relations";
 
 export const POST = withAuth(async (req, { user, params }) => {
   const collection = await getCollectionForUser(user, params.id);
@@ -16,6 +17,14 @@ export const POST = withAuth(async (req, { user, params }) => {
   const takenKeys = new Set(collection.fields.map((f) => f.key));
   const rawKey = input.key?.trim() || toFieldKey(input.name);
   const key = uniqueName(rawKey, takenKeys);
+
+  // Validate/normalise config for relation/lookup/rollup (clear errors on bad setup).
+  const config = await validateFieldConfig(
+    user.workspace.id,
+    input.type,
+    input.config,
+    collection.fields as unknown as EngineField[],
+  );
 
   // Next position = max existing + 1.
   const maxPosition = collection.fields.reduce(
@@ -31,7 +40,7 @@ export const POST = withAuth(async (req, { user, params }) => {
       type: input.type,
       required: input.required ?? false,
       options: input.options ? toJson(input.options) : undefined,
-      config: input.config ? toJson(input.config) : undefined,
+      config: config ? toJson(config) : undefined,
       position:
         typeof input.position === "number" ? input.position : maxPosition + 1,
     },

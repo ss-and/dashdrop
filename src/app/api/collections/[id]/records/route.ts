@@ -12,7 +12,18 @@ import {
   getCollectionForUser,
   logActivity,
 } from "@/lib/workspace";
-import { coerceValue, type FieldType, type SelectOption } from "@/lib/field-types";
+import {
+  coerceValue,
+  isComputedField,
+  type FieldType,
+  type SelectOption,
+} from "@/lib/field-types";
+import {
+  validateRelationWrites,
+  resolveCollectionRecords,
+  type EngineField,
+  type EngineCollection,
+} from "@/lib/relations";
 import { RESOLVED_VALUES } from "@/lib/templates";
 import type { Field } from "@prisma/client";
 
@@ -43,7 +54,18 @@ export const GET = withAuth(async (req, { user, params }) => {
     nextCursor = next?.id ?? null;
   }
 
-  return ok({ records, nextCursor });
+  // Resolve cross-spreadsheet lookup/rollup values + relation labels.
+  const resolved = await resolveCollectionRecords(
+    user.workspace.id,
+    collection as unknown as EngineCollection,
+    records.map((r) => ({ id: r.id, data: (r.data as Record<string, unknown>) ?? {} })),
+  );
+
+  return ok({
+    records: resolved.records,
+    relationLabels: resolved.relationLabels,
+    nextCursor,
+  });
 });
 
 /**
@@ -57,6 +79,8 @@ function buildRecordData(
 ): Record<string, unknown> {
   const clean: Record<string, unknown> = {};
   for (const field of fields) {
+    // Lookup/rollup are computed on read — never written or required.
+    if (isComputedField(field.type)) continue;
     const options = (field.options as SelectOption[] | null) ?? undefined;
     const result = coerceValue(field.type as FieldType, raw[field.key], options);
     if (!result.ok) {
@@ -95,6 +119,11 @@ export const POST = withAuth(async (req, { user, params }) => {
   const input = await readJson(req, createRecordSchema);
 
   const clean = buildRecordData(collection.fields, input.data);
+  await validateRelationWrites(
+    user.workspace.id,
+    collection.fields as unknown as EngineField[],
+    clean,
+  );
 
   await assertCanAddRecords(user, collection.id, 1);
 

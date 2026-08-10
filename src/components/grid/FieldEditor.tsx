@@ -16,6 +16,15 @@ import {
   type SelectOption,
 } from "@/lib/field-types";
 import type { GridField } from "./cells";
+import type { WorkspaceCollection } from "./DataGrid";
+
+const ROLLUP_OPS: Array<{ value: string; label: string }> = [
+  { value: "sum", label: "合計" },
+  { value: "count", label: "件数" },
+  { value: "avg", label: "平均" },
+  { value: "min", label: "最小" },
+  { value: "max", label: "最大" },
+];
 
 const OPTION_TONES = ["khaki", "success", "warning", "danger", "info"] as const;
 
@@ -34,15 +43,23 @@ interface OptionRow extends SelectOption {
 export function FieldEditor({
   collectionId,
   field,
+  collectionFields,
+  workspaceCollections,
   onClose,
   onSaved,
 }: {
   collectionId: string;
   field?: GridField;
+  /** This collection's current fields — used to list relation fields for
+   *  lookup/rollup "via" selectors. */
+  collectionFields: GridField[];
+  /** Other spreadsheets in the workspace — used to pick relation targets. */
+  workspaceCollections: WorkspaceCollection[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const editing = Boolean(field);
+  const cfg = (field?.config ?? {}) as Record<string, unknown>;
   const [name, setName] = useState(field?.name ?? "");
   const [type, setType] = useState<FieldType>(field?.type ?? "text");
   const [required, setRequired] = useState(field?.required ?? false);
@@ -53,10 +70,48 @@ export function FieldEditor({
       color: o.color ?? "khaki",
     })),
   );
+
+  // relation / lookup / rollup config.
+  const [targetCollectionId, setTargetCollectionId] = useState<string>(
+    String(cfg.targetCollectionId ?? ""),
+  );
+  const [displayFieldKey, setDisplayFieldKey] = useState<string>(
+    String(cfg.displayFieldKey ?? ""),
+  );
+  const [multiple, setMultiple] = useState<boolean>(cfg.multiple === true);
+  const [via, setVia] = useState<string>(String(cfg.via ?? ""));
+  const [targetKey, setTargetKey] = useState<string>(String(cfg.target ?? ""));
+  const [op, setOp] = useState<string>(String(cfg.op ?? "sum"));
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const optioned = FIELD_TYPE_META[type].optioned;
+
+  // Spreadsheets we can link to (never the current one).
+  const linkableCollections = workspaceCollections.filter(
+    (c) => c.id !== collectionId,
+  );
+  // Relation fields on THIS collection — the "via" for lookup/rollup.
+  const relationFields = collectionFields.filter((f) => f.type === "relation");
+
+  // Fields of the currently chosen relation target (for the display column).
+  const relationTarget = workspaceCollections.find(
+    (c) => c.id === targetCollectionId,
+  );
+  const displayFieldOptions = (relationTarget?.fields ?? []).filter(
+    (f) => f.type !== "lookup" && f.type !== "rollup",
+  );
+
+  // For lookup/rollup: resolve the target collection via the chosen relation.
+  const selectedVia = relationFields.find((f) => f.key === via);
+  const viaCfg = (selectedVia?.config ?? {}) as { targetCollectionId?: string };
+  const viaTarget = workspaceCollections.find(
+    (c) => c.id === viaCfg.targetCollectionId,
+  );
+  const viaTargetFieldOptions = (viaTarget?.fields ?? []).filter(
+    (f) => f.type !== "lookup" && f.type !== "rollup",
+  );
 
   function addOption() {
     setOptions((o) => [...o, { label: "", value: "", color: "khaki" }]);
@@ -87,11 +142,27 @@ export function FieldEditor({
           }))
       : undefined;
 
+    // Config for cross-spreadsheet types. The server validates and returns a
+    // clear Japanese error when something is missing/invalid.
+    let config: Record<string, unknown> | undefined;
+    if (type === "relation") {
+      config = {
+        targetCollectionId,
+        displayFieldKey: displayFieldKey || undefined,
+        multiple,
+      };
+    } else if (type === "lookup") {
+      config = { via, target: targetKey };
+    } else if (type === "rollup") {
+      config = { via, target: targetKey, op };
+    }
+
     const body = {
       name: name.trim(),
       type,
       required,
       ...(cleanOptions ? { options: cleanOptions } : {}),
+      ...(config ? { config } : {}),
     };
 
     const url = editing
@@ -153,11 +224,131 @@ export function FieldEditor({
             >
               {FIELD_TYPES.map((t) => (
                 <option key={t} value={t}>
-                  {FIELD_TYPE_META[t].label}（{FIELD_TYPE_META[t].description}）
+                  {FIELD_TYPE_META[t].label}
                 </option>
               ))}
             </Select>
+            <p className="mt-1 text-xs text-ink-faint">
+              {FIELD_TYPE_META[type].description}
+            </p>
           </div>
+
+          {type === "relation" && (
+            <div className="space-y-3 rounded-sm border border-ink-line bg-paper-sunken/40 p-3">
+              <div>
+                <Label htmlFor="rel-target">リンク先スプレッドシート</Label>
+                <Select
+                  id="rel-target"
+                  value={targetCollectionId}
+                  onChange={(e) => {
+                    setTargetCollectionId(e.target.value);
+                    setDisplayFieldKey("");
+                  }}
+                >
+                  <option value="">選択してください</option>
+                  {linkableCollections.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </Select>
+                {linkableCollections.length === 0 && (
+                  <p className="mt-1 text-xs text-warning">
+                    リンクできる他のスプレッドシートがまだありません。
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label htmlFor="rel-display">表示する列</Label>
+                <Select
+                  id="rel-display"
+                  value={displayFieldKey}
+                  onChange={(e) => setDisplayFieldKey(e.target.value)}
+                  disabled={!targetCollectionId}
+                >
+                  <option value="">自動（先頭のテキスト列）</option>
+                  {displayFieldOptions.map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-ink-soft">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-khaki-500"
+                  checked={multiple}
+                  onChange={(e) => setMultiple(e.target.checked)}
+                />
+                複数リンクを許可
+              </label>
+            </div>
+          )}
+
+          {(type === "lookup" || type === "rollup") && (
+            <div className="space-y-3 rounded-sm border border-ink-line bg-paper-sunken/40 p-3">
+              <div>
+                <Label htmlFor="lr-via">
+                  {type === "lookup" ? "参照するリンク列" : "リンク列"}
+                </Label>
+                <Select
+                  id="lr-via"
+                  value={via}
+                  onChange={(e) => {
+                    setVia(e.target.value);
+                    setTargetKey("");
+                  }}
+                >
+                  <option value="">選択してください</option>
+                  {relationFields.map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.name}
+                    </option>
+                  ))}
+                </Select>
+                {relationFields.length === 0 && (
+                  <p className="mt-1 text-xs text-warning">
+                    先に「リンク（他シート参照）」の列を作成してください。
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label htmlFor="lr-target">
+                  {type === "lookup" ? "取得する項目" : "集計する項目"}
+                </Label>
+                <Select
+                  id="lr-target"
+                  value={targetKey}
+                  onChange={(e) => setTargetKey(e.target.value)}
+                  disabled={!via}
+                >
+                  <option value="">選択してください</option>
+                  {viaTargetFieldOptions.map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              {type === "rollup" && (
+                <div>
+                  <Label htmlFor="lr-op">集計方法</Label>
+                  <Select
+                    id="lr-op"
+                    value={op}
+                    onChange={(e) => setOp(e.target.value)}
+                  >
+                    {ROLLUP_OPS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              )}
+            </div>
+          )}
 
           <label className="flex items-center gap-2 text-sm text-ink-soft">
             <input

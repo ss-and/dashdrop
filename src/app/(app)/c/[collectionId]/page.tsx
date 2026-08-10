@@ -8,6 +8,10 @@ import Link from "next/link";
 import { getSession } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getCollectionForUser } from "@/lib/workspace";
+import {
+  resolveCollectionRecords,
+  type EngineCollection,
+} from "@/lib/relations";
 import { Topbar } from "@/components/app/Topbar";
 import { CollectionIcon, NavIcon } from "@/components/app/icons";
 import { HelpTip } from "@/components/ui/HelpTip";
@@ -35,6 +39,28 @@ export default async function CollectionPage({
     orderBy: { createdAt: "desc" },
     take: 100,
     select: { id: true, data: true },
+  });
+
+  // Resolve cross-spreadsheet lookup/rollup values + relation labels.
+  const resolved = await resolveCollectionRecords(
+    user.workspace.id,
+    collection as unknown as EngineCollection,
+    records.map((r) => ({ id: r.id, data: (r.data as Record<string, unknown>) ?? {} })),
+  );
+
+  // Other spreadsheets in this workspace — used by the field editor to
+  // configure relation / lookup / rollup targets.
+  const workspaceCollections = await db.collection.findMany({
+    where: { workspaceId: user.workspace.id },
+    orderBy: { position: "asc" },
+    select: {
+      id: true,
+      name: true,
+      fields: {
+        orderBy: { position: "asc" },
+        select: { key: true, name: true, type: true, config: true },
+      },
+    },
   });
 
   return (
@@ -84,7 +110,9 @@ export default async function CollectionPage({
           <DataGrid
             collection={{ id: collection.id, template: collection.template }}
             fields={collection.fields}
-            initialRecords={records}
+            initialRecords={resolved.records}
+            relationLabels={resolved.relationLabels}
+            workspaceCollections={workspaceCollections}
           />
         </div>
       </main>
