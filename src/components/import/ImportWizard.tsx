@@ -63,6 +63,11 @@ export function ImportWizard() {
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Import source: a local file, or a public/link-shared Google Sheets URL.
+  const [source, setSource] = useState<"file" | "gsheets">("file");
+  const [gsheetsUrl, setGsheetsUrl] = useState("");
+  const [gsheetsLoading, setGsheetsLoading] = useState(false);
+
   const step: "upload" | "map" = sheets ? "map" : "upload";
   const selectedCount = sheets?.filter((s) => s.selected).length ?? 0;
 
@@ -70,7 +75,29 @@ export function ImportWizard() {
     setFile(null);
     setSheets(null);
     setError(null);
+    setSource("file");
+    setGsheetsUrl("");
     if (inputRef.current) inputRef.current.value = "";
+  }
+
+  /** Map the preview `{ sheets }` payload into editable per-sheet state. */
+  function ingestSheets(previews: SheetPreview[]) {
+    setSheets(
+      previews.map((s) => ({
+        sheetName: s.sheetName,
+        headers: s.headers,
+        rowCount: s.rowCount,
+        previewRows: s.previewRows,
+        collectionName: s.sheetName || "インポート",
+        selected: true,
+        fields: s.inferredFields.map((f) => ({
+          name: f.name,
+          key: f.key,
+          type: f.type,
+          required: false,
+        })),
+      })),
+    );
   }
 
   async function handleFile(picked: File) {
@@ -88,27 +115,43 @@ export function ImportWizard() {
         return;
       }
       const data = body.data as { sheets: SheetPreview[] };
-      setSheets(
-        data.sheets.map((s) => ({
-          sheetName: s.sheetName,
-          headers: s.headers,
-          rowCount: s.rowCount,
-          previewRows: s.previewRows,
-          collectionName: s.sheetName || "インポート",
-          selected: true,
-          fields: s.inferredFields.map((f) => ({
-            name: f.name,
-            key: f.key,
-            type: f.type,
-            required: false,
-          })),
-        })),
-      );
+      setSource("file");
+      ingestSheets(data.sheets);
     } catch {
       setError("通信エラーが発生しました。しばらくして再度お試しください。");
       setFile(null);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleGsheets() {
+    const url = gsheetsUrl.trim();
+    if (!url) {
+      setError("Google SheetsのURLを貼り付けてください。");
+      return;
+    }
+    setError(null);
+    setGsheetsLoading(true);
+    try {
+      const res = await fetch("/api/import/gsheets/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.ok) {
+        setError(body?.error ?? "Google Sheetsの読み込みに失敗しました");
+        return;
+      }
+      const data = body.data as { sheets: SheetPreview[] };
+      setFile(null);
+      setSource("gsheets");
+      ingestSheets(data.sheets);
+    } catch {
+      setError("通信エラーが発生しました。しばらくして再度お試しください。");
+    } finally {
+      setGsheetsLoading(false);
     }
   }
 
@@ -141,25 +184,31 @@ export function ImportWizard() {
   }
 
   async function runImport() {
-    if (!file || !sheets) return;
+    if (!sheets) return;
+    if (source === "file" && !file) return;
     const chosen = sheets.filter((s) => s.selected && s.fields.length > 0);
     if (chosen.length === 0) return;
+    const selection = chosen.map((s) => ({
+      sheetName: s.sheetName,
+      collectionName: s.collectionName.trim() || s.sheetName,
+      fields: s.fields,
+    }));
     setError(null);
     setImporting(true);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append(
-        "sheets",
-        JSON.stringify(
-          chosen.map((s) => ({
-            sheetName: s.sheetName,
-            collectionName: s.collectionName.trim() || s.sheetName,
-            fields: s.fields,
-          })),
-        ),
-      );
-      const res = await fetch("/api/import", { method: "POST", body: form });
+      let res: Response;
+      if (source === "gsheets") {
+        res = await fetch("/api/import/gsheets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: gsheetsUrl.trim(), sheets: selection }),
+        });
+      } else {
+        const form = new FormData();
+        form.append("file", file as File);
+        form.append("sheets", JSON.stringify(selection));
+        res = await fetch("/api/import", { method: "POST", body: form });
+      }
       const body = await res.json().catch(() => null);
       if (!res.ok || !body?.ok) {
         setError(body?.error ?? "取り込みに失敗しました");
@@ -217,6 +266,39 @@ export function ImportWizard() {
                 </>
               )}
               <input ref={inputRef} type="file" accept={ALLOWED} className="hidden" onChange={onPick} />
+            </div>
+
+            <div className="mt-5 rounded-lg border border-ink-line bg-paper-raised p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-khaki-100 text-khaki-700">
+                  <NavIcon name="table" className="h-4 w-4" />
+                </span>
+                <div>
+                  <p className="text-sm font-medium text-ink">Google スプレッドシートから取り込み</p>
+                  <p className="text-xs text-ink-muted">共有URLを貼り付けるだけ（OAuth不要）</p>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Input
+                  value={gsheetsUrl}
+                  onChange={(e) => setGsheetsUrl(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleGsheets(); } }}
+                  placeholder="https://docs.google.com/spreadsheets/d/…"
+                  className="flex-1"
+                  inputMode="url"
+                  disabled={gsheetsLoading}
+                />
+                <Button
+                  variant="secondary"
+                  onClick={() => void handleGsheets()}
+                  disabled={gsheetsLoading || !gsheetsUrl.trim()}
+                >
+                  {gsheetsLoading ? "読み込み中…" : "読み込む"}
+                </Button>
+              </div>
+              <p className="mt-2 text-xs text-ink-muted">
+                共有設定を『リンクを知っている全員（閲覧者）』にしてください。
+              </p>
             </div>
           </CardBody>
         </Card>
@@ -345,7 +427,7 @@ export function ImportWizard() {
 
           <div className="flex items-center justify-between">
             <Button variant="ghost" onClick={reset} disabled={importing}>
-              別のファイルを選ぶ
+              {source === "gsheets" ? "別のソースを選ぶ" : "別のファイルを選ぶ"}
             </Button>
             <Button onClick={runImport} disabled={importing || selectedCount === 0}>
               <NavIcon name="download" className="h-4 w-4" />
