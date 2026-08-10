@@ -1,34 +1,33 @@
 /**
- * Import commit endpoint.
+ * Import commit endpoint (multi-tab).
  * POST multipart/form-data:
- *   - file           : the .xlsx/.xls/.csv to import
- *   - collectionName : desired table name (falls back to the sheet name)
- *   - fields         : optional JSON string of [{ name, key, type, required?, options? }]
- *                      chosen/overridden by the user; when absent we infer.
+ *   - file   : the .xlsx/.xls/.csv to import
+ *   - sheets : JSON string of
+ *              [{ sheetName, collectionName?, fields?: [{name,key,type,required?,options?}] }]
+ *              — one entry per sheet (tab) the user chose to import.
  *
- * Creates a Collection + its Fields, then bulk-inserts one Record per sheet row
- * with each cell coerced to its field type. Tenant-safe and plan-limited.
+ * Back-compat: if `sheets` is absent, falls back to a single-sheet import using
+ * `collectionName` + `fields` against the first sheet.
+ *
+ * Each selected sheet becomes its own Collection (spreadsheet) with typed
+ * Fields and one Record per row. Tenant-safe and plan-limited; all-or-nothing
+ * (any failure rolls back every collection created in this request).
  */
 import { withAuth, ok, ApiError } from "@/lib/api";
 import { db, toJson } from "@/lib/db";
 import { slugify, uniqueName, toFieldKey } from "@/lib/utils";
-import {
-  assertCanCreateCollection,
-  logActivity,
-} from "@/lib/workspace";
+import { assertCanCreateCollection, logActivity } from "@/lib/workspace";
 import { getPlan } from "@/lib/plans";
 import {
   isFieldType,
   coerceValue,
-  FIELD_TYPES,
   type FieldType,
   type SelectOption,
 } from "@/lib/field-types";
-import { readSheet, inferFields } from "@/lib/excel";
+import { readSheet, inferFields, MAX_IMPORT_BYTES } from "@/lib/excel";
 
-const MAX_BYTES = 5 * 1024 * 1024; // 5MB
 const ALLOWED_EXT = [".xlsx", ".xls", ".csv"];
-const MAX_ROWS = 50_000;
+const MAX_LABEL = "15MB";
 const BATCH_SIZE = 500;
 
 interface FinalField {
@@ -39,19 +38,18 @@ interface FinalField {
   options?: SelectOption[];
 }
 
-/** Parse the user-supplied `fields` JSON into a validated, key-unique schema. */
-function parseProvidedFields(raw: string): FinalField[] | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+interface SheetSelection {
+  sheetName: string;
+  collectionName?: string;
+  fields?: unknown;
+}
 
+/** Normalise a user-supplied fields array into a validated, key-unique schema. */
+function parseFieldsArray(arr: unknown): FinalField[] | null {
+  if (!Array.isArray(arr) || arr.length === 0) return null;
   const takenKeys = new Set<string>();
   const fields: FinalField[] = [];
-  for (const item of parsed) {
+  for (const item of arr) {
     if (!item || typeof item !== "object") continue;
     const rec = item as Record<string, unknown>;
     const name =
@@ -67,15 +65,17 @@ function parseProvidedFields(raw: string): FinalField[] | null {
     const options = Array.isArray(rec.options)
       ? (rec.options as SelectOption[])
       : undefined;
-    fields.push({
-      name,
-      key,
-      type,
-      required: rec.required === true,
-      options,
-    });
+    fields.push({ name, key, type, required: rec.required === true, options });
   }
   return fields.length ? fields : null;
+}
+
+interface PreparedJob {
+  collectionName: string;
+  slug: string;
+  fields: FinalField[];
+  headers: string[];
+  rows: Record<string, unknown>[];
 }
 
 export const POST = withAuth(async (req, { user }) => {
@@ -90,154 +90,204 @@ export const POST = withAuth(async (req, { user }) => {
   if (!file || typeof file === "string") {
     throw new ApiError("ファイルが指定されていません", 400);
   }
-
   const fileName = file.name ?? "";
   const ext = fileName.slice(fileName.lastIndexOf(".")).toLowerCase();
   if (!ALLOWED_EXT.includes(ext)) {
     throw new ApiError("対応形式は .xlsx / .xls / .csv です", 415);
   }
-  if (file.size > MAX_BYTES) {
-    throw new ApiError("ファイルサイズが上限（5MB）を超えています", 413);
+  if (file.size > MAX_IMPORT_BYTES) {
+    throw new ApiError(`ファイルサイズが上限（${MAX_LABEL}）を超えています`, 413);
+  }
+
+  // Resolve which sheets to import.
+  let selections: SheetSelection[] = [];
+  const sheetsRaw = form.get("sheets");
+  if (typeof sheetsRaw === "string" && sheetsRaw.trim()) {
+    try {
+      const parsed = JSON.parse(sheetsRaw);
+      if (Array.isArray(parsed)) {
+        selections = parsed
+          .filter((s) => s && typeof s === "object" && typeof s.sheetName === "string")
+          .map((s) => ({
+            sheetName: s.sheetName,
+            collectionName:
+              typeof s.collectionName === "string" ? s.collectionName : undefined,
+            fields: s.fields,
+          }));
+      }
+    } catch {
+      throw new ApiError("sheets の形式が正しくありません", 400);
+    }
   }
 
   const buffer = await file.arrayBuffer();
-  const { sheetName, headers, rows, sampleByHeader } = readSheet(buffer);
-
-  if (headers.length === 0) {
-    throw new ApiError("シートから列を検出できませんでした", 422);
-  }
-  if (rows.length > MAX_ROWS) {
-    throw new ApiError(
-      `行数が上限（${MAX_ROWS.toLocaleString()}）を超えています`,
-      413,
-    );
-  }
-
-  // Determine the final field schema: user override or auto-inference.
-  const providedRaw = form.get("fields");
-  const provided =
-    typeof providedRaw === "string" ? parseProvidedFields(providedRaw) : null;
-  const finalFields: FinalField[] =
-    provided ??
-    inferFields(headers, sampleByHeader).map((f) => ({
-      ...f,
-      required: false,
-    }));
-
-  // --- Plan limits (checked BEFORE any write so we never leave an orphan
-  // collection behind on a limit violation) ---
-  await assertCanCreateCollection(user);
   const plan = getPlan(user.workspace.plan);
-  if (rows.length > plan.limits.recordsPerCollection) {
-    throw new ApiError(
-      `プラン「${plan.name}」の1テーブルあたり行数上限（${plan.limits.recordsPerCollection.toLocaleString()}）を超えます。`,
-      403,
-    );
+
+  // Back-compat single-sheet path.
+  if (selections.length === 0) {
+    const nameInput = form.get("collectionName");
+    const fieldsInput = form.get("fields");
+    let fields: unknown = undefined;
+    if (typeof fieldsInput === "string" && fieldsInput.trim()) {
+      try {
+        fields = JSON.parse(fieldsInput);
+      } catch {
+        fields = undefined;
+      }
+    }
+    selections = [
+      {
+        sheetName: "", // first sheet
+        collectionName:
+          typeof nameInput === "string" ? nameInput : undefined,
+        fields,
+      },
+    ];
   }
 
-  const nameInput = form.get("collectionName");
-  const collectionName =
-    (typeof nameInput === "string" && nameInput.trim()) ||
-    sheetName ||
-    "インポート";
-
-  // Unique slug within the workspace.
+  // Existing slugs for uniqueness across the whole batch.
   const existing = await db.collection.findMany({
     where: { workspaceId: user.workspace.id },
     select: { slug: true },
   });
   const takenSlugs = new Set(existing.map((c) => c.slug));
-  const slug = uniqueName(slugify(collectionName), takenSlugs);
-  const position = existing.length;
 
-  // Create the collection + its typed fields in one shot.
-  const collection = await db.collection.create({
-    data: {
-      workspaceId: user.workspace.id,
-      name: collectionName,
-      slug,
-      description: "",
-      icon: "table",
-      color: "khaki",
-      template: "custom",
-      position,
-      fields: {
-        create: finalFields.map((f, index) => ({
-          key: f.key,
-          name: f.name,
-          type: f.type,
-          required: f.required,
-          options: f.options ? toJson(f.options) : undefined,
-          position: index,
-        })),
-      },
-    },
-    include: { fields: { orderBy: { position: "asc" } } },
-  });
+  // --- Prepare + validate every selected sheet BEFORE any write ---
+  if (existing.length + selections.length > plan.limits.collections) {
+    throw new ApiError(
+      `プラン「${plan.name}」のスプレッドシート上限（${plan.limits.collections}）を超えます。`,
+      403,
+    );
+  }
 
-  // Map each sheet row -> Record.data, coercing per field type. Header order
-  // aligns with field order, so we resolve the source cell by position first
-  // and fall back to name/key lookups for robustness.
-  let skipped = 0; // count of invalid cells nulled out
-  const recordData: Record<string, unknown>[] = rows.map((row) => {
-    const data: Record<string, unknown> = {};
-    finalFields.forEach((f, i) => {
-      const sourceHeader = headers[i];
-      const raw =
-        (sourceHeader !== undefined ? row[sourceHeader] : undefined) ??
-        row[f.name] ??
-        row[f.key] ??
-        null;
-      const result = coerceValue(f.type, raw, f.options);
-      if (result.ok) {
-        data[f.key] = result.value;
-      } else {
-        data[f.key] = null;
-        skipped += 1;
-      }
-    });
-    return data;
-  });
-
-  // Bulk insert in batched transactions — createMany can't carry Json well on
-  // SQLite, so we loop create()s inside a transaction per batch. If any batch
-  // fails, delete the just-created collection so we don't leave a partial
-  // import (and a consumed collection slot) behind.
-  try {
-    for (let i = 0; i < recordData.length; i += BATCH_SIZE) {
-      const batch = recordData.slice(i, i + BATCH_SIZE);
-      await db.$transaction(
-        batch.map((data) =>
-          db.record.create({
-            data: {
-              collectionId: collection.id,
-              createdById: user.id,
-              data: toJson(data),
-            },
-          }),
-        ),
+  const jobs: PreparedJob[] = [];
+  for (const sel of selections) {
+    const { sheetName, headers, rows, sampleByHeader } = readSheet(
+      buffer,
+      sel.sheetName || undefined,
+    );
+    if (headers.length === 0) continue; // skip empty tabs silently
+    if (rows.length > plan.limits.recordsPerCollection) {
+      throw new ApiError(
+        `シート「${sheetName}」の行数がプラン「${plan.name}」の上限（${plan.limits.recordsPerCollection.toLocaleString()}）を超えます。`,
+        403,
       );
     }
+    const fields =
+      parseFieldsArray(sel.fields) ??
+      inferFields(headers, sampleByHeader).map((f) => ({ ...f, required: false }));
+    const collectionName =
+      (sel.collectionName && sel.collectionName.trim()) || sheetName || "インポート";
+    const slug = uniqueName(slugify(collectionName), takenSlugs);
+    takenSlugs.add(slug);
+    jobs.push({ collectionName, slug, fields, headers, rows });
+  }
+
+  if (jobs.length === 0) {
+    throw new ApiError("取り込めるシートがありませんでした", 422);
+  }
+
+  // --- Create each collection + its records; roll back all on any failure ---
+  const created: Array<{ id: string; name: string; imported: number; skipped: number }> = [];
+  const createdIds: string[] = [];
+  let position = existing.length;
+
+  try {
+    for (const job of jobs) {
+      const collection = await db.collection.create({
+        data: {
+          workspaceId: user.workspace.id,
+          name: job.collectionName,
+          slug: job.slug,
+          description: "",
+          icon: "table",
+          color: "khaki",
+          template: "custom",
+          position: position++,
+          fields: {
+            create: job.fields.map((f, index) => ({
+              key: f.key,
+              name: f.name,
+              type: f.type,
+              required: f.required,
+              options: f.options ? toJson(f.options) : undefined,
+              position: index,
+            })),
+          },
+        },
+      });
+      createdIds.push(collection.id);
+
+      let skipped = 0;
+      const recordData = job.rows.map((row) => {
+        const data: Record<string, unknown> = {};
+        job.fields.forEach((f, i) => {
+          const sourceHeader = job.headers[i];
+          const raw =
+            (sourceHeader !== undefined ? row[sourceHeader] : undefined) ??
+            row[f.name] ??
+            row[f.key] ??
+            null;
+          const result = coerceValue(f.type, raw, f.options);
+          if (result.ok) data[f.key] = result.value;
+          else {
+            data[f.key] = null;
+            skipped += 1;
+          }
+        });
+        return data;
+      });
+
+      for (let i = 0; i < recordData.length; i += BATCH_SIZE) {
+        const batch = recordData.slice(i, i + BATCH_SIZE);
+        await db.$transaction(
+          batch.map((data) =>
+            db.record.create({
+              data: {
+                collectionId: collection.id,
+                createdById: user.id,
+                data: toJson(data),
+              },
+            }),
+          ),
+        );
+      }
+
+      created.push({
+        id: collection.id,
+        name: job.collectionName,
+        imported: job.rows.length,
+        skipped,
+      });
+      await logActivity(user.workspace.id, "collection.created", {
+        collectionId: collection.id,
+        name: job.collectionName,
+        template: "custom",
+        source: "import",
+      });
+    }
   } catch (err) {
-    await db.collection.delete({ where: { id: collection.id } }).catch(() => {});
+    if (createdIds.length > 0) {
+      await db.collection
+        .deleteMany({ where: { id: { in: createdIds } } })
+        .catch(() => {});
+    }
+    if (err instanceof ApiError) throw err;
+    console.error("Import failed:", err);
     throw new ApiError("インポート中にエラーが発生しました", 500);
   }
 
-  await logActivity(user.workspace.id, "collection.created", {
-    collectionId: collection.id,
-    name: collection.name,
-    template: "custom",
-    source: "import",
-  });
+  const totalRows = created.reduce((a, c) => a + c.imported, 0);
   await logActivity(user.workspace.id, "import.completed", {
-    rows: rows.length,
-    collection: collection.name,
-    collectionId: collection.id,
+    sheets: created.length,
+    rows: totalRows,
+    collectionId: created[0].id,
   });
 
   return ok({
-    collectionId: collection.id,
-    imported: rows.length,
-    skipped,
+    collections: created,
+    collectionId: created[0].id, // first, for redirect
+    sheetsImported: created.length,
+    imported: totalRows,
   });
 });

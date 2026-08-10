@@ -25,6 +25,9 @@ import {
  */
 export const MAX_IMPORT_ROWS = 50000;
 
+/** Max upload size for a spreadsheet import (raised from 5MB). */
+export const MAX_IMPORT_BYTES = 15 * 1024 * 1024; // 15MB
+
 /** Coerce either input flavour into something XLSX.read can consume. */
 function toWorkbook(
   buffer: ArrayBuffer | Buffer,
@@ -191,6 +194,52 @@ export function inferFields(
     const type = inferFieldType(samples);
     return { name, key, type };
   });
+}
+
+export interface SheetParse {
+  sheetName: string;
+  headers: string[];
+  rowCount: number;
+  inferredFields: InferredField[];
+  previewRows: Record<string, unknown>[];
+  /** True when the sheet has no detectable header/rows (skippable). */
+  empty: boolean;
+}
+
+/**
+ * Parse EVERY sheet in a workbook into a preview-friendly shape. Powers
+ * multi-tab import: each non-empty sheet becomes its own spreadsheet. Rows are
+ * capped per sheet by `maxRows` (decompression-bomb / memory guard).
+ */
+export function readAllSheets(
+  buffer: ArrayBuffer | Buffer,
+  maxRows: number = MAX_IMPORT_ROWS,
+  previewCount = 8,
+): SheetParse[] {
+  let names: string[] = [];
+  try {
+    names = parseWorkbook(buffer).sheets;
+  } catch {
+    names = [];
+  }
+  const out: SheetParse[] = [];
+  for (const name of names) {
+    const { sheetName, headers, rows, sampleByHeader } = readSheet(
+      buffer,
+      name,
+      maxRows,
+    );
+    const empty = headers.length === 0 || rows.length === 0;
+    out.push({
+      sheetName: sheetName || name,
+      headers,
+      rowCount: rows.length,
+      inferredFields: empty ? [] : inferFields(headers, sampleByHeader),
+      previewRows: rows.slice(0, previewCount),
+      empty,
+    });
+  }
+  return out;
 }
 
 export interface ExportField {

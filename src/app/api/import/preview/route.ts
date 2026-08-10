@@ -2,15 +2,15 @@
  * Import preview endpoint.
  * POST multipart/form-data with a single `file` field (.xlsx/.xls/.csv).
  *
- * Reads the sheet and infers a candidate field schema WITHOUT writing anything
- * to the database — this powers the mapping step of the import wizard.
+ * Parses EVERY sheet in the workbook and infers a candidate field schema for
+ * each WITHOUT writing anything to the database — this powers the mapping /
+ * sheet-selection step of the import wizard (multi-tab support).
  */
 import { withAuth, ok, ApiError } from "@/lib/api";
-import { readSheet, inferFields } from "@/lib/excel";
+import { readAllSheets, MAX_IMPORT_BYTES } from "@/lib/excel";
 
-const MAX_BYTES = 5 * 1024 * 1024; // 5MB
 const ALLOWED_EXT = [".xlsx", ".xls", ".csv"];
-const PREVIEW_ROWS = 10;
+const MAX_LABEL = "15MB";
 
 export const POST = withAuth(async (req) => {
   let form: FormData;
@@ -28,30 +28,23 @@ export const POST = withAuth(async (req) => {
   const name = file.name ?? "";
   const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
   if (!ALLOWED_EXT.includes(ext)) {
-    throw new ApiError(
-      "対応形式は .xlsx / .xls / .csv です",
-      415,
-    );
+    throw new ApiError("対応形式は .xlsx / .xls / .csv です", 415);
   }
-
-  if (file.size > MAX_BYTES) {
-    throw new ApiError("ファイルサイズが上限（5MB）を超えています", 413);
+  if (file.size > MAX_IMPORT_BYTES) {
+    throw new ApiError(`ファイルサイズが上限（${MAX_LABEL}）を超えています`, 413);
   }
 
   const buffer = await file.arrayBuffer();
-  const { sheetName, headers, rows, sampleByHeader } = readSheet(buffer);
+  const sheets = readAllSheets(buffer);
+  const usable = sheets.filter((s) => !s.empty);
 
-  if (headers.length === 0) {
+  if (usable.length === 0) {
     throw new ApiError("シートから列を検出できませんでした", 422);
   }
 
-  const inferredFields = inferFields(headers, sampleByHeader);
-
   return ok({
-    sheetName,
-    headers,
-    inferredFields,
-    rowCount: rows.length,
-    previewRows: rows.slice(0, PREVIEW_ROWS),
+    fileName: name,
+    sheetCount: usable.length,
+    sheets: usable,
   });
 });
