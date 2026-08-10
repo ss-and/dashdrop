@@ -40,10 +40,13 @@ model Workspace {
   plan        String       @default("free")
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
-  memberships Membership[]
-  collections Collection[]
-  activities  Activity[]
-  dashboards  Dashboard[]
+  memberships     Membership[]
+  collections     Collection[]
+  activities      Activity[]
+  dashboards      Dashboard[]
+  notifications   Notification[]
+  alertRules      AlertRule[]
+  reportSchedules ReportSchedule[]
 }
 
 model Membership {
@@ -147,6 +150,67 @@ model Dashboard {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+// In-app notification inbox (also the fallback channel for alerts/reports when
+// email/Slack aren't configured).
+model Notification {
+  id          String    @id @default(cuid())
+  workspaceId String
+  // Type: "alert" | "report" | "system"
+  type        String    @default("alert")
+  title       String
+  body        String    @default("")
+  url         String?
+  read        Boolean   @default(false)
+  meta        Json?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, read])
+}
+
+// A threshold alert: evaluate a metric over a spreadsheet and notify when it
+// crosses a bound (e.g. 未対応 > 10).
+model AlertRule {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  name            String
+  collectionId    String
+  // Metric: JSON { measure: Measure, filters?: Filter[] } (see src/lib/widgets.ts)
+  metric          Json
+  // Operator: "gt" | "gte" | "lt" | "lte"
+  operator        String    @default("gt")
+  threshold       Float
+  // Channel: "inapp" | "email" | "slack"
+  channel         String    @default("inapp")
+  enabled         Boolean   @default(true)
+  lastValue       Float?
+  lastTriggeredAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+// A scheduled report: periodically deliver a dashboard snapshot (email when
+// configured, otherwise an in-app notification with the report link).
+model ReportSchedule {
+  id          String    @id @default(cuid())
+  workspaceId String
+  dashboardId String
+  // Frequency: "daily" | "weekly" | "monthly"
+  frequency   String    @default("weekly")
+  recipients  Json? // string[] of email addresses
+  enabled     Boolean   @default(true)
+  lastSentAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId])
 }

@@ -27,6 +27,7 @@ const schema = z.object({
   GOOGLE_SHEETS_CLIENT_ID: z.string().optional().default(""),
   GOOGLE_SHEETS_CLIENT_SECRET: z.string().optional().default(""),
 
+  SLACK_WEBHOOK_URL: z.string().optional().default(""),
   SMTP_HOST: z.string().optional().default(""),
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_USER: z.string().optional().default(""),

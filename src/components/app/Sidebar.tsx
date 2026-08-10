@@ -33,6 +33,8 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
       <nav className="flex-1 overflow-y-auto px-2 py-3">
         <NavLink href="/dashboard" icon="dashboard" label="サマリー" />
         <NavLink href="/import" icon="upload" label="Excel取り込み" />
+        <NavLink href="/alerts" icon="bell" label="アラート" />
+        <NavLink href="/reports" icon="report" label="レポート" />
 
         <div className="flex items-center justify-between px-3 pt-5 pb-1.5">
           <p className="text-2xs font-semibold uppercase tracking-wider text-ink-faint">

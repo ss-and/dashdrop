@@ -17,6 +17,10 @@ import {
 } from "./widgets";
 import type { CurrentUser } from "./auth";
 import type { AggCollection, CollectionMap } from "./aggregate";
+import {
+  resolveCollectionRecords,
+  type EngineCollection,
+} from "./relations";
 
 const SAMPLE_BATCH = 200;
 
@@ -176,6 +180,15 @@ export async function loadDashboardCollections(
 
   const map: CollectionMap = new Map();
   for (const c of collections) {
+    // Resolve relation rollup/lookup so widgets can aggregate cross-spreadsheet
+    // values (the computed field values are merged into each record's data).
+    const resolved = await resolveCollectionRecords(
+      workspaceId,
+      c as unknown as EngineCollection,
+      c.records.map((r) => ({ id: r.id, data: (r.data as Record<string, unknown>) ?? {} })),
+    );
+    const computedById = new Map(resolved.records.map((r) => [r.id, r.computed]));
+
     const agg: AggCollection = {
       slug: c.slug,
       name: c.name,
@@ -187,7 +200,10 @@ export async function loadDashboardCollections(
       })),
       records: c.records.map((r) => ({
         id: r.id,
-        data: (r.data as Record<string, unknown>) ?? {},
+        data: {
+          ...((r.data as Record<string, unknown>) ?? {}),
+          ...(computedById.get(r.id) ?? {}),
+        },
         createdAt: r.createdAt,
         isSampleData: r.isSampleData,
       })),
