@@ -225,3 +225,124 @@ export function newWidget(
       };
   }
 }
+
+/** A sheet as autoLayout sees it. */
+export interface AutoSheet {
+  slug: string;
+  name: string;
+  fields: BuilderField[];
+}
+
+/**
+ * Build a sensible starter dashboard for one or more freshly-imported sheets —
+ * the "おすすめ構成で自動作成" flow. Uses the primary sheet (first non-empty) for
+ * KPIs, a time series, a breakdown and a detail table, then adds a count KPI for
+ * a second sheet so multi-file imports show cross-sheet coverage. Every spec is
+ * schema-valid; callers still persist through the validated create path.
+ */
+export function autoLayout(sheets: AutoSheet[]): WidgetSpec[] {
+  const usable = sheets.filter((s) => s.fields.length > 0);
+  const primary = usable[0];
+  if (!primary) return [];
+
+  const S = primary.slug;
+  const nums = numericFields(primary.fields);
+  const groups = groupableFields(primary.fields);
+  const dates = dateFields(primary.fields);
+  const unitOf = (f?: BuilderField): "currency" | "number" =>
+    f?.type === "currency" ? "currency" : "number";
+
+  const out: WidgetSpec[] = [];
+
+  out.push({
+    id: genWidgetId(),
+    type: "kpi",
+    title: "件数",
+    collection: S,
+    span: 1,
+    measure: { kind: "count" },
+    unit: "number",
+  });
+
+  if (nums[0]) {
+    out.push({
+      id: genWidgetId(),
+      type: "kpi",
+      title: `${nums[0].name}の合計`,
+      collection: S,
+      span: 1,
+      measure: { kind: "sum", field: nums[0].key },
+      unit: unitOf(nums[0]),
+    });
+  }
+  if (nums[1]) {
+    out.push({
+      id: genWidgetId(),
+      type: "kpi",
+      title: `${nums[1].name}の平均`,
+      collection: S,
+      span: 1,
+      measure: { kind: "avg", field: nums[1].key },
+      unit: unitOf(nums[1]),
+    });
+  }
+
+  // Time series: sum of the first numeric (or count) bucketed by month.
+  out.push({
+    id: genWidgetId(),
+    type: "bar",
+    title: nums[0] ? `${nums[0].name}の推移` : "件数の推移",
+    collection: S,
+    span: 2,
+    dateField: dates[0]?.key,
+    bucket: "month",
+    rangeCount: 12,
+    measures: [
+      nums[0]
+        ? { label: nums[0].name, measure: { kind: "sum", field: nums[0].key } }
+        : { label: "件数", measure: { kind: "count" } },
+    ],
+  });
+
+  // Breakdown by the first categorical field.
+  if (groups[0]) {
+    out.push({
+      id: genWidgetId(),
+      type: "donut",
+      title: `${groups[0].name}別`,
+      collection: S,
+      span: 2,
+      groupBy: groups[0].key,
+      measure: nums[0]
+        ? { kind: "sum", field: nums[0].key }
+        : { kind: "count" },
+      limit: 6,
+    });
+  }
+
+  // Detail table (first up to 6 columns).
+  out.push({
+    id: genWidgetId(),
+    type: "table",
+    title: `${primary.name} 明細`,
+    collection: S,
+    span: 4,
+    columns: primary.fields.slice(0, 6).map((f) => f.key),
+    limit: 8,
+  });
+
+  // Cross-sheet coverage: a count KPI for the next non-empty sheet.
+  if (usable[1]) {
+    out.push({
+      id: genWidgetId(),
+      type: "kpi",
+      title: `${usable[1].name}の件数`,
+      collection: usable[1].slug,
+      span: 1,
+      measure: { kind: "count" },
+      unit: "number",
+    });
+  }
+
+  return out;
+}

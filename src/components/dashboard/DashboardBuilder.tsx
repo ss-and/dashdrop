@@ -136,6 +136,7 @@ export function DashboardBuilder({
   const [error, setError] = useState<string | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [canvasDragOver, setCanvasDragOver] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   const dragRef = useRef<DragPayload | null>(null);
   const seqRef = useRef(0);
@@ -147,6 +148,14 @@ export function DashboardBuilder({
   const selectedSheets = collections.filter((c) =>
     selectedSlugs.includes(c.slug),
   );
+  // How many distinct workbooks the selected sheets span — drives the
+  // "cross-file aggregation" reassurance (only meaningful for ≥2 files).
+  const selectedWorkbookCount = new Set(
+    selectedSheets
+      .map((c) => c.workbookId)
+      .filter((id): id is string => id != null),
+  ).size;
+  const spansMultipleFiles = selectedWorkbookCount >= 2;
 
   /* ------------------------------ live preview ---------------------------- */
 
@@ -252,6 +261,7 @@ export function DashboardBuilder({
     dragRef.current = null;
     setDragOverIndex(null);
     setCanvasDragOver(false);
+    setIsDragging(false);
     if (!payload) return;
     if (payload.kind === "palette") {
       addWidget(payload.type, index);
@@ -266,6 +276,7 @@ export function DashboardBuilder({
     dragRef.current = null;
     setDragOverIndex(null);
     setCanvasDragOver(false);
+    setIsDragging(false);
     if (!payload) return;
     if (payload.kind === "palette") {
       addWidget(payload.type);
@@ -381,10 +392,25 @@ export function DashboardBuilder({
           {/* Data source */}
           <Card>
             <div className="border-b border-ink-line px-4 py-2.5">
-              <p className="text-sm font-semibold text-ink">データ元</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-ink">データ元</p>
+                {selectedSheets.length > 0 && (
+                  <span className="shrink-0 text-2xs font-medium text-khaki-600">
+                    {selectedSheets.length} シートを使用中
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-ink-muted">
                 使用するスプレッドシートを選びます
               </p>
+              <p className="mt-0.5 text-xs text-ink-muted">
+                複数のファイル・シートをまたいで選べます
+              </p>
+              {spansMultipleFiles && (
+                <p className="mt-1.5 inline-flex rounded bg-khaki-50 px-1.5 py-0.5 text-2xs font-medium text-khaki-600">
+                  ファイルをまたいだ集計に対応しています
+                </p>
+              )}
             </div>
             <CardBody className="max-h-72 space-y-3 overflow-y-auto py-3">
               {collections.length === 0 && (
@@ -448,11 +474,13 @@ export function DashboardBuilder({
                 onAdd={(type) => addWidget(type)}
                 onDragStart={(type) => {
                   dragRef.current = { kind: "palette", type };
+                  setIsDragging(true);
                 }}
                 onDragEnd={() => {
                   dragRef.current = null;
                   setDragOverIndex(null);
                   setCanvasDragOver(false);
+                  setIsDragging(false);
                 }}
               />
               {!primarySlug && (
@@ -535,11 +563,20 @@ export function DashboardBuilder({
                       onCardDrop(index);
                     }}
                     className={cn(
-                      "flex flex-col",
+                      "relative flex flex-col",
                       SPAN_CLASS[span],
-                      dragOverIndex === index && "ring-2 ring-khaki-400 bg-paper-sunken",
+                      isDragging &&
+                        dragOverIndex === index &&
+                        "ring-1 ring-khaki-300 bg-paper-sunken",
                     )}
                   >
+                    {/* Insertion guide — "この位置（このカードの前）に挿入" */}
+                    {isDragging && dragOverIndex === index && (
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-y-0 -left-2 z-10 w-0.5 rounded bg-khaki-500"
+                      />
+                    )}
                     {/* Toolbar */}
                     <div className="flex items-center gap-1.5 border-b border-ink-line px-2.5 py-1.5">
                       <button
@@ -552,11 +589,13 @@ export function DashboardBuilder({
                             `reorder:${widget.id}`,
                           );
                           dragRef.current = { kind: "reorder", id: widget.id };
+                          setIsDragging(true);
                         }}
                         onDragEnd={() => {
                           dragRef.current = null;
                           setDragOverIndex(null);
                           setCanvasDragOver(false);
+                          setIsDragging(false);
                         }}
                         className="flex h-7 w-6 shrink-0 cursor-grab items-center justify-center rounded text-ink-faint hover:bg-paper-sunken hover:text-ink-soft active:cursor-grabbing"
                         aria-label="ドラッグして並び替え"
@@ -629,6 +668,16 @@ export function DashboardBuilder({
                   </Card>
                 );
               })}
+              {/* Append guide — shown while dragging over empty grid area
+                  (not over a specific card): "追加は末尾". */}
+              {isDragging && canvasDragOver && dragOverIndex === null && (
+                <div
+                  aria-hidden="true"
+                  className="flex min-h-[6rem] items-center justify-center rounded-md border-2 border-dashed border-khaki-500 bg-khaki-50 text-2xs font-semibold text-khaki-600 lg:col-span-1"
+                >
+                  末尾に追加
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import { Topbar } from "@/components/app/Topbar";
 import { CollectionIcon, NavIcon } from "@/components/app/icons";
 import { HelpTip } from "@/components/ui/HelpTip";
+import { AutoDashboardButton } from "@/components/dashboard/AutoDashboardButton";
 
 const SOURCE_LABEL: Record<string, string> = {
   excel: "Excel",
@@ -77,13 +78,16 @@ export default async function WorkbookPage({
             </div>
 
             {sheets.length > 0 && (
-              <Link
-                href={`/dashboards/build?file=${workbook.id}`}
-                className="inline-flex h-9 shrink-0 items-center gap-2 rounded border border-khaki-300 bg-khaki-50 px-3 text-sm font-medium text-khaki-800 transition-colors hover:bg-khaki-100"
-              >
-                <NavIcon name="dashboard" className="h-4 w-4 text-khaki-600" />
-                ダッシュボードを作成
-              </Link>
+              <div className="flex shrink-0 items-start gap-2">
+                <AutoDashboardButton workbookId={workbook.id} />
+                <Link
+                  href={`/dashboards/build?file=${workbook.id}`}
+                  className="inline-flex h-9 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
+                >
+                  <NavIcon name="dashboard" className="h-4 w-4" />
+                  自分で作る
+                </Link>
+              </div>
             )}
           </div>
 

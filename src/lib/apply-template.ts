@@ -16,6 +16,7 @@ import {
   type DashboardTemplate,
   type WidgetSpec,
 } from "./widgets";
+import { autoLayout, type AutoSheet } from "./widget-builder";
 import type { CurrentUser } from "./auth";
 import type { AggCollection, CollectionMap } from "./aggregate";
 import {
@@ -231,6 +232,73 @@ export async function createCustomDashboard(
   });
 
   return { dashboardId: dashboard.id };
+}
+
+/**
+ * One-click "おすすめ構成で自動作成": build a starter dashboard from a freshly
+ * imported file (workbook) or a single sheet, using autoLayout heuristics.
+ * Returns the new dashboard id + name so the caller can navigate to it.
+ */
+export async function createAutoDashboard(
+  user: CurrentUser,
+  opts: { workbookId?: string; collectionId?: string },
+): Promise<{ dashboardId: string; name: string }> {
+  const workspaceId = user.workspace.id;
+
+  let sheets: AutoSheet[] = [];
+  let baseName = "ダッシュボード";
+
+  if (opts.workbookId) {
+    const wb = await db.workbook.findFirst({
+      where: { id: opts.workbookId, workspaceId },
+      include: {
+        collections: {
+          orderBy: { position: "asc" },
+          include: { fields: { orderBy: { position: "asc" } } },
+        },
+      },
+    });
+    if (!wb) throw new ApiError("ファイルが見つかりません", 404);
+    baseName = wb.name;
+    sheets = wb.collections.map((c) => ({
+      slug: c.slug,
+      name: c.name,
+      fields: c.fields.map((f) => ({ key: f.key, name: f.name, type: f.type })),
+    }));
+  } else if (opts.collectionId) {
+    const c = await db.collection.findFirst({
+      where: { id: opts.collectionId, workspaceId },
+      include: { fields: { orderBy: { position: "asc" } } },
+    });
+    if (!c) throw new ApiError("スプレッドシートが見つかりません", 404);
+    baseName = c.name;
+    sheets = [
+      {
+        slug: c.slug,
+        name: c.name,
+        fields: c.fields.map((f) => ({ key: f.key, name: f.name, type: f.type })),
+      },
+    ];
+  } else {
+    throw new ApiError("対象が指定されていません", 400);
+  }
+
+  const layout = autoLayout(sheets);
+  if (layout.length === 0) {
+    throw new ApiError(
+      "自動作成できる項目が見つかりませんでした。ビルダーから手動で作成してください。",
+      422,
+    );
+  }
+
+  const usedSlugs = Array.from(new Set(layout.map((w) => w.collection)));
+  const { dashboardId } = await createCustomDashboard(user, {
+    name: `${baseName} ダッシュボード`,
+    description: "取り込んだデータから自動作成しました。",
+    collectionSlugs: usedSlugs,
+    layout,
+  });
+  return { dashboardId, name: `${baseName} ダッシュボード` };
 }
 
 /**
