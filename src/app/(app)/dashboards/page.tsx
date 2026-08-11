@@ -120,24 +120,43 @@ export default async function DashboardsGalleryPage({
             </section>
           )}
 
-          {/* Header + AI entry */}
+          {/* Header + creation entries */}
           <section className="flex flex-wrap items-end justify-between gap-4">
             <div className="space-y-1">
-              <h2 className="text-lg font-semibold text-ink">テンプレートから始める</h2>
+              <h2 className="text-lg font-semibold text-ink">ダッシュボードを作る</h2>
               <p className="text-sm text-ink-muted">
-                カードを選ぶとプレビューを表示します。内容を確認してから追加できます。
+                取り込んだExcel・スプレッドシートを、そのままグラフやKPIに。
               </p>
             </div>
-            <Link
-              href="/dashboards/new"
-              className="group inline-flex items-center gap-2.5 rounded-md border border-ink-line bg-paper-raised px-3.5 py-2 transition-colors hover:border-khaki-300"
-            >
-              <NavIcon name="sparkles" className="h-4 w-4 text-khaki-500" />
-              <span className="text-sm">
-                <span className="font-medium text-ink">画像・PDFから作成</span>
-                <span className="ml-1.5 text-ink-muted">AIで読み取り</span>
-              </span>
-            </Link>
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href="/dashboards/build"
+                className="group inline-flex items-center gap-2.5 rounded-md border border-khaki-300 bg-khaki-50 px-3.5 py-2 transition-colors hover:bg-khaki-100"
+              >
+                <NavIcon name="plus" className="h-4 w-4 text-khaki-600" />
+                <span className="text-sm">
+                  <span className="font-medium text-khaki-800">ドラッグ&ドロップで作成</span>
+                  <span className="ml-1.5 text-khaki-600">自分で組む</span>
+                </span>
+              </Link>
+              <Link
+                href="/dashboards/new"
+                className="group inline-flex items-center gap-2.5 rounded-md border border-ink-line bg-paper-raised px-3.5 py-2 transition-colors hover:border-khaki-300"
+              >
+                <NavIcon name="sparkles" className="h-4 w-4 text-khaki-500" />
+                <span className="text-sm">
+                  <span className="font-medium text-ink">画像・PDFから作成</span>
+                  <span className="ml-1.5 text-ink-muted">AIで読み取り</span>
+                </span>
+              </Link>
+            </div>
+          </section>
+
+          <section className="space-y-1">
+            <h2 className="text-lg font-semibold text-ink">テンプレートから始める</h2>
+            <p className="text-sm text-ink-muted">
+              カードを選ぶとプレビューを表示します。内容を確認してから追加できます。
+            </p>
           </section>
 
           {/* Category filter (calm tabs) */}

@@ -12,6 +12,7 @@ import { logActivity } from "./workspace";
 import { generateSampleRows } from "./sample-data";
 import {
   dashboardTemplateSchema,
+  dashboardLayoutSchema,
   type DashboardTemplate,
   type WidgetSpec,
 } from "./widgets";
@@ -160,6 +161,136 @@ export async function applyTemplate(
     console.error("applyTemplate failed:", err);
     throw new ApiError("ダッシュボードの作成に失敗しました", 500);
   }
+}
+
+export interface CustomDashboardInput {
+  name: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  collectionSlugs: string[];
+  layout: unknown; // validated here against dashboardLayoutSchema
+}
+
+/**
+ * Persist a user-built ("custom") dashboard whose widgets reference *existing*
+ * spreadsheets in the workspace — including sheets imported from Excel/Sheets.
+ * This is the save target for the drag-and-drop builder: no collections are
+ * created, we only bind widgets to real data by slug.
+ */
+export async function createCustomDashboard(
+  user: CurrentUser,
+  input: CustomDashboardInput,
+): Promise<{ dashboardId: string }> {
+  const workspaceId = user.workspace.id;
+
+  const parsed = dashboardLayoutSchema.safeParse(input.layout);
+  if (!parsed.success) {
+    throw new ApiError(
+      "ウィジェットを1つ以上追加し、各ウィジェットの設定（データ元・項目）を完成させてください。",
+      400,
+    );
+  }
+
+  // Keep only slugs that actually belong to this workspace.
+  const owned = await db.collection.findMany({
+    where: { workspaceId, slug: { in: input.collectionSlugs } },
+    select: { slug: true },
+  });
+  const slugs = owned.map((c) => c.slug);
+  if (slugs.length === 0) {
+    throw new ApiError("データ元のスプレッドシートを選んでください。", 400);
+  }
+  // Every widget must point at one of the bound sheets.
+  const layout = parsed.data.filter((w) => slugs.includes(w.collection));
+  if (layout.length === 0) {
+    throw new ApiError(
+      "ウィジェットのデータ元が、選んだスプレッドシートと一致していません。",
+      400,
+    );
+  }
+
+  const dashboard = await db.dashboard.create({
+    data: {
+      workspaceId,
+      name: input.name.trim() || "無題のダッシュボード",
+      category: "custom",
+      description: input.description?.trim() ?? "",
+      icon: input.icon ?? "dashboard",
+      color: input.color ?? "khaki",
+      collectionSlugs: toJson(slugs),
+      layout: toJson(layout),
+      source: "custom",
+      position: await db.dashboard.count({ where: { workspaceId } }),
+    },
+  });
+
+  await logActivity(workspaceId, "collection.created", {
+    dashboardId: dashboard.id,
+    source: "builder",
+  });
+
+  return { dashboardId: dashboard.id };
+}
+
+/**
+ * Update a custom (or any) dashboard's editable fields in place. Only the
+ * provided fields change; `layout` is re-validated and re-scoped to the bound
+ * (or newly provided) sheets.
+ */
+export async function updateCustomDashboard(
+  user: CurrentUser,
+  dashboardId: string,
+  input: Partial<CustomDashboardInput>,
+): Promise<{ dashboardId: string }> {
+  const workspaceId = user.workspace.id;
+  const existing = await db.dashboard.findFirst({
+    where: { id: dashboardId, workspaceId },
+  });
+  if (!existing) throw new ApiError("ダッシュボードが見つかりません", 404);
+
+  const data: Record<string, unknown> = {};
+  if (typeof input.name === "string") {
+    data.name = input.name.trim() || "無題のダッシュボード";
+  }
+  if (typeof input.description === "string") {
+    data.description = input.description.trim();
+  }
+
+  // Resolve the sheets this dashboard binds to (new list or the current one).
+  let slugs: string[] | null = null;
+  if (input.collectionSlugs) {
+    const owned = await db.collection.findMany({
+      where: { workspaceId, slug: { in: input.collectionSlugs } },
+      select: { slug: true },
+    });
+    slugs = owned.map((c) => c.slug);
+    data.collectionSlugs = toJson(slugs);
+  } else if (Array.isArray(existing.collectionSlugs)) {
+    slugs = (existing.collectionSlugs as unknown[]).filter(
+      (s): s is string => typeof s === "string",
+    );
+  }
+
+  if (input.layout !== undefined) {
+    const parsed = dashboardLayoutSchema.safeParse(input.layout);
+    if (!parsed.success) {
+      throw new ApiError(
+        "ウィジェットの設定を完成させてください。",
+        400,
+      );
+    }
+    const scoped = slugs
+      ? parsed.data.filter((w) => slugs!.includes(w.collection))
+      : parsed.data;
+    if (scoped.length === 0) {
+      throw new ApiError("有効なウィジェットがありません。", 400);
+    }
+    data.layout = toJson(scoped);
+  }
+
+  await db.dashboard.update({ where: { id: dashboardId }, data });
+  return { dashboardId };
 }
 
 /**

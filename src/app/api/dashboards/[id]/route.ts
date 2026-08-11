@@ -6,8 +6,10 @@
  *          `?withData=1` to also drop the dashboard's collections (and cascade
  *          their fields + records), scoped to the workspace.
  */
-import { withAuth, ok, ApiError } from "@/lib/api";
+import { z } from "zod";
+import { withAuth, ok, ApiError, readJson } from "@/lib/api";
 import { db } from "@/lib/db";
+import { updateCustomDashboard } from "@/lib/apply-template";
 
 async function findDashboard(workspaceId: string, id: string) {
   const dashboard = await db.dashboard.findFirst({
@@ -25,6 +27,19 @@ function slugsOf(dashboard: { collectionSlugs: unknown }): string[] {
 export const GET = withAuth(async (_req, { user, params }) => {
   const dashboard = await findDashboard(user.workspace.id, params.id);
   return ok(dashboard);
+});
+
+const patchSchema = z.object({
+  name: z.string().optional(),
+  description: z.string().optional(),
+  collectionSlugs: z.array(z.string()).max(24).optional(),
+  layout: z.array(z.unknown()).max(24).optional(),
+});
+
+export const PATCH = withAuth(async (req, { user, params }) => {
+  const body = await readJson(req, patchSchema);
+  const result = await updateCustomDashboard(user, params.id, body);
+  return ok(result);
 });
 
 export const DELETE = withAuth(async (req, { user, params }) => {

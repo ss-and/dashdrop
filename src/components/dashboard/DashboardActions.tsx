@@ -188,6 +188,13 @@ export function DashboardActions({
             スプレッドシートを開く
           </Link>
         )}
+        <Link
+          href={`/dashboards/build/${dashboardId}`}
+          className="inline-flex h-8 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
+        >
+          <NavIcon name="settings" className="h-4 w-4" />
+          編集
+        </Link>
         <Button
           size="sm"
           variant="ghost"

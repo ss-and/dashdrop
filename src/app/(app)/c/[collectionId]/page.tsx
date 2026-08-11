@@ -116,13 +116,22 @@ export default async function CollectionPage({
               </div>
             </div>
 
-            <Link
-              href={`/api/export/${collection.id}`}
-              className="inline-flex h-9 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
-            >
-              <NavIcon name="download" className="h-4 w-4" />
-              Excelで書き出し
-            </Link>
+            <div className="flex shrink-0 items-center gap-2">
+              <Link
+                href={`/dashboards/build?sheet=${collection.id}`}
+                className="inline-flex h-9 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
+              >
+                <NavIcon name="dashboard" className="h-4 w-4" />
+                ダッシュボードを作成
+              </Link>
+              <Link
+                href={`/api/export/${collection.id}`}
+                className="inline-flex h-9 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
+              >
+                <NavIcon name="download" className="h-4 w-4" />
+                Excelで書き出し
+              </Link>
+            </div>
           </div>
 
           <DataGrid

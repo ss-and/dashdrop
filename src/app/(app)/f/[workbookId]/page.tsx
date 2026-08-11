@@ -51,28 +51,40 @@ export default async function WorkbookPage({
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-5xl space-y-5">
           {/* File header */}
-          <div className="flex items-start gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-ink-line bg-paper-raised">
-              <NavIcon name="folder" className="h-5 w-5 text-khaki-500" />
-            </span>
-            <div className="min-w-0">
-              <p className="text-2xs font-semibold uppercase tracking-wider text-ink-faint">
-                ファイル（{sourceLabel}）
-              </p>
-              <div className="flex items-center gap-1.5">
-                <h2 className="truncate text-lg font-semibold text-ink">
-                  {workbook.name}
-                </h2>
-                <HelpTip label="ファイルとシートについて">
-                  取り込んだExcel / スプレッドシートは「ファイル」として保持され、
-                  その中の各タブが「シート」になります。左のシート名をクリックすると、
-                  Excelのように編集できる表が開きます。
-                </HelpTip>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-md border border-ink-line bg-paper-raised">
+                <NavIcon name="folder" className="h-5 w-5 text-khaki-500" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-2xs font-semibold uppercase tracking-wider text-ink-faint">
+                  ファイル（{sourceLabel}）
+                </p>
+                <div className="flex items-center gap-1.5">
+                  <h2 className="truncate text-lg font-semibold text-ink">
+                    {workbook.name}
+                  </h2>
+                  <HelpTip label="ファイルとシートについて">
+                    取り込んだExcel / スプレッドシートは「ファイル」として保持され、
+                    その中の各タブが「シート」になります。左のシート名をクリックすると、
+                    Excelのように編集できる表が開きます。
+                  </HelpTip>
+                </div>
+                <p className="text-sm text-ink-muted">
+                  {sheets.length} シート・合計 {totalRows.toLocaleString()} 行
+                </p>
               </div>
-              <p className="text-sm text-ink-muted">
-                {sheets.length} シート・合計 {totalRows.toLocaleString()} 行
-              </p>
             </div>
+
+            {sheets.length > 0 && (
+              <Link
+                href={`/dashboards/build?file=${workbook.id}`}
+                className="inline-flex h-9 shrink-0 items-center gap-2 rounded border border-khaki-300 bg-khaki-50 px-3 text-sm font-medium text-khaki-800 transition-colors hover:bg-khaki-100"
+              >
+                <NavIcon name="dashboard" className="h-4 w-4 text-khaki-600" />
+                ダッシュボードを作成
+              </Link>
+            )}
           </div>
 
           {/* Sheets — Salesforce-style related list */}
