@@ -145,6 +145,17 @@ export const POST = withAuth(async (req, { user }) => {
     throw new ApiError("取り込めるシートがありませんでした", 422);
   }
 
+  // --- Group all sheets under one Workbook (the imported Google Sheet) ---
+  const workbookName =
+    jobs.length === 1 ? jobs[0].collectionName : "Google Sheets";
+  const workbook = await db.workbook.create({
+    data: {
+      workspaceId: user.workspace.id,
+      name: workbookName,
+      source: "gsheets",
+    },
+  });
+
   // --- Create each collection + its records; roll back all on any failure ---
   const created: Array<{ id: string; name: string; imported: number; skipped: number }> = [];
   const createdIds: string[] = [];
@@ -155,6 +166,7 @@ export const POST = withAuth(async (req, { user }) => {
       const collection = await db.collection.create({
         data: {
           workspaceId: user.workspace.id,
+          workbookId: workbook.id,
           name: job.collectionName,
           slug: job.slug,
           description: "",
@@ -230,6 +242,7 @@ export const POST = withAuth(async (req, { user }) => {
         .deleteMany({ where: { id: { in: createdIds } } })
         .catch(() => {});
     }
+    await db.workbook.delete({ where: { id: workbook.id } }).catch(() => {});
     if (err instanceof ApiError) throw err;
     console.error("Google Sheets import failed:", err);
     throw new ApiError("インポート中にエラーが発生しました", 500);
@@ -241,11 +254,13 @@ export const POST = withAuth(async (req, { user }) => {
     rows: totalRows,
     source: "gsheets",
     collectionId: created[0].id,
+    workbookId: workbook.id,
   });
 
   return ok({
     collections: created,
     collectionId: created[0].id, // first, for redirect
+    workbookId: workbook.id,
     sheetsImported: created.length,
     imported: totalRows,
   });

@@ -34,6 +34,14 @@ export default async function CollectionPage({
     redirect("/dashboard"); // returns never — collection is assigned past here
   }
 
+  // Parent file (workbook), if this sheet was imported as part of one.
+  const workbook = collection.workbookId
+    ? await db.workbook.findFirst({
+        where: { id: collection.workbookId, workspaceId: user.workspace.id },
+        select: { id: true, name: true },
+      })
+    : null;
+
   const records = await db.record.findMany({
     where: { collectionId: collection.id },
     orderBy: { createdAt: "desc" },
@@ -77,9 +85,19 @@ export default async function CollectionPage({
                 />
               </span>
               <div>
-                <p className="text-2xs font-semibold uppercase tracking-wider text-ink-faint">
-                  スプレッドシート
-                </p>
+                {workbook ? (
+                  <Link
+                    href={`/f/${workbook.id}`}
+                    className="flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider text-ink-faint hover:text-khaki-600"
+                  >
+                    <NavIcon name="folder" className="h-3 w-3" />
+                    <span className="truncate">{workbook.name}</span>
+                  </Link>
+                ) : (
+                  <p className="text-2xs font-semibold uppercase tracking-wider text-ink-faint">
+                    スプレッドシート
+                  </p>
+                )}
                 <div className="flex items-center gap-1.5">
                   <h2 className="text-lg font-semibold text-ink">
                     {collection.name}

@@ -214,7 +214,13 @@ export function ImportWizard() {
         setError(body?.error ?? "取り込みに失敗しました");
         return;
       }
-      router.push(`/c/${body.data.collectionId}`);
+      // Multi-sheet imports land on the file overview (the nested workbook);
+      // a single sheet goes straight to its grid.
+      const dest =
+        body.data.sheetsImported > 1 && body.data.workbookId
+          ? `/f/${body.data.workbookId}`
+          : `/c/${body.data.collectionId}`;
+      router.push(dest);
       router.refresh();
     } catch {
       setError("通信エラーが発生しました。しばらくして再度お試しください。");

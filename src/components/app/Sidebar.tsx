@@ -9,11 +9,16 @@ import { CollectionIcon, NavIcon } from "./icons";
  * so it never depends on a client fetch. Shared by every /(app) page.
  */
 export async function Sidebar({ user }: { user: CurrentUser }) {
-  const [collections, dashboards] = await Promise.all([
+  const [collections, workbooks, dashboards] = await Promise.all([
     db.collection.findMany({
       where: { workspaceId: user.workspace.id },
       orderBy: { position: "asc" },
-      select: { id: true, name: true, icon: true, color: true },
+      select: { id: true, name: true, icon: true, color: true, workbookId: true },
+    }),
+    db.workbook.findMany({
+      where: { workspaceId: user.workspace.id },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true },
     }),
     db.dashboard.findMany({
       where: { workspaceId: user.workspace.id },
@@ -21,6 +26,22 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
       select: { id: true, name: true, icon: true },
     }),
   ]);
+
+  // Group sheets under their workbook (file); loose sheets have no workbook.
+  const byWorkbook = new Map<string, typeof collections>();
+  const loose: typeof collections = [];
+  for (const c of collections) {
+    if (c.workbookId) {
+      const arr = byWorkbook.get(c.workbookId) ?? [];
+      arr.push(c);
+      byWorkbook.set(c.workbookId, arr);
+    } else {
+      loose.push(c);
+    }
+  }
+  const fileGroups = workbooks
+    .map((w) => ({ ...w, sheets: byWorkbook.get(w.id) ?? [] }))
+    .filter((w) => w.sheets.length > 0);
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-ink-line bg-paper-raised">
@@ -73,8 +94,43 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
         <p className="px-3 pt-5 pb-1.5 text-2xs font-semibold uppercase tracking-wider text-ink-faint">
           スプレッドシート
         </p>
+
+        {/* File (workbook) groups: 📁ファイル名 ▸ をトグルで展開すると各シート */}
+        {fileGroups.map((w) => (
+          <details key={w.id} open className="group">
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded px-3 py-2 text-sm font-medium text-ink-soft hover:bg-paper-sunken hover:text-ink transition-colors">
+              <NavIcon
+                name="chevron"
+                className="h-3.5 w-3.5 shrink-0 text-ink-faint transition-transform group-open:rotate-90"
+              />
+              <NavIcon name="folder" className="h-4 w-4 shrink-0 text-khaki-500" />
+              <Link
+                href={`/f/${w.id}`}
+                className="min-w-0 flex-1 truncate hover:text-khaki-700"
+                title={w.name}
+              >
+                {w.name}
+              </Link>
+            </summary>
+            <ul className="mb-1 ml-4 space-y-0.5 border-l border-ink-line pl-1">
+              {w.sheets.map((c) => (
+                <li key={c.id}>
+                  <Link
+                    href={`/c/${c.id}`}
+                    className="flex items-center gap-2.5 rounded px-3 py-1.5 text-sm text-ink-soft hover:bg-paper-sunken hover:text-ink transition-colors"
+                  >
+                    <CollectionIcon name={c.icon} className="h-4 w-4 text-khaki-500" />
+                    <span className="truncate">{c.name}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ))}
+
+        {/* Loose sheets (templates / manually created, no parent file) */}
         <ul className="space-y-0.5">
-          {collections.map((c) => (
+          {loose.map((c) => (
             <li key={c.id}>
               <Link
                 href={`/c/${c.id}`}

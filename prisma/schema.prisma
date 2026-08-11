@@ -42,6 +42,7 @@ model Workspace {
   updatedAt   DateTime     @updatedAt
   memberships     Membership[]
   collections     Collection[]
+  workbooks       Workbook[]
   activities      Activity[]
   dashboards      Dashboard[]
   notifications   Notification[]
@@ -63,9 +64,28 @@ model Membership {
   @@index([workspaceId])
 }
 
+// A Workbook groups the spreadsheets (Collections) that came from one imported
+// file — e.g. "売上.xlsx" whose tabs become sheets nested under it. Shown as a
+// collapsible file → sheets tree in the navigator.
+model Workbook {
+  id          String       @id @default(cuid())
+  workspaceId String
+  name        String
+  // Origin: "excel" | "csv" | "gsheets"
+  source      String       @default("excel")
+  position    Int          @default(0)
+  createdAt   DateTime     @default(now())
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  collections Collection[]
+
+  @@index([workspaceId])
+}
+
 model Collection {
   id          String    @id @default(cuid())
   workspaceId String
+  // Parent file (workbook). Null for standalone/template spreadsheets.
+  workbookId  String?
   name        String
   slug        String
   description String    @default("")
@@ -77,11 +97,13 @@ model Collection {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workbook    Workbook? @relation(fields: [workbookId], references: [id], onDelete: SetNull)
   fields      Field[]
   records     Record[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId])
+  @@index([workbookId])
 }
 
 model Field {

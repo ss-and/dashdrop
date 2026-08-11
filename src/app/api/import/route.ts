@@ -187,6 +187,16 @@ export const POST = withAuth(async (req, { user }) => {
     throw new ApiError("取り込めるシートがありませんでした", 422);
   }
 
+  // --- Group all sheets under one Workbook (the file) ---
+  const fileBase = fileName.replace(/\.[^.]+$/, "").trim() || "インポート";
+  const workbook = await db.workbook.create({
+    data: {
+      workspaceId: user.workspace.id,
+      name: fileBase,
+      source: ext === ".csv" ? "csv" : "excel",
+    },
+  });
+
   // --- Create each collection + its records; roll back all on any failure ---
   const created: Array<{ id: string; name: string; imported: number; skipped: number }> = [];
   const createdIds: string[] = [];
@@ -197,6 +207,7 @@ export const POST = withAuth(async (req, { user }) => {
       const collection = await db.collection.create({
         data: {
           workspaceId: user.workspace.id,
+          workbookId: workbook.id,
           name: job.collectionName,
           slug: job.slug,
           description: "",
@@ -272,6 +283,7 @@ export const POST = withAuth(async (req, { user }) => {
         .deleteMany({ where: { id: { in: createdIds } } })
         .catch(() => {});
     }
+    await db.workbook.delete({ where: { id: workbook.id } }).catch(() => {});
     if (err instanceof ApiError) throw err;
     console.error("Import failed:", err);
     throw new ApiError("インポート中にエラーが発生しました", 500);
@@ -282,11 +294,13 @@ export const POST = withAuth(async (req, { user }) => {
     sheets: created.length,
     rows: totalRows,
     collectionId: created[0].id,
+    workbookId: workbook.id,
   });
 
   return ok({
     collections: created,
     collectionId: created[0].id, // first, for redirect
+    workbookId: workbook.id,
     sheetsImported: created.length,
     imported: totalRows,
   });

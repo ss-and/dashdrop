@@ -102,6 +102,12 @@ const paths: Record<string, React.ReactNode> = {
       <path d="M8 13h5M8 17h5M8 9h2" />
     </>
   ),
+  folder: (
+    <>
+      <path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z" />
+    </>
+  ),
+  chevron: <path d="m9 6 6 6-6 6" />,
 };
 
 export function NavIcon({ name, className }: { name: string; className?: string }) {
