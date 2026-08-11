@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
 import {
   FIELD_TYPE_META,
+  displayValue,
   type SelectOption,
 } from "@/lib/field-types";
 import { CellView, CellEditor, type GridField } from "./cells";
@@ -66,6 +67,101 @@ function toGridField(f: RawField): GridField {
   };
 }
 
+type SortState = { key: string; dir: "asc" | "desc" };
+
+/**
+ * Visible text for a cell — mirrors CellView's display logic (relation labels,
+ * select/multiselect option labels, computed lookup/rollup) so that search
+ * matches exactly what the user sees on screen.
+ */
+function cellDisplayText(
+  field: GridField,
+  data: Record<string, unknown>,
+  computed: Record<string, unknown>,
+  relLabels: Record<string, string> | undefined,
+): string {
+  switch (field.type) {
+    case "relation": {
+      const ids = Array.isArray(data[field.key])
+        ? (data[field.key] as string[])
+        : [];
+      return ids.map((id) => relLabels?.[id] ?? id).join(" ");
+    }
+    case "lookup":
+      return displayValue("lookup", computed[field.key]);
+    case "rollup":
+      return displayValue("rollup", computed[field.key]);
+    case "select": {
+      const v = data[field.key];
+      if (v === null || v === undefined || v === "") return "";
+      const opt = field.options?.find((o) => o.value === v);
+      return opt?.label ?? String(v);
+    }
+    case "multiselect": {
+      const arr = Array.isArray(data[field.key])
+        ? (data[field.key] as unknown[])
+        : [];
+      return arr
+        .map(
+          (v) => field.options?.find((o) => o.value === v)?.label ?? String(v),
+        )
+        .join(" ");
+    }
+    default:
+      return displayValue(field.type, data[field.key]);
+  }
+}
+
+/**
+ * Comparable value for sorting. Numeric types (number / currency / rollup /
+ * date) coerce to a number so they sort numerically; everything else falls back
+ * to its display text (sorted lexicographically, Japanese-aware). `null` marks
+ * an empty cell, which the comparator always pushes to the bottom.
+ */
+function cellSortValue(
+  field: GridField,
+  data: Record<string, unknown>,
+  computed: Record<string, unknown>,
+  relLabels: Record<string, string> | undefined,
+): number | string | null {
+  if (field.type === "number" || field.type === "currency") {
+    const raw = data[field.key];
+    if (raw === null || raw === undefined || raw === "") return null;
+    const n =
+      typeof raw === "number"
+        ? raw
+        : Number(String(raw).replace(/[,\s¥$€£]/g, ""));
+    return Number.isFinite(n) ? n : null;
+  }
+  if (field.type === "rollup") {
+    const raw = computed[field.key];
+    return typeof raw === "number" ? raw : null;
+  }
+  if (field.type === "date") {
+    const raw = data[field.key];
+    if (raw === null || raw === undefined || raw === "") return null;
+    const t = Date.parse(String(raw));
+    return Number.isNaN(t) ? String(raw) : t;
+  }
+  const text = cellDisplayText(field, data, computed, relLabels);
+  return text === "" ? null : text;
+}
+
+/** Ordering for two sort values. Empty (null) cells always sort last. */
+function compareCells(
+  a: number | string | null,
+  b: number | string | null,
+  dir: "asc" | "desc",
+): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  let cmp: number;
+  if (typeof a === "number" && typeof b === "number") cmp = a - b;
+  else cmp = String(a).localeCompare(String(b), "ja");
+  return dir === "desc" ? -cmp : cmp;
+}
+
 export function DataGrid({
   collection,
   fields: initialFields,
@@ -93,6 +189,11 @@ export function DataGrid({
     Record<string, Record<string, string>>
   >(initialRelationLabels ?? {});
   const [draft, setDraft] = useState<Record<string, unknown>>({});
+
+  // Salesforce-style list controls: a text filter over displayed values and a
+  // single active sort column (asc -> desc -> none).
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<SortState | null>(null);
 
   // Cell being edited + a ref-backed draft value so instant-commit editors
   // (checkbox / select) read the freshest value rather than stale state.
@@ -310,6 +411,47 @@ export function DataGrid({
     [fields],
   );
 
+  /** Cycle a column's sort: none/other -> asc -> desc -> none. */
+  const toggleSort = useCallback((key: string) => {
+    setSort((s) => {
+      if (!s || s.key !== key) return { key, dir: "asc" };
+      if (s.dir === "asc") return { key, dir: "desc" };
+      return null;
+    });
+  }, []);
+
+  /**
+   * Saved records after search + sort. Derived (never mutates `records`) so
+   * edits/adds/deletes flow through while the current filter/order stays applied.
+   * The trailing draft row is rendered separately and is intentionally excluded.
+   */
+  const visibleRecords = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let rows = records;
+    if (q) {
+      rows = rows.filter((rec) =>
+        columns.some((f) =>
+          cellDisplayText(f, rec.data, rec.computed, relationLabels[f.key])
+            .toLowerCase()
+            .includes(q),
+        ),
+      );
+    }
+    if (sort) {
+      const field = columns.find((f) => f.key === sort.key);
+      if (field) {
+        rows = [...rows].sort((ra, rb) =>
+          compareCells(
+            cellSortValue(field, ra.data, ra.computed, relationLabels[field.key]),
+            cellSortValue(field, rb.data, rb.computed, relationLabels[field.key]),
+            sort.dir,
+          ),
+        );
+      }
+    }
+    return rows;
+  }, [records, columns, query, sort, relationLabels]);
+
   const isEditing = (rowId: string, key: string) =>
     editing?.rowId === rowId && editing.key === key;
 
@@ -382,9 +524,24 @@ export function DataGrid({
 
   return (
     <div className="animate-fade-in space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-ink-muted">{records.length} 件</p>
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="relative w-full max-w-xs">
+          <span className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-ink-faint">
+            <SearchIcon />
+          </span>
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="検索…"
+            aria-label="行を検索"
+            className="w-full rounded-md border border-ink-line bg-paper-raised py-1.5 pl-8 pr-2 text-sm text-ink placeholder:text-ink-faint focus:border-khaki-400 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-khaki-500/30"
+          />
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="text-sm text-ink-muted">
+            {visibleRecords.length} 件
+          </span>
           <span
             className={cn(
               "text-xs text-ink-faint transition-opacity",
@@ -423,19 +580,32 @@ export function DataGrid({
                   className="min-w-[160px] border-b border-r border-ink-line px-2 py-1.5 text-left align-top"
                 >
                   <div className="flex items-start justify-between gap-1">
-                    <div className="min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort(field.key)}
+                      title="クリックで並び替え"
+                      className="min-w-0 flex-1 rounded text-left hover:bg-paper-raised focus:outline-none focus:ring-2 focus:ring-inset focus:ring-khaki-500/30"
+                    >
                       <div className="flex items-center gap-1 truncate font-semibold text-ink">
-                        {field.name}
+                        <span className="truncate">{field.name}</span>
                         {field.required && (
                           <span className="text-danger" title="必須">
                             *
+                          </span>
+                        )}
+                        {sort?.key === field.key && (
+                          <span
+                            className="shrink-0 text-2xs text-khaki-600"
+                            aria-hidden="true"
+                          >
+                            {sort.dir === "asc" ? "▲" : "▼"}
                           </span>
                         )}
                       </div>
                       <div className="font-mono text-2xs uppercase tracking-wide text-ink-faint">
                         {FIELD_TYPE_META[field.type].label}
                       </div>
-                    </div>
+                    </button>
                     <div className="relative shrink-0">
                       <button
                         type="button"
@@ -493,7 +663,17 @@ export function DataGrid({
           </thead>
 
           <tbody>
-            {records.map((rec, i) => (
+            {query.trim() !== "" && visibleRecords.length === 0 && (
+              <tr className="border-b border-ink-line/70 bg-paper">
+                <td
+                  colSpan={columns.length + 2}
+                  className="px-3 py-8 text-center text-sm text-ink-muted"
+                >
+                  該当する行がありません
+                </td>
+              </tr>
+            )}
+            {visibleRecords.map((rec, i) => (
               <tr
                 key={rec.id}
                 className="group border-b border-ink-line/70 odd:bg-paper-raised even:bg-paper"
@@ -566,6 +746,24 @@ function DotsIcon() {
       <circle cx="5" cy="12" r="1.6" />
       <circle cx="12" cy="12" r="1.6" />
       <circle cx="19" cy="12" r="1.6" />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-3.5 w-3.5"
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.4-3.4" />
     </svg>
   );
 }
