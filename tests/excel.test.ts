@@ -68,6 +68,32 @@ describe("readSheet", () => {
   });
 });
 
+describe("readSheet — CSV encoding", () => {
+  it("decodes a raw UTF-8 CSV (Japanese) without mojibake", () => {
+    // Bytes as an exported .csv would arrive over the wire — no BOM.
+    const csv = "日付,取引先,金額\n2026-01-05,アオイ,120000\n2026-02-11,ミドリ,80000\n";
+    const buf = Buffer.from(csv, "utf-8");
+    const res = readSheet(buf);
+    expect(res.headers).toEqual(["日付", "取引先", "金額"]);
+    expect(res.rows).toHaveLength(2);
+    expect(res.rows[0]).toMatchObject({ 取引先: "アオイ", 金額: "120000" });
+  });
+
+  it("strips a UTF-8 BOM from the first header", () => {
+    const csv = "﻿名前,メモ\n一,フォロー\n";
+    const res = readSheet(Buffer.from(csv, "utf-8"));
+    expect(res.headers[0]).toBe("名前");
+  });
+
+  it("handles an ArrayBuffer CSV the same as a Buffer", () => {
+    const csv = "商品,数量\nりんご,3\n";
+    const u8 = new TextEncoder().encode(csv);
+    const res = readSheet(u8.buffer);
+    expect(res.headers).toEqual(["商品", "数量"]);
+    expect(res.rows[0]).toMatchObject({ 商品: "りんご", 数量: "3" });
+  });
+});
+
 describe("inferFields", () => {
   it("returns {name,key,type} with sensible inferred types", () => {
     const aoa = [

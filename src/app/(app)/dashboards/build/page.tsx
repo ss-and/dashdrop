@@ -47,7 +47,10 @@ export default async function DashboardBuildPage({
 
   let preselectSlugs: string[] = [];
   if (sheet) {
-    const match = collections.find((c) => c.slug === sheet);
+    // `sheet` may be a collection id (from the sheet-grid link) or a slug.
+    const match = collections.find(
+      (c) => c.id === sheet || c.slug === sheet,
+    );
     if (match) preselectSlugs = [match.slug];
   } else if (file) {
     preselectSlugs = collections

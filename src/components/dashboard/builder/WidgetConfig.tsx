@@ -259,6 +259,7 @@ export function WidgetConfig({ widget, sheets, onChange }: Props) {
                           fieldOf(m0.measure) ?? nums[0]?.key,
                         ),
                       },
+                      ...widget.measures.slice(1),
                     ],
                   });
                 }}
@@ -283,6 +284,7 @@ export function WidgetConfig({ widget, sheets, onChange }: Props) {
                     ...widget,
                     measures: [
                       { ...widget.measures[0], label: e.target.value },
+                      ...widget.measures.slice(1),
                     ],
                   })
                 }
@@ -306,6 +308,7 @@ export function WidgetConfig({ widget, sheets, onChange }: Props) {
                             e.target.value,
                           ),
                         },
+                        ...widget.measures.slice(1),
                       ],
                     })
                   }

@@ -36,6 +36,31 @@ function toWorkbook(
   // Buffer is a Uint8Array subclass, so "array" reads both flavours safely.
   const data =
     buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
+
+  // Distinguish real spreadsheet binaries from delimited text (CSV/TSV) by
+  // magic bytes: .xlsx/.xlsm are ZIP ("PK"), legacy .xls is an OLE compound
+  // file (D0 CF 11 E0). Anything else is treated as text.
+  const isZip = data[0] === 0x50 && data[1] === 0x4b;
+  const isOle =
+    data[0] === 0xd0 &&
+    data[1] === 0xcf &&
+    data[2] === 0x11 &&
+    data[3] === 0xe0;
+
+  if (!isZip && !isOle) {
+    // CSV/TSV: decode the bytes as UTF-8 ourselves (stripping any BOM) and read
+    // as a string. SheetJS's array reader would otherwise interpret raw UTF-8
+    // bytes as CP1252, mojibake-ing Japanese (日付 → æ¥ä») — the common case
+    // for exported spreadsheets and Google Sheets CSV.
+    let text = new TextDecoder("utf-8").decode(data);
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    return XLSX.read(text, {
+      type: "string",
+      cellDates: true,
+      sheetRows: maxRows + 1,
+    });
+  }
+
   // +1 so we still read the header row on top of the data-row budget.
   return XLSX.read(data, {
     type: "array",

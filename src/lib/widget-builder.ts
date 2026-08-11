@@ -129,6 +129,26 @@ export function dateFields(fields: BuilderField[]): BuilderField[] {
   return fields.filter((f) => f.type === "date");
 }
 
+/**
+ * Whether a widget of `type` can be built for a sheet with these `fields`.
+ * KPI and series always work (they fall back to a count). Breakdown widgets need
+ * a field to group on, and tables need at least one column — so on a field-less
+ * sheet those are blocked (a valid spec is impossible).
+ */
+export function canAddWidget(
+  type: BuilderWidgetType,
+  fields: BuilderField[],
+): boolean {
+  switch (type) {
+    case "donut":
+    case "hbar":
+    case "table":
+      return fields.length > 0;
+    default:
+      return true;
+  }
+}
+
 let _seq = 0;
 /** Stable-ish unique widget id (client only). */
 export function genWidgetId(): string {

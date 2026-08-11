@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import {
   newWidget,
   genWidgetId,
+  canAddWidget,
   WIDGET_META,
   type BuilderWidgetType,
 } from "@/lib/widget-builder";
@@ -140,8 +141,9 @@ export function DashboardBuilder({
   const seqRef = useRef(0);
 
   // 主データ = first selected sheet in collection order (stable across toggles).
-  const primarySlug =
-    collections.find((c) => selectedSlugs.includes(c.slug))?.slug ?? null;
+  const primarySheet =
+    collections.find((c) => selectedSlugs.includes(c.slug)) ?? null;
+  const primarySlug = primarySheet?.slug ?? null;
   const selectedSheets = collections.filter((c) =>
     selectedSlugs.includes(c.slug),
   );
@@ -442,6 +444,7 @@ export function DashboardBuilder({
             <CardBody className="py-3">
               <WidgetPalette
                 disabled={!primarySlug}
+                canAdd={(type) => canAddWidget(type, primarySheet?.fields ?? [])}
                 onAdd={(type) => addWidget(type)}
                 onDragStart={(type) => {
                   dragRef.current = { kind: "palette", type };
