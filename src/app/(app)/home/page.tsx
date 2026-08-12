@@ -170,9 +170,15 @@ export default async function HomePage({
   const paidStat = statOf("paid");
   const issuedStat = statOf("issued");
   const overdueStat = statOf("overdue");
-  /** 請求済み（未入金）— 送付済みで、まだ入金されていない分。 */
+  /** 未入金 — 送付済みで、まだ入金されていない分（下書きは含めない）。 */
   const unpaidAmount = issuedStat.amount + overdueStat.amount;
   const unpaidCount = issuedStat.count + overdueStat.count;
+  /**
+   * 請求済み — 実際に相手に出した請求の総額。下書きは「まだ出していない」ので
+   * 除外し、入金済みは「出したうえで回収できた」分なので含める。
+   */
+  const billedAmount = unpaidAmount + paidStat.amount;
+  const billedCount = unpaidCount + paidStat.count;
 
   const invoiceStatusOptions: SelectOption[] = (() => {
     const stored = invoices?.fields.find((f) => f.key === "status");
@@ -274,8 +280,8 @@ export default async function HomePage({
     tiles.push({
       key: "invoiced",
       label: "請求済み金額",
-      value: yen(unpaidAmount),
-      hint: `${unpaidCount.toLocaleString()} 件`,
+      value: yen(billedAmount),
+      hint: `${billedCount.toLocaleString()} 件`,
       href: `/c/${invoices.id}`,
     });
     tiles.push({
