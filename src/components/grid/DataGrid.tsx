@@ -481,7 +481,7 @@ export function DataGrid({
     // Lookup / rollup are read-only: render a non-interactive cell.
     if (isComputed) {
       return (
-        <div className="flex h-full min-h-[34px] w-full items-center px-2 py-1 text-left text-sm text-ink-muted">
+        <div className="flex h-full min-h-[38px] w-full items-center px-2.5 py-1 text-left text-sm text-ink-muted">
           <CellView field={field} value={computed[field.key]} />
         </div>
       );
@@ -491,7 +491,7 @@ export function DataGrid({
       <button
         type="button"
         onClick={() => startEdit(rowId, field.key, data[field.key])}
-        className="flex h-full min-h-[34px] w-full items-center px-2 py-1 text-left text-sm text-ink hover:bg-khaki-50/60 focus:bg-khaki-50 focus:outline-none"
+        className="flex h-full min-h-[38px] w-full items-center px-2.5 py-1 text-left text-sm text-ink hover:bg-khaki-50/60 focus:bg-khaki-50 focus:outline-none"
       >
         <CellView field={field} value={data[field.key]} relationLabels={relLabels} />
       </button>
@@ -536,7 +536,7 @@ export function DataGrid({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="検索…"
             aria-label="行を検索"
-            className="w-full rounded-md border border-ink-line bg-paper-raised py-1.5 pl-8 pr-2 text-sm text-ink placeholder:text-ink-faint focus:border-khaki-400 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-khaki-500/30"
+            className="h-9 w-full rounded-md border border-ink-rule bg-paper-raised pl-8 pr-2 text-sm text-ink placeholder:text-ink-faint focus:border-khaki-500 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-khaki-500/30"
           />
         </div>
         <div className="flex shrink-0 items-center gap-3">
@@ -568,26 +568,32 @@ export function DataGrid({
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-md border border-ink-line shadow-card">
+      <div className="overflow-x-auto rounded-md border border-ink-line">
         <table className="w-full border-collapse text-sm">
           <thead className="sticky top-0 z-10">
             <tr className="bg-paper-sunken">
-              <th className="w-10 border-b border-r border-ink-line px-2 py-2 text-2xs font-medium text-ink-faint">
+              <th className="w-10 border-b border-r border-ink-rule px-2 py-2 text-2xs font-medium text-ink-muted">
                 #
               </th>
               {columns.map((field) => (
                 <th
                   key={field.id}
-                  className="min-w-[160px] border-b border-r border-ink-line px-2 py-1.5 text-left align-top"
+                  className="min-w-[160px] border-b border-r border-ink-rule px-2 py-1.5 text-left align-middle"
+                  title={FIELD_TYPE_META[field.type].label}
                 >
-                  <div className="flex items-start justify-between gap-1">
+                  <div className="flex items-center justify-between gap-1">
                     <button
                       type="button"
                       onClick={() => toggleSort(field.key)}
                       title="クリックで並び替え"
-                      className="min-w-0 flex-1 rounded text-left hover:bg-paper-raised focus:outline-none focus:ring-2 focus:ring-inset focus:ring-khaki-500/30"
+                      className="min-w-0 flex-1 rounded py-1 text-left transition-colors duration-fast hover:bg-paper-raised focus:outline-none focus:ring-2 focus:ring-inset focus:ring-khaki-500/30 active:bg-ink-line"
                     >
-                      <div className="flex items-center gap-1 truncate font-semibold text-ink">
+                      {/* The field's data type used to be printed under every
+                          column name. It is reference information, not something
+                          you read while scanning rows, so it moved to the header
+                          tooltip and the field menu — one less line of text in
+                          every column, on every table. */}
+                      <div className="flex items-center gap-1 truncate text-sm font-semibold text-ink">
                         <span className="truncate">{field.name}</span>
                         {field.required && (
                           <span className="text-danger" title="必須">
@@ -596,15 +602,12 @@ export function DataGrid({
                         )}
                         {sort?.key === field.key && (
                           <span
-                            className="shrink-0 text-2xs text-khaki-600"
+                            className="shrink-0 text-xs text-khaki-700"
                             aria-hidden="true"
                           >
                             {sort.dir === "asc" ? "▲" : "▼"}
                           </span>
                         )}
-                      </div>
-                      <div className="font-mono text-2xs uppercase tracking-wide text-ink-faint">
-                        {FIELD_TYPE_META[field.type].label}
                       </div>
                     </button>
                     <div className="relative shrink-0">
@@ -682,7 +685,10 @@ export function DataGrid({
             {visibleRecords.map((rec, i) => (
               <tr
                 key={rec.id}
-                className="group border-b border-ink-line/70 odd:bg-paper-raised even:bg-paper"
+                /* No zebra striping. With vertical rules already separating the
+                   columns, alternating row fills only added visual noise — the
+                   grid read as a pattern before it read as data. */
+                className="group border-b border-ink-line bg-paper-raised transition-colors duration-fast hover:bg-khaki-50/70"
               >
                 <td className="relative border-r border-ink-line px-2 text-center align-middle text-2xs text-ink-faint">
                   <span className="group-hover:invisible">{i + 1}</span>

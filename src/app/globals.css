@@ -15,6 +15,25 @@
   body {
     @apply bg-paper text-ink antialiased;
     font-feature-settings: "cv11", "ss01";
+    font-size: 0.9375rem; /* 15px floor — nothing in the app reads smaller by accident */
+
+    /*
+     * Japanese line breaking. Without this, the browser breaks CJK text at any
+     * character boundary, which is why copy was splitting mid-phrase
+     * (「作成しま／す。」). `auto-phrase` breaks on phrase boundaries instead.
+     * Chromium-only today; other engines simply fall back to `normal`.
+     */
+    word-break: auto-phrase;
+    line-break: strict;
+  }
+
+  /*
+   * Prose blocks additionally avoid a lone trailing word on the last line.
+   * Applied to paragraphs only — never to table cells or controls, where
+   * balanced wrapping would fight the column widths.
+   */
+  p {
+    text-wrap: pretty;
   }
 
   /* Honest, visible focus — accessibility over minimalism. */
@@ -28,6 +47,43 @@
 
   h1, h2, h3, h4 {
     @apply text-ink font-semibold tracking-tight;
+  }
+
+  /*
+   * Balanced wrapping is opt-in (`.balance`), not automatic on every heading:
+   * where a heading already controls its own line breaks with <br>, balancing
+   * re-wraps each segment independently and strands fragments like 「で、」 on
+   * a line of their own — the exact defect it is supposed to prevent.
+   */
+  .balance {
+    text-wrap: balance;
+  }
+
+  /*
+   * Press feedback. The old UI only changed colour on hover, so a click had no
+   * acknowledgement until the next page painted — that is what "クリック感度が
+   * 悪い" describes. Every control now dims instantly on pointer-down, and the
+   * cursor/tap-highlight behave like a native control.
+   */
+  button:not(:disabled),
+  summary,
+  [role="button"]:not([aria-disabled="true"]),
+  a[href] {
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button:not(:disabled):active,
+  [role="button"]:not([aria-disabled="true"]):active {
+    transition-duration: 0ms;
+  }
+
+  /* Controls should not select their own label text when double-clicked. */
+  button,
+  summary,
+  [role="button"],
+  [role="tab"] {
+    user-select: none;
   }
 
   /* Thin, calm scrollbars */
@@ -46,16 +102,35 @@
 @layer components {
   /* Reusable primitives kept minimal; components live in /components/ui. */
   .card {
-    @apply bg-paper-raised border border-ink-line rounded-md shadow-card;
+    @apply bg-paper-raised border border-ink-line rounded-md;
   }
 
   .input-base {
-    @apply w-full rounded bg-paper-raised border border-ink-line px-3 py-2 text-sm text-ink
+    @apply w-full rounded bg-paper-raised border border-ink-rule px-3 text-sm text-ink
       placeholder:text-ink-faint transition-colors
-      focus:border-khaki-400 focus:ring-2 focus:ring-khaki-500/25 focus:outline-none;
+      focus:border-khaki-500 focus:ring-2 focus:ring-khaki-500/25 focus:outline-none;
+    min-height: 2.25rem; /* 36px — a real hit target, not a 32px sliver */
+    padding-block: 0.375rem;
   }
 
   .label-base {
     @apply block text-sm font-medium text-ink-soft mb-1.5;
+  }
+
+  /*
+   * Section heading used in place of wrapping everything in a card. This is the
+   * Salesforce/Workday move: a titled rule separates content far more clearly
+   * than another pale rounded rectangle, and costs no vertical space.
+   */
+  .section-title {
+    @apply flex items-center gap-2 text-base font-semibold text-ink;
+  }
+
+  /*
+   * Row that behaves like a native list row: the whole strip is the hit target
+   * and it acknowledges the press immediately.
+   */
+  .row-hit {
+    @apply transition-colors duration-fast hover:bg-paper-sunken active:bg-ink-line/70;
   }
 }

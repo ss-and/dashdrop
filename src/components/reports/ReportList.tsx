@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/Button";
+import { Button, buttonStyles } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { NavIcon } from "@/components/app/icons";
 
@@ -119,7 +119,7 @@ function Row({ report }: { report: ReportRow }) {
         </Button>
         <Link
           href={`/reports/print/${report.id}`}
-          className="inline-flex h-8 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
+          className={buttonStyles({ variant: "secondary", size: "sm" })}
         >
           <NavIcon name="download" className="h-4 w-4" />
           印刷 / PDF

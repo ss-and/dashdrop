@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { NavIcon } from "@/components/app/icons";
+import { Button } from "@/components/ui/Button";
 
 /**
  * 「顧客データベースをはじめる」 — creates the CRM core objects (顧客 / 担当者 /
@@ -13,9 +14,13 @@ import { NavIcon } from "@/components/app/icons";
 export function SetupCrmButton({
   label = "顧客データベースをはじめる",
   withSampleData = true,
+  variant = "primary",
+  size = "md",
 }: {
   label?: string;
   withSampleData?: boolean;
+  variant?: "primary" | "secondary";
+  size?: "sm" | "md";
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -45,15 +50,10 @@ export function SetupCrmButton({
 
   return (
     <div className="flex flex-col items-start gap-1.5">
-      <button
-        type="button"
-        onClick={run}
-        disabled={busy}
-        className="inline-flex h-10 items-center gap-2 rounded border border-transparent bg-khaki-500 px-4 text-sm font-medium text-white shadow-card transition-colors hover:bg-khaki-600 disabled:opacity-60"
-      >
+      <Button type="button" onClick={run} disabled={busy} variant={variant} size={size}>
         <NavIcon name="sparkles" className="h-4 w-4" />
         {busy ? "作成中…" : label}
-      </button>
+      </Button>
       {error && (
         <p className="text-xs text-danger" role="alert">
           {error}

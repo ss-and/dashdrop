@@ -710,7 +710,7 @@ function SheetRow({
       <span className="min-w-0 flex-1 truncate text-sm text-ink-soft">
         {collection.name}
       </span>
-      {isPrimary && <Badge tone="khaki">主データ</Badge>}
+      {isPrimary && <Badge tone="khaki" variant="soft">主データ</Badge>}
     </label>
   );
 }

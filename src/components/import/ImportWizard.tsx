@@ -314,7 +314,7 @@ export function ImportWizard() {
         <>
           {sheets.length > 1 && (
             <div className="flex items-center gap-2 rounded-md border border-ink-line bg-paper-raised px-4 py-2.5 text-sm text-ink-muted">
-              <Badge tone="khaki">{sheets.length} シート検出</Badge>
+              <Badge tone="khaki" variant="soft">{sheets.length} シート検出</Badge>
               取り込むシートを選び、それぞれの名前と列の型を確認してください。各シートは別々のスプレッドシートになります。
             </div>
           )}
@@ -330,7 +330,7 @@ export function ImportWizard() {
                     className="h-4 w-4 rounded border-ink-line text-khaki-500 focus:ring-khaki-500/40"
                   />
                   <CardTitle>{sheet.sheetName || "（無題シート）"}</CardTitle>
-                  <Badge tone="neutral">
+                  <Badge tone="neutral" variant="soft">
                     <NavIcon name="table" className="h-3.5 w-3.5" />
                     {sheet.rowCount.toLocaleString()} 行
                   </Badge>

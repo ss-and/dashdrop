@@ -143,7 +143,7 @@ export function GenerateWizard({ aiConfigured }: { aiConfigured: boolean }) {
             <NavIcon name="sparkles" className="h-5 w-5" />
           </span>
           <div className="space-y-1">
-            <Badge tone="info">AI連携キー未設定</Badge>
+            <Badge tone="info" variant="soft">AI連携キー未設定</Badge>
             <p className="text-sm text-ink-soft">
               AI連携キーが未設定のため、入力内容に最も近いテンプレートから作成します。
               <span className="text-ink-muted">

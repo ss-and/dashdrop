@@ -88,7 +88,7 @@ export default function PricingPage() {
               >
                 {highlighted && (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <Badge tone="khaki" className="shadow-card">
+                    <Badge tone="khaki" variant="soft">
                       おすすめ
                     </Badge>
                   </div>

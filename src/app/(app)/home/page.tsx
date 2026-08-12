@@ -27,7 +27,6 @@ import type { SelectOption } from "@/lib/field-types";
 import { Topbar } from "@/components/app/Topbar";
 import { NavIcon } from "@/components/app/icons";
 import { HelpTip } from "@/components/ui/HelpTip";
-import { Card, CardBody } from "@/components/ui/Card";
 import { DashboardGrid } from "@/components/dashboard/DashboardGrid";
 import { GettingStarted } from "@/components/help/GettingStarted";
 import { HomeTabs } from "@/components/home/HomeTabs";
@@ -403,65 +402,37 @@ export default async function HomePage({
 
   /* --------------------------------- render -------------------------------- */
 
-  // 「はじめかたは2通り」の置き場所。まだ何も無いワークスペースでは最初に、
-  // データが育っているワークスペースでは一覧の下に置く。
   const crmHref = accounts ? `/c/${accounts.id}` : null;
   const isNewWorkspace = !hasCrm || (accounts?._count.records ?? 0) === 0;
-  const gettingStarted = <GettingStarted crmHref={crmHref} />;
 
   return (
     <>
       <Topbar user={user} title="ホーム" />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-6xl space-y-6">
-          {/* Header */}
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <h2 className="text-lg font-semibold text-ink">
-                  {user.workspace.name}
-                </h2>
-                <HelpTip label="ホームの見方">
-                  上段はワークスペース全体のサマリーです。タブを切り替えると、
-                  保存したダッシュボードをそのまま表示できます。
-                  「サマリー」タブには顧客・商談・担当者・活動の一覧があり、
-                  名前をクリックすると各レコードの詳細が開きます。
-                </HelpTip>
-              </div>
-              <p className="mt-0.5 text-sm text-ink-muted">
-                顧客データベースと、保存したダッシュボードの入口です。
-              </p>
-            </div>
+          {/* Header — the workspace name is the page's subject; it does not need
+              a sentence underneath explaining what a home page is. */}
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-xl font-semibold text-ink">
+              {user.workspace.name}
+            </h2>
+            <HelpTip label="ホームの見方">
+              上段は全体のサマリー、タブで保存済みダッシュボードに切り替えられます。一覧の名前をクリックすると詳細が開きます。
+            </HelpTip>
           </div>
 
-          {/* A0) はじめかた — データがまだ無いうちは、いちばん上に出す */}
-          {!activeDashboard && isNewWorkspace && gettingStarted}
-
-          {/* A) サマリー band / onboarding */}
+          {/* A) サマリー band — or, before the database exists, the two ways in.
+              These are mutually exclusive: the old page rendered the onboarding
+              block AND a second panel making the same offer in more words. */}
           {hasCrm ? (
             <SummaryBand tiles={tiles} />
           ) : (
-            <Card>
-              <CardBody className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div className="max-w-2xl space-y-2">
-                  <h3 className="text-base font-semibold text-ink">
-                    顧客データベースをはじめる
-                  </h3>
-                  <p className="text-sm text-ink-soft">
-                    顧客・担当者・商談・活動を DashDrop
-                    のマスターデータとして作成します。
-                    取り込んだExcelはそのまま残したうえで、
-                    会社の「顧客の正しい情報」をここに集約していけます。
-                  </p>
-                  <p className="text-xs text-ink-muted">
-                    はじめはサンプルデータ入りで作成されます。中身は後から自由に編集・削除できます。
-                  </p>
-                </div>
-                <div className="shrink-0">
-                  <SetupCrmButton />
-                </div>
-              </CardBody>
-            </Card>
+            !activeDashboard && (
+              <GettingStarted
+                crmHref={crmHref}
+                crmAction={<SetupCrmButton size="sm" variant="secondary" />}
+              />
+            )
           )}
 
           {/* B) タブ */}
@@ -478,12 +449,10 @@ export default async function HomePage({
             {activeDashboard ? (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold text-ink">
-                    {activeDashboard.name}
-                  </h3>
+                  <h3 className="section-title">{activeDashboard.name}</h3>
                   <Link
                     href={`/d/${activeDashboard.id}`}
-                    className="inline-flex items-center gap-1 text-xs font-medium text-khaki-700 hover:text-khaki-800 hover:underline"
+                    className="inline-flex items-center gap-1 text-sm font-medium text-khaki-700 hover:underline"
                   >
                     このダッシュボードを開く
                     <NavIcon name="chevron" className="h-3 w-3" />
@@ -500,15 +469,14 @@ export default async function HomePage({
             ) : (
               <div className="space-y-6">
                 {dashboards.length === 0 && (
-                  <p className="rounded-md border border-ink-line bg-paper-raised px-4 py-3 text-sm text-ink-muted">
+                  <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-muted">
                     保存したダッシュボードはまだありません。
                     <Link
                       href="/dashboards"
-                      className="ml-1 font-medium text-khaki-700 hover:text-khaki-800 hover:underline"
+                      className="font-medium text-khaki-700 hover:underline"
                     >
                       ダッシュボードを追加
                     </Link>
-                    すると、ここにタブとして並びます。
                   </p>
                 )}
 
@@ -526,14 +494,17 @@ export default async function HomePage({
                   <CrmSection views={views} />
                 ) : (
                   hasCrm && (
-                    <p className="rounded-md border border-ink-line bg-paper-raised px-4 py-3 text-sm text-ink-muted">
+                    <p className="text-sm text-ink-muted">
                       顧客データベースのオブジェクトが見つかりませんでした。
                     </p>
                   )
                 )}
 
-                {/* C2) はじめかた — データがある場合は一覧の下に置く */}
-                {!isNewWorkspace && gettingStarted}
+                {/* C2) はじめかた — 一度データが育ったら、この案内は不要になる。
+                    以前は常時2箇所に出ていたため、同じ説明を2度読ませていた。 */}
+                {hasCrm && isNewWorkspace && (
+                  <GettingStarted crmHref={crmHref} />
+                )}
 
                 {/* D) 取り込んだファイル */}
                 <FilesStrip

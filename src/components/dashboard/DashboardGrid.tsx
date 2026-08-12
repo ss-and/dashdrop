@@ -46,37 +46,85 @@ function WidgetBody({ data }: { data: WidgetData }) {
   }
 }
 
+type Block =
+  | { kind: "kpis"; items: ComputedWidget[]; span: number }
+  | { kind: "widget"; item: ComputedWidget; span: number };
+
+/**
+ * Groups a run of consecutive KPI widgets into a single block.
+ *
+ * Rendered individually, four KPIs became four separately bordered rounded
+ * rectangles with gaps between them — the numbers ended up competing with their
+ * own containers. Every dashboard product worth copying (Salesforce, Shopify,
+ * Workday) bands the KPI row into one surface divided by rules instead.
+ */
+function toBlocks(computed: ComputedWidget[]): Block[] {
+  const blocks: Block[] = [];
+  for (const item of computed) {
+    const span = Math.min(4, Math.max(1, item.widget.span ?? 1));
+    const last = blocks[blocks.length - 1];
+    if (item.data.type === "kpi") {
+      if (last?.kind === "kpis" && last.span + span <= 4) {
+        last.items.push(item);
+        last.span += span;
+        continue;
+      }
+      blocks.push({ kind: "kpis", items: [item], span });
+      continue;
+    }
+    blocks.push({ kind: "widget", item, span });
+  }
+  return blocks;
+}
+
+/** Column count for the KPI strip — a static map, so Tailwind keeps the classes. */
+const KPI_COLS: Record<number, string> = {
+  1: "grid-cols-1",
+  2: "grid-cols-2",
+  3: "grid-cols-1 sm:grid-cols-3",
+  4: "grid-cols-2 lg:grid-cols-4",
+};
+
 export function DashboardGrid({ computed }: { computed: ComputedWidget[] }) {
+  const blocks = toBlocks(computed);
+
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      {computed.map(({ widget, data }) => {
-        const span = Math.min(4, Math.max(1, widget.span ?? 1));
-        // KPI tiles are simple figures — no bordered header, tighter body.
-        const isKpi = data.type === "kpi";
-        return (
-          <Card
-            key={widget.id}
-            className={`flex flex-col ${SPAN_CLASS[span]}`}
-          >
-            {isKpi ? (
-              <CardBody className="flex flex-1 flex-col gap-2.5 py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">
-                  {widget.title}
-                </p>
-                <div className="flex-1">
-                  <WidgetBody data={data} />
+      {blocks.map((block) => {
+        if (block.kind === "kpis") {
+          return (
+            <section
+              key={block.items[0].widget.id}
+              className={`grid gap-px overflow-hidden rounded-md border border-ink-line bg-ink-line ${
+                KPI_COLS[Math.min(4, block.items.length)]
+              } ${SPAN_CLASS[block.span]}`}
+            >
+              {block.items.map(({ widget, data }) => (
+                <div
+                  key={widget.id}
+                  className="flex flex-col gap-2.5 bg-paper-raised px-5 py-4"
+                >
+                  <p className="text-sm font-medium text-ink-muted">
+                    {widget.title}
+                  </p>
+                  <div className="flex-1">
+                    <WidgetBody data={data} />
+                  </div>
                 </div>
-              </CardBody>
-            ) : (
-              <>
-                <CardHeader>
-                  <CardTitle>{widget.title}</CardTitle>
-                </CardHeader>
-                <CardBody className="flex-1">
-                  <WidgetBody data={data} />
-                </CardBody>
-              </>
-            )}
+              ))}
+            </section>
+          );
+        }
+
+        const { widget, data } = block.item;
+        return (
+          <Card key={widget.id} className={`flex flex-col ${SPAN_CLASS[block.span]}`}>
+            <CardHeader>
+              <CardTitle>{widget.title}</CardTitle>
+            </CardHeader>
+            <CardBody className="flex-1">
+              <WidgetBody data={data} />
+            </CardBody>
           </Card>
         );
       })}

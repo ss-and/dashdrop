@@ -27,7 +27,7 @@ export function ObjectNav({ items }: { items: ObjectNavItem[] }) {
   return (
     <nav
       aria-label="オブジェクトナビゲーション"
-      className="flex h-9 items-stretch gap-0.5 overflow-x-auto overflow-y-hidden px-3"
+      className="flex h-11 items-stretch gap-0.5 overflow-x-auto overflow-y-hidden px-3"
     >
       {items.map((item) => {
         const active = isActive(pathname, item.href);
@@ -38,10 +38,11 @@ export function ObjectNav({ items }: { items: ObjectNavItem[] }) {
             aria-current={active ? "page" : undefined}
             title={item.label}
             className={cn(
-              "flex shrink-0 items-center whitespace-nowrap border-b-2 px-3 text-sm transition-colors",
+              "flex shrink-0 items-center whitespace-nowrap border-b-2 px-3.5 text-sm",
+              "transition-colors duration-fast active:transition-none",
               active
-                ? "border-khaki-500 font-medium text-ink"
-                : "border-transparent text-ink-soft hover:bg-paper-sunken hover:text-ink",
+                ? "border-khaki-500 font-semibold text-ink"
+                : "border-transparent text-ink-soft hover:bg-paper-sunken hover:text-ink active:bg-ink-line",
             )}
           >
             <span className="max-w-[10rem] truncate">{item.label}</span>

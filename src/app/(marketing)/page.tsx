@@ -74,7 +74,7 @@ function ProductMock() {
             >
               <div className="truncate px-2.5 py-1.5 text-ink">{r.c}</div>
               <div className="px-2.5 py-1.5">
-                <Badge tone={r.tone} className="px-1.5 py-0">
+                <Badge tone={r.tone} variant="soft" className="px-1.5 py-0">
                   {r.s}
                 </Badge>
               </div>
@@ -186,10 +186,12 @@ export default function LandingPage() {
       <section className="mx-auto max-w-content px-4 pb-16 pt-16 sm:px-6 sm:pt-20 lg:px-8">
         <div className="grid items-center gap-12 lg:grid-cols-2">
           <div>
-            <Badge tone="khaki" className="mb-5">
+            <Badge tone="khaki" variant="soft" className="mb-5">
               中小企業の経営者向け
             </Badge>
-            <h1 className="text-3xl font-semibold leading-tight tracking-tight text-ink sm:text-4xl lg:text-5xl">
+            {/* 44px, not 48: at 48 the first line (12 full-width characters)
+                overruns the hero column and strands 「で、」 on its own line. */}
+            <h1 className="text-3xl font-semibold leading-tight tracking-tight text-ink sm:text-4xl lg:text-[2.75rem]">
               スプレッドシート感覚で、
               <br className="hidden sm:block" />
               経営の数字とお客様対応を

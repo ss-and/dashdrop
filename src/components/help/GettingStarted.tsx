@@ -1,19 +1,23 @@
 import Link from "next/link";
 import { NavIcon } from "@/components/app/icons";
+import { buttonStyles } from "@/components/ui/Button";
 
 /**
  * The two ways to build something in DashDrop, shown side by side.
  *
  * New owners kept asking "where do I start?" — the answer is always one of two
  * paths: work from the master customer database, or work straight from a
- * spreadsheet you already have. Everything else is a detail of those two.
+ * spreadsheet you already have.
+ *
+ * Deliberately short. The previous version explained each path with a
+ * paragraph plus three bullets — nine lines of prose for what is really a
+ * two-way choice, and the reader has to get through all of it before finding
+ * the button. One sentence and one button per path is the whole job.
  */
 
 interface Path {
-  badge: string;
   title: string;
   body: string;
-  bullets: string[];
   cta: { href: string; label: string };
   secondary?: { href: string; label: string };
   icon: string;
@@ -22,32 +26,19 @@ interface Path {
 function paths(crmHref: string | null): Path[] {
   return [
     {
-      badge: "A",
       icon: "users",
       title: "顧客データベースから作る",
-      body: "顧客・商談・請求書などをDashDrop側で正として持つ方法です。データが増えるほど、ここが会社の台帳になります。",
-      bullets: [
-        "顧客を登録し、商談・請求書をひも付ける",
-        "レコード同士はリンクで行き来できる",
-        "金額はホームのサマリーに自動で集計",
-      ],
+      body: "顧客・商談・請求書をDashDrop側で管理します。金額はホームに自動集計されます。",
       cta: crmHref
         ? { href: crmHref, label: "顧客を開く" }
         : { href: "/home", label: "顧客データベースを作る" },
-      secondary: { href: "/home", label: "ホームでサマリーを見る" },
     },
     {
-      badge: "B",
       icon: "upload",
-      title: "スプレッドシートから直接作る",
-      body: "手元のExcel / スプレッドシートをそのまま取り込む方法です。ファイル単位で保持され、各シートが表になります。",
-      bullets: [
-        "Excel・CSV・Googleスプレッドシートを取り込む",
-        "ファイル（ブック）の入れ子で整理される",
-        "「おすすめ構成で自動作成」でダッシュボード化",
-      ],
+      title: "スプレッドシートから作る",
+      body: "手元のExcel・CSV・Googleスプレッドシートを、そのまま取り込みます。",
       cta: { href: "/import", label: "Excelを取り込む" },
-      secondary: { href: "/dashboards/build", label: "自分でダッシュボードを組む" },
+      secondary: { href: "/dashboards/build", label: "ダッシュボードを組む" },
     },
   ];
 }
@@ -55,70 +46,46 @@ function paths(crmHref: string | null): Path[] {
 export function GettingStarted({
   crmHref = null,
   compact = false,
+  crmAction,
 }: {
   /** Link to the 顧客 object when it exists, so path A can jump straight in. */
   crmHref?: string | null;
-  /** Tighter spacing for use inside a panel. */
+  /** Drops the heading for use inside a panel that already has one. */
   compact?: boolean;
+  /**
+   * Replaces path A's link when the database does not exist yet — the home page
+   * passes the button that actually creates it. Without this the page ended up
+   * showing this block AND a second panel repeating the same offer.
+   */
+  crmAction?: React.ReactNode;
 }) {
+  const list = paths(crmHref);
   return (
-    <section className={compact ? "space-y-2" : "space-y-3"}>
-      {!compact && (
-        <div className="flex items-baseline gap-2">
-          <h2 className="text-sm font-semibold text-ink">はじめかたは2通り</h2>
-          <p className="text-xs text-ink-muted">
-            どちらから始めても、あとで組み合わせられます
-          </p>
-        </div>
-      )}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {paths(crmHref).map((p) => (
-          <div
-            key={p.badge}
-            className="flex flex-col rounded-md border border-ink-line bg-paper-raised p-4"
-          >
-            <div className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-khaki-300 bg-khaki-50 text-sm font-semibold text-khaki-800">
-                {p.badge}
-              </span>
-              <div className="flex min-w-0 items-center gap-1.5">
-                <NavIcon name={p.icon} className="h-4 w-4 shrink-0 text-khaki-600" />
-                <h3 className="truncate text-sm font-semibold text-ink">
-                  {p.title}
-                </h3>
-              </div>
+    <section className="space-y-3">
+      {!compact && <h2 className="section-title">はじめかた</h2>}
+      <div className="grid grid-cols-1 divide-y divide-ink-line overflow-hidden rounded-md border border-ink-line bg-paper-raised md:grid-cols-2 md:divide-x md:divide-y-0">
+        {list.map((p, i) => (
+          <div key={p.title} className="flex flex-col gap-3 p-5">
+            <div className="flex items-center gap-2">
+              <NavIcon name={p.icon} className="h-4 w-4 shrink-0 text-khaki-600" />
+              <h3 className="text-base font-semibold text-ink">{p.title}</h3>
             </div>
-
-            <p className="mt-2.5 text-xs leading-relaxed text-ink-muted">
-              {p.body}
-            </p>
-
-            <ul className="mt-3 space-y-1.5">
-              {p.bullets.map((b) => (
-                <li
-                  key={b}
-                  className="flex items-start gap-1.5 text-xs text-ink-soft"
+            <p className="text-sm text-ink-soft">{p.body}</p>
+            <div className="mt-auto flex flex-wrap items-center gap-3 pt-1">
+              {i === 0 && crmAction ? (
+                crmAction
+              ) : (
+                <Link
+                  href={p.cta.href}
+                  className={buttonStyles({ variant: "secondary", size: "sm" })}
                 >
-                  <span
-                    aria-hidden="true"
-                    className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-khaki-500"
-                  />
-                  {b}
-                </li>
-              ))}
-            </ul>
-
-            <div className="mt-4 flex flex-wrap items-center gap-2 pt-1">
-              <Link
-                href={p.cta.href}
-                className="inline-flex h-8 items-center gap-1.5 rounded border border-khaki-300 bg-khaki-50 px-3 text-xs font-medium text-khaki-800 transition-colors hover:bg-khaki-100"
-              >
-                {p.cta.label}
-              </Link>
+                  {p.cta.label}
+                </Link>
+              )}
               {p.secondary && (
                 <Link
                   href={p.secondary.href}
-                  className="text-xs font-medium text-khaki-600 hover:text-khaki-700"
+                  className="text-sm font-medium text-khaki-700 hover:underline"
                 >
                   {p.secondary.label}
                 </Link>

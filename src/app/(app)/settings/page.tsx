@@ -60,7 +60,7 @@ export default async function SettingsPage() {
                 label="現在のプラン"
                 value={
                   <span className="inline-flex items-center gap-2">
-                    <Badge tone="khaki">{plan.name}</Badge>
+                    <Badge tone="khaki" variant="soft">{plan.name}</Badge>
                     <span className="text-ink-muted">
                       {formatPrice(plan)}
                       {plan.priceMonthly ? " / 月" : ""}

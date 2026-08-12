@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Button } from "@/components/ui/Button";
+import { Button, buttonStyles } from "@/components/ui/Button";
 import { NavIcon } from "@/components/app/icons";
 
 /**
@@ -182,7 +182,7 @@ export function DashboardActions({
         {firstCollectionId && (
           <Link
             href={`/c/${firstCollectionId}`}
-            className="inline-flex h-8 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
+            className={buttonStyles({ variant: "secondary", size: "sm" })}
           >
             <NavIcon name="table" className="h-4 w-4" />
             スプレッドシートを開く
@@ -190,7 +190,7 @@ export function DashboardActions({
         )}
         <Link
           href={`/dashboards/build/${dashboardId}`}
-          className="inline-flex h-8 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
+          className={buttonStyles({ variant: "secondary", size: "sm" })}
         >
           <NavIcon name="settings" className="h-4 w-4" />
           編集
