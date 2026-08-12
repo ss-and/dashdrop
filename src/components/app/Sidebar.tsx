@@ -79,7 +79,10 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
           <SectionSummary
             label="スプレッドシート"
             groupName="sheets"
-            action={{ href: "/import", label: "取り込み" }}
+            action={[
+              { href: "/samples", label: "参考" },
+              { href: "/import", label: "取り込み" },
+            ]}
           />
 
           {fileGroups.map((w) => (
@@ -216,8 +219,12 @@ function SectionSummary({
 }: {
   label: string;
   groupName: "crm" | "sheets" | "dash";
-  action?: { href: string; label: string };
+  /** Up to two shortcuts, right-aligned in the section header. */
+  action?:
+    | { href: string; label: string }
+    | Array<{ href: string; label: string }>;
 }) {
+  const actions = action ? (Array.isArray(action) ? action : [action]) : [];
   const chevron: Record<typeof groupName, string> = {
     crm: "group-open/crm:rotate-90",
     sheets: "group-open/sheets:rotate-90",
@@ -232,13 +239,18 @@ function SectionSummary({
         name="chevron"
         className={`h-3 w-3 shrink-0 text-ink-faint transition-transform ${chevron[groupName]}`}
       />
-      {action && (
-        <Link
-          href={action.href}
-          className="-my-1 ml-auto rounded px-2 py-1 text-2xs font-medium text-khaki-700 transition-colors duration-fast hover:bg-paper-sunken active:bg-ink-line"
-        >
-          {action.label}
-        </Link>
+      {actions.length > 0 && (
+        <span className="ml-auto flex items-center gap-0.5">
+          {actions.map((a) => (
+            <Link
+              key={a.href}
+              href={a.href}
+              className="-my-1 rounded px-2 py-1 text-2xs font-medium text-khaki-700 transition-colors duration-fast hover:bg-paper-sunken active:bg-ink-line"
+            >
+              {a.label}
+            </Link>
+          ))}
+        </span>
       )}
     </summary>
   );

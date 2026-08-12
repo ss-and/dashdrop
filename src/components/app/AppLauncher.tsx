@@ -373,13 +373,22 @@ export function AppLauncher({
                 <NavIcon name="upload" className="h-4 w-4" />
                 Excel取り込み
               </Link>
-              <Link
-                href="/dashboards"
-                onClick={close}
-                className="rounded px-1 py-1 text-xs font-medium text-ink-muted transition-colors hover:text-ink"
-              >
-                ダッシュボード一覧
-              </Link>
+              <span className="flex items-center gap-2">
+                <Link
+                  href="/samples"
+                  onClick={close}
+                  className="rounded px-1 py-1 text-xs font-medium text-ink-muted transition-colors hover:text-ink"
+                >
+                  参考スプレッドシート
+                </Link>
+                <Link
+                  href="/dashboards"
+                  onClick={close}
+                  className="rounded px-1 py-1 text-xs font-medium text-ink-muted transition-colors hover:text-ink"
+                >
+                  ダッシュボード一覧
+                </Link>
+              </span>
             </div>
           </div>
         </>
