@@ -13,6 +13,15 @@ import { hrTemplates } from "./hr";
 import { marketingTemplates } from "./marketing";
 import { operationsTemplates } from "./operations";
 import { executiveTemplates } from "./executive";
+import { retailTemplates } from "./retail";
+import { manufacturingTemplates } from "./manufacturing";
+import { constructionTemplates } from "./construction";
+import { restaurantTemplates } from "./restaurant";
+import { logisticsTemplates } from "./logistics";
+import { realestateTemplates } from "./realestate";
+import { clinicTemplates } from "./clinic";
+import { educationTemplates } from "./education";
+import { projectTemplates } from "./project";
 
 export { CATEGORIES, getCategory };
 export type { DashboardCategory } from "./categories";
@@ -26,7 +35,24 @@ const ALL: DashboardTemplate[] = [
   ...marketingTemplates,
   ...operationsTemplates,
   ...executiveTemplates,
+  ...retailTemplates,
+  ...manufacturingTemplates,
+  ...constructionTemplates,
+  ...restaurantTemplates,
+  ...logisticsTemplates,
+  ...realestateTemplates,
+  ...clinicTemplates,
+  ...educationTemplates,
+  ...projectTemplates,
 ];
+
+/**
+ * The raw, unfiltered template list — including any entry that would fail
+ * schema validation. Exported so tests can assert that nothing is silently
+ * dropped by `getAllTemplates()`. Application code should use
+ * `getAllTemplates()` instead.
+ */
+export const ALL_TEMPLATES_RAW: readonly DashboardTemplate[] = ALL;
 
 /** All templates, keeping only those that pass schema validation (defensive). */
 export function getAllTemplates(): DashboardTemplate[] {

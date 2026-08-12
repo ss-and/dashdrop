@@ -19,6 +19,7 @@ import {
   type DashboardTemplate,
 } from "./widgets";
 import { getAllTemplates } from "./dashboard-templates";
+import { CATEGORIES } from "./dashboard-templates/categories";
 
 export type GenerationVia = "anthropic" | "openai" | "heuristic";
 
@@ -45,12 +46,14 @@ const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
  * the model prompt so the model emits JSON that validates against
  * `dashboardTemplateSchema` on the first try.
  */
+const CATEGORY_IDS = CATEGORIES.map((c) => c.id).join("|");
+
 const SPEC_PROMPT = `あなたはBIダッシュボード設計アシスタントです。ユーザーが作りたいダッシュボード（画像・PDF・説明文）から、下記スキーマに厳密に一致する JSON を **1つだけ** 出力してください。前置き・後書き・コードフェンス・説明文は一切禁止。出力はトップレベルのJSONオブジェクトのみ。
 
 # 出力スキーマ (DashboardTemplate)
 {
   "key": string,           // "ai-" で始まる一意なslug (例 "ai-monthly-sales")
-  "category": string,      // support|sales|billing|finance|hr|marketing|operations|executive のいずれか
+  "category": string,      // ${CATEGORY_IDS} のいずれか
   "name": string,          // 日本語のダッシュボード名
   "description": string,   // 日本語1文の説明
   "icon": string,          // dashboard|inbox|table|sparkles|users|settings のいずれか
@@ -331,16 +334,10 @@ function parseAndValidate(rawText: string): DashboardTemplate {
   throw new Error("生成結果がスキーマに一致しませんでした");
 }
 
-const VALID_CATEGORIES = new Set([
-  "support",
-  "sales",
-  "billing",
-  "finance",
-  "hr",
-  "marketing",
-  "operations",
-  "executive",
-]);
+// Derived from the gallery's category list rather than hard-coded, so an
+// AI-generated dashboard can land in any category the gallery gains (小売・EC,
+// 製造, 建設… ) instead of silently falling back to 「オペレーション」.
+const VALID_CATEGORIES = new Set(CATEGORIES.map((c) => c.id));
 
 function repairTemplate(
   obj: Record<string, unknown>,
