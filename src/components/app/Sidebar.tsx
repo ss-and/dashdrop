@@ -5,13 +5,15 @@ import type { CurrentUser } from "@/lib/auth";
 import { CRM_SLUGS } from "@/lib/crm-objects";
 import { CollectionIcon, NavIcon } from "./icons";
 import { NavItem } from "./NavItem";
+import { CreateCrmButton } from "./CreateCrmButton";
 
 /**
  * Left navigation. Server component: reads the workspace's collections directly
  * so it never depends on a client fetch. Shared by every /(app) page.
  *
- * Shape: ホーム → 顧客データベース → スプレッドシート（ファイル＞シートの入れ子）
- * → ダッシュボード → 設定 / プラン。Top-level links are deliberately kept to a
+ * Shape: ホーム → スプレッドシート（ファイル＞シートの入れ子）→ ダッシュボード、
+ * 最下段に顧客データベース（マスター）、その下に 設定 / プラン。
+ * Top-level links are deliberately kept to a
  * single item so the sidebar reads as a few calm groups instead of a long list;
  * secondary destinations (取り込み / ギャラリー) live in their section header.
  */
@@ -71,18 +73,6 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
 
       <nav className="flex-1 overflow-y-auto px-2 py-3">
         <NavLink href="/home" icon="dashboard" label="ホーム" exact />
-
-        {/* CRM core — DashDrop's master customer database */}
-        {crmSheets.length > 0 && (
-          <details open className="group/crm">
-            <SectionSummary label="顧客データベース" groupName="crm" />
-            <ul className="space-y-0.5">
-              {crmSheets.map((c) => (
-                <SheetLink key={c.id} id={c.id} icon={c.icon} name={c.name} />
-              ))}
-            </ul>
-          </details>
-        )}
 
         {/* Imported spreadsheets — ファイルを開くと中のシートが並ぶ入れ子構造 */}
         <details open className="group/sheets">
@@ -169,6 +159,42 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
           </ul>
         </details>
       </nav>
+
+      {/*
+        顧客データベース — the master records, pinned to the bottom of the rail
+        (Salesforce keeps its objects reachable at a fixed spot rather than
+        scrolling with the file tree). Clicking an object name opens that DB.
+      */}
+      <div className="shrink-0 border-t border-ink-line px-2 py-2">
+        <div className="flex items-center justify-between px-3 pb-1.5">
+          <p className="text-2xs font-semibold uppercase tracking-wider text-ink-faint">
+            顧客データベース
+          </p>
+          {crmSheets.length > 0 && (
+            <Link
+              href="/home"
+              className="text-2xs font-medium text-khaki-600 hover:text-khaki-700"
+            >
+              サマリー
+            </Link>
+          )}
+        </div>
+
+        {crmSheets.length > 0 ? (
+          <ul className="max-h-56 space-y-0.5 overflow-y-auto">
+            {crmSheets.map((c) => (
+              <SheetLink key={c.id} id={c.id} icon={c.icon} name={c.name} />
+            ))}
+          </ul>
+        ) : (
+          <div className="px-1 pb-1">
+            <p className="px-2 pb-2 text-xs leading-relaxed text-ink-muted">
+              顧客・商談・請求書をDashDrop側で一元管理できます。
+            </p>
+            <CreateCrmButton />
+          </div>
+        )}
+      </div>
 
       <div className="border-t border-ink-line p-2">
         <NavLink href="/settings" icon="settings" label="設定" />

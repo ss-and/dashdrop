@@ -6,6 +6,7 @@ import { signupSchema } from "@/lib/validation";
 import { slugify } from "@/lib/utils";
 import { TEMPLATES, type CollectionTemplate } from "@/lib/templates";
 import { logActivity } from "@/lib/workspace";
+import { installCrm } from "@/lib/install-crm";
 import type { Prisma } from "@prisma/client";
 
 /**
@@ -121,6 +122,30 @@ export async function POST(req: Request) {
     // Activity logging is best-effort and lives outside the transaction.
     await logActivity(workspaceId, "collection.created", { template: "inquiry" });
     await logActivity(workspaceId, "collection.created", { template: "task" });
+
+    // Every workspace starts with the customer database — DashDrop is meant to
+    // be the master record, not just a viewer over imported files. Best-effort:
+    // a failure here must never block the signup itself (the sidebar offers a
+    // 「顧客データベースを作成」 button as the fallback).
+    try {
+      await installCrm(
+        {
+          id: user.id,
+          email,
+          name: input.name,
+          workspace: {
+            id: workspaceId,
+            name: workspaceName,
+            slug,
+            plan: "free",
+            role: "owner",
+          },
+        },
+        { withSampleData: false },
+      );
+    } catch (err) {
+      console.error("CRM bootstrap failed for new workspace:", err);
+    }
 
     await setSessionCookie(user.id);
     return ok({ redirect: "/home" });
