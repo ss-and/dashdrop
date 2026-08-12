@@ -12,7 +12,12 @@
  */
 import type { FieldType, SelectOption } from "./field-types";
 
-export type CrmSlug = "accounts" | "contacts" | "opportunities" | "activities";
+export type CrmSlug =
+  | "accounts"
+  | "contacts"
+  | "opportunities"
+  | "invoices"
+  | "activities";
 
 export interface CrmField {
   key: string;
@@ -76,6 +81,13 @@ const STAGE: SelectOption[] = [
   { label: "交渉", value: "negotiation", color: "warning" },
   { label: "受注", value: "won", color: "success" },
   { label: "失注", value: "lost", color: "danger" },
+];
+
+const INVOICE_STATUS: SelectOption[] = [
+  { label: "下書き", value: "draft", color: "khaki" },
+  { label: "請求済み", value: "issued", color: "info" },
+  { label: "入金済み", value: "paid", color: "success" },
+  { label: "期限超過", value: "overdue", color: "danger" },
 ];
 
 const ACTIVITY_TYPE: SelectOption[] = [
@@ -263,6 +275,51 @@ const OPPORTUNITIES: CrmObject = {
   ],
 };
 
+const INVOICES: CrmObject = {
+  slug: "invoices",
+  name: "請求書",
+  description: "請求と入金の管理",
+  icon: "report",
+  color: "khaki",
+  listColumns: ["number", "account", "amount", "status", "issueDate", "dueDate"],
+  fields: [
+    { key: "number", name: "請求書番号", type: "text", required: true },
+    {
+      key: "account",
+      name: "顧客",
+      type: "relation",
+      relation: { to: "accounts", displayFieldKey: "name" },
+    },
+    {
+      key: "opportunity",
+      name: "商談",
+      type: "relation",
+      relation: { to: "opportunities", displayFieldKey: "name" },
+    },
+    { key: "amount", name: "請求金額", type: "currency" },
+    { key: "tax", name: "消費税", type: "currency" },
+    { key: "status", name: "入金状況", type: "select", options: INVOICE_STATUS },
+    { key: "issueDate", name: "請求日", type: "date" },
+    { key: "dueDate", name: "入金期限", type: "date" },
+    { key: "paidDate", name: "入金日", type: "date" },
+    { key: "owner", name: "自社担当", type: "text" },
+    {
+      key: "dealAmount",
+      name: "商談金額",
+      type: "lookup",
+      lookup: { via: "opportunity", target: "amount" },
+    },
+    { key: "note", name: "備考", type: "longtext" },
+  ],
+  samples: [
+    { number: "INV-2026-001", account: "株式会社アオイ製作所", opportunity: "精密部品 定期発注（上期）", amount: 3200000, tax: 320000, status: "paid", issueDate: "2026-03-25", dueDate: "2026-04-30", paidDate: "2026-04-22", owner: "田中" },
+    { number: "INV-2026-002", account: "キイロ物産", amount: 210000, tax: 21000, status: "paid", issueDate: "2026-05-31", dueDate: "2026-06-30", paidDate: "2026-06-28", owner: "鈴木", note: "消耗品スポット納品分。" },
+    { number: "INV-2026-003", account: "ミドリ商事株式会社", opportunity: "卸ルート拡大パッケージ", amount: 900000, tax: 90000, status: "issued", issueDate: "2026-07-31", dueDate: "2026-08-31", owner: "佐藤", note: "着手金として半額請求。" },
+    { number: "INV-2026-004", account: "ハナミズキ工業", amount: 180000, tax: 18000, status: "overdue", issueDate: "2026-05-20", dueDate: "2026-06-20", owner: "佐藤", note: "督促連絡済み。分割払いを相談中。" },
+    { number: "INV-2026-005", account: "株式会社アオイ製作所", opportunity: "精密部品 追加ライン", amount: 1400000, tax: 140000, status: "draft", issueDate: "2026-08-10", dueDate: "2026-09-10", owner: "田中", note: "検収後に確定。" },
+  ],
+};
+
 const ACTIVITIES: CrmObject = {
   slug: "activities",
   name: "活動",
@@ -305,6 +362,7 @@ export const CRM_OBJECTS: CrmObject[] = [
   ACCOUNTS,
   CONTACTS,
   OPPORTUNITIES,
+  INVOICES,
   ACTIVITIES,
 ];
 

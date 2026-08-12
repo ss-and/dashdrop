@@ -29,8 +29,14 @@ import { NavIcon } from "@/components/app/icons";
 import { HelpTip } from "@/components/ui/HelpTip";
 import { Card, CardBody } from "@/components/ui/Card";
 import { DashboardGrid } from "@/components/dashboard/DashboardGrid";
+import { GettingStarted } from "@/components/help/GettingStarted";
 import { HomeTabs } from "@/components/home/HomeTabs";
 import { SummaryBand, type SummaryTile } from "@/components/home/SummaryBand";
+import {
+  RevenueSummary,
+  type RevenueStatusRow,
+  type RevenueStep,
+} from "@/components/home/RevenueSummary";
 import {
   CrmSection,
   type CrmColumn,
@@ -105,6 +111,7 @@ export default async function HomePage({
   const accounts = bySlug.get("accounts");
   const contacts = bySlug.get("contacts");
   const opportunities = bySlug.get("opportunities");
+  const invoices = bySlug.get("invoices");
   const activities = bySlug.get("activities");
 
   /* --------------------------------- KPIs ---------------------------------- */
@@ -120,17 +127,100 @@ export default async function HomePage({
   let openAmount = 0;
   let wonAmount = 0;
   let openCount = 0;
+  let wonCount = 0;
   for (const r of oppRecords) {
     const d = (r.data as Record<string, unknown>) ?? {};
     const amount = toNumber(d.amount);
     const stage = typeof d.stage === "string" ? d.stage : "";
     if (stage === "won") {
       wonAmount += amount;
+      wonCount += 1;
     } else if (stage !== "lost") {
       openAmount += amount;
       openCount += 1;
     }
   }
+
+  /* ----------------------- 請求書 — 請求と入金の集計 ------------------------ */
+
+  // 入金状況ごとの件数と金額。ステータスの表示名・色は、実際に作成された
+  // フィールドの選択肢（無ければ CRM 定義）から引くので、名称変更にも追従する。
+  const invoiceRecords = invoices
+    ? await db.record.findMany({
+        where: { collectionId: invoices.id },
+        select: { data: true },
+      })
+    : [];
+
+  let invoicedTotal = 0;
+  const invoiceStats = new Map<string, { count: number; amount: number }>();
+  for (const r of invoiceRecords) {
+    const d = (r.data as Record<string, unknown>) ?? {};
+    const amount = toNumber(d.amount);
+    const status = typeof d.status === "string" ? d.status : "";
+    invoicedTotal += amount;
+    const cur = invoiceStats.get(status) ?? { count: 0, amount: 0 };
+    cur.count += 1;
+    cur.amount += amount;
+    invoiceStats.set(status, cur);
+  }
+
+  const statOf = (status: string) =>
+    invoiceStats.get(status) ?? { count: 0, amount: 0 };
+  const paidStat = statOf("paid");
+  const issuedStat = statOf("issued");
+  const overdueStat = statOf("overdue");
+  /** 請求済み（未入金）— 送付済みで、まだ入金されていない分。 */
+  const unpaidAmount = issuedStat.amount + overdueStat.amount;
+  const unpaidCount = issuedStat.count + overdueStat.count;
+
+  const invoiceStatusOptions: SelectOption[] = (() => {
+    const stored = invoices?.fields.find((f) => f.key === "status");
+    const fromStored = (stored?.options as SelectOption[] | null) ?? null;
+    if (fromStored && fromStored.length > 0) return fromStored;
+    const def = CRM_OBJECTS.find((o) => o.slug === "invoices");
+    return def?.fields.find((f) => f.key === "status")?.options ?? [];
+  })();
+
+  const revenueSteps: RevenueStep[] = [];
+  if (opportunities) {
+    revenueSteps.push({
+      key: "won",
+      label: "受注金額（商談）",
+      amount: wonAmount,
+      count: wonCount,
+      href: `/c/${opportunities.id}`,
+    });
+  }
+  if (invoices) {
+    revenueSteps.push({
+      key: "invoiced",
+      label: "請求金額",
+      amount: invoicedTotal,
+      count: invoiceRecords.length,
+      href: `/c/${invoices.id}`,
+    });
+    revenueSteps.push({
+      key: "paid",
+      label: "入金済み",
+      amount: paidStat.amount,
+      count: paidStat.count,
+      href: `/c/${invoices.id}`,
+    });
+  }
+
+  const revenueStatuses: RevenueStatusRow[] = invoiceStatusOptions
+    .map((o) => {
+      const s = statOf(String(o.value));
+      return {
+        value: String(o.value),
+        label: o.label,
+        color: o.color,
+        count: s.count,
+        amount: s.amount,
+      };
+    })
+    .filter((r) => r.count > 0);
 
   const now = new Date();
   const monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -178,6 +268,32 @@ export default async function HomePage({
       label: "受注金額",
       value: yen(wonAmount),
       href: `/c/${opportunities.id}`,
+    });
+  }
+  if (invoices) {
+    tiles.push({
+      key: "invoiced",
+      label: "請求済み金額",
+      value: yen(unpaidAmount),
+      hint: `${unpaidCount.toLocaleString()} 件`,
+      href: `/c/${invoices.id}`,
+    });
+    tiles.push({
+      key: "paid",
+      label: "入金済み金額",
+      value: yen(paidStat.amount),
+      hint: `${paidStat.count.toLocaleString()} 件`,
+      href: `/c/${invoices.id}`,
+    });
+    tiles.push({
+      key: "unpaid",
+      label: "未入金",
+      value: yen(unpaidAmount),
+      hint:
+        overdueStat.count > 0
+          ? `うち期限超過 ${overdueStat.count.toLocaleString()} 件`
+          : undefined,
+      href: `/c/${invoices.id}`,
     });
   }
   if (contacts) {
@@ -281,6 +397,12 @@ export default async function HomePage({
 
   /* --------------------------------- render -------------------------------- */
 
+  // 「はじめかたは2通り」の置き場所。まだ何も無いワークスペースでは最初に、
+  // データが育っているワークスペースでは一覧の下に置く。
+  const crmHref = accounts ? `/c/${accounts.id}` : null;
+  const isNewWorkspace = !hasCrm || (accounts?._count.records ?? 0) === 0;
+  const gettingStarted = <GettingStarted crmHref={crmHref} />;
+
   return (
     <>
       <Topbar user={user} title="ホーム" />
@@ -305,6 +427,9 @@ export default async function HomePage({
               </p>
             </div>
           </div>
+
+          {/* A0) はじめかた — データがまだ無いうちは、いちばん上に出す */}
+          {!activeDashboard && isNewWorkspace && gettingStarted}
 
           {/* A) サマリー band / onboarding */}
           {hasCrm ? (
@@ -381,6 +506,15 @@ export default async function HomePage({
                   </p>
                 )}
 
+                {/* B2) 売上サマリー — 商談 → 請求書 → 入金 */}
+                {invoices && (
+                  <RevenueSummary
+                    steps={revenueSteps}
+                    statuses={revenueStatuses}
+                    invoicesHref={`/c/${invoices.id}`}
+                  />
+                )}
+
                 {/* C) 顧客データベース */}
                 {views.length > 0 ? (
                   <CrmSection views={views} />
@@ -391,6 +525,9 @@ export default async function HomePage({
                     </p>
                   )
                 )}
+
+                {/* C2) はじめかた — データがある場合は一覧の下に置く */}
+                {!isNewWorkspace && gettingStarted}
 
                 {/* D) 取り込んだファイル */}
                 <FilesStrip

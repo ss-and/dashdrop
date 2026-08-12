@@ -10,29 +10,28 @@ import { NavIcon } from "./icons";
  * wondering "what do I do here?".
  */
 
-const STEPS = [
+const PATHS = [
   {
-    n: 1,
-    title: "データを用意する",
-    body: "Excel / CSV を取り込むか、ギャラリーのテンプレートから始めます。",
+    badge: "A",
+    title: "顧客データベースから作る",
+    body: "顧客・商談・請求書をDashDrop側で正として持つ。データが増えるほど会社の台帳になります。",
+    href: "/home",
+    cta: "ホームを開く",
   },
   {
-    n: 2,
-    title: "ダッシュボードで把握",
-    body: "問い合わせ・タスク・売上などの動きをグラフでひと目で確認。",
-  },
-  {
-    n: 3,
-    title: "そのまま運用する",
-    body: "表を直接編集して自分のデータに。いつでも Excel に書き出せます。",
+    badge: "B",
+    title: "スプレッドシートから直接作る",
+    body: "手元のExcel / スプレッドシートを取り込む。ファイル単位の入れ子で整理されます。",
+    href: "/import",
+    cta: "取り込む",
   },
 ];
 
 const LINKS = [
-  { href: "/dashboards", icon: "dashboard", label: "ダッシュボード ギャラリー", desc: "30種のテンプレートから選ぶ" },
   { href: "/import", icon: "upload", label: "Excel / CSV を取り込む", desc: "列を自動でフィールド化" },
-  { href: "/c/new", icon: "plus", label: "スプレッドシートを追加", desc: "空 or テンプレートで作成" },
-  { href: "/dashboards/new", icon: "sparkles", label: "画像・PDFから作成", desc: "資料をAIでダッシュボード化" },
+  { href: "/logs", icon: "report", label: "取り込みログ", desc: "いつ何を取り込んだかの履歴" },
+  { href: "/dashboards/build", icon: "plus", label: "ダッシュボードを組む", desc: "ドラッグ&ドロップで作成" },
+  { href: "/dashboards", icon: "dashboard", label: "ダッシュボード ギャラリー", desc: "テンプレートから選ぶ" },
 ];
 
 export function HelpButton() {
@@ -58,20 +57,36 @@ export function HelpButton() {
             aria-hidden="true"
           />
           <div className="absolute right-0 z-30 mt-2 w-80 animate-fade-in rounded-md border border-ink-line bg-paper-raised p-4 shadow-raised">
-            <p className="text-sm font-semibold text-ink">はじめかた（3ステップ）</p>
-            <ol className="mt-3 space-y-3">
-              {STEPS.map((s) => (
-                <li key={s.n} className="flex gap-3">
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-khaki-100 text-2xs font-semibold text-khaki-700">
-                    {s.n}
-                  </span>
-                  <div>
-                    <p className="text-sm font-medium text-ink">{s.title}</p>
-                    <p className="text-xs leading-relaxed text-ink-muted">{s.body}</p>
-                  </div>
+            <p className="text-sm font-semibold text-ink">はじめかたは2通り</p>
+            <p className="mt-0.5 text-xs text-ink-muted">
+              どちらから始めても、あとで組み合わせられます。
+            </p>
+            <ul className="mt-3 space-y-2">
+              {PATHS.map((p) => (
+                <li key={p.badge}>
+                  <Link
+                    href={p.href}
+                    onClick={() => setOpen(false)}
+                    className="flex gap-2.5 rounded border border-ink-line p-2.5 transition-colors hover:bg-paper-sunken"
+                  >
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-khaki-300 bg-khaki-50 text-2xs font-semibold text-khaki-800">
+                      {p.badge}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium text-ink">
+                        {p.title}
+                      </span>
+                      <span className="block text-xs leading-relaxed text-ink-muted">
+                        {p.body}
+                      </span>
+                      <span className="mt-1 block text-xs font-medium text-khaki-600">
+                        {p.cta} →
+                      </span>
+                    </span>
+                  </Link>
                 </li>
               ))}
-            </ol>
+            </ul>
 
             <div className="my-3 border-t border-ink-line" />
 

@@ -19,13 +19,22 @@ export function FilesStrip({ workbooks }: { workbooks: HomeWorkbook[] }) {
     <section className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="text-sm font-semibold text-ink">取り込んだファイル</h3>
-        <Link
-          href="/import"
-          className="inline-flex items-center gap-1 text-xs font-medium text-khaki-700 hover:text-khaki-800 hover:underline"
-        >
-          <NavIcon name="upload" className="h-3 w-3" />
-          Excel取り込み
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/logs"
+            className="inline-flex items-center gap-1 text-xs font-medium text-khaki-700 hover:text-khaki-800 hover:underline"
+          >
+            <NavIcon name="inbox" className="h-3 w-3" />
+            取り込みログ
+          </Link>
+          <Link
+            href="/import"
+            className="inline-flex items-center gap-1 text-xs font-medium text-khaki-700 hover:text-khaki-800 hover:underline"
+          >
+            <NavIcon name="upload" className="h-3 w-3" />
+            Excel取り込み
+          </Link>
+        </div>
       </div>
       <ul className="overflow-hidden rounded-md border border-ink-line bg-paper-raised">
         {workbooks.map((w) => (

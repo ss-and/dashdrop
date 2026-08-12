@@ -11,14 +11,15 @@ import { FIELD_TYPES, isComputedField } from "@/lib/field-types";
 const bySlug = new Map(CRM_OBJECTS.map((o) => [o.slug, o]));
 
 describe("CRM object definitions", () => {
-  it("exposes the four core objects in a stable order", () => {
+  it("exposes the core objects in a stable order", () => {
     expect(CRM_SLUGS).toEqual([
       "accounts",
       "contacts",
       "opportunities",
+      "invoices",
       "activities",
     ]);
-    expect(CRM_OBJECTS).toHaveLength(4);
+    expect(CRM_OBJECTS).toHaveLength(5);
   });
 
   it("isCrmSlug / getCrmObject agree with the list", () => {

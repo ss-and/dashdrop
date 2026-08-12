@@ -295,6 +295,10 @@ export const POST = withAuth(async (req, { user }) => {
     rows: totalRows,
     collectionId: created[0].id,
     workbookId: workbook.id,
+    fileName,
+    source: ext === ".csv" ? "csv" : "excel",
+    sheetNames: created.map((c) => c.name),
+    skipped: created.reduce((a, c) => a + c.skipped, 0),
   });
 
   return ok({

@@ -8,12 +8,18 @@ import { HelpButton } from "./HelpButton";
 import { AppLauncher, type NavData } from "./AppLauncher";
 import { ObjectNav, type ObjectNavItem } from "./ObjectNav";
 import { getPlanBadge } from "./plan-badge";
+import { GlobalSearch } from "@/components/search/GlobalSearch";
 import type { CurrentUser } from "@/lib/auth";
 
 /** How many extra (non-CRM) sheets appear as object tabs. */
 const EXTRA_TABS = 4;
 
-/** Builds the object tab strip: ホーム + CRM objects + a few more sheets. */
+/**
+ * Builds the object tab strip: ホーム + CRM objects + a few more sheets.
+ *
+ * アラート and レポート are intentionally NOT emitted here — they were dropped
+ * from the navigation on purpose, so do not add tabs for them back.
+ */
 function buildNavItems(data: NavData | null): ObjectNavItem[] {
   const items: ObjectNavItem[] = [{ href: "/home", label: "ホーム" }];
   if (!data) return items;
@@ -92,6 +98,8 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
             {title ?? "ダッシュボード"}
           </h1>
         </div>
+
+        <GlobalSearch className="mx-4 hidden shrink-0 sm:block" />
 
         <div className="flex items-center gap-3">
           <span className="hidden sm:flex items-center gap-1.5 text-sm text-ink-muted">

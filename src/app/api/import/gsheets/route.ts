@@ -255,6 +255,9 @@ export const POST = withAuth(async (req, { user }) => {
     source: "gsheets",
     collectionId: created[0].id,
     workbookId: workbook.id,
+    fileName: workbookName,
+    sheetNames: created.map((c) => c.name),
+    skipped: created.reduce((a, c) => a + c.skipped, 0),
   });
 
   return ok({
