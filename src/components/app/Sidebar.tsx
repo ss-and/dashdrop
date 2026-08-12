@@ -2,6 +2,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { Logo } from "@/components/ui/Logo";
 import type { CurrentUser } from "@/lib/auth";
+import { CRM_SLUGS } from "@/lib/crm-objects";
 import { CollectionIcon, NavIcon } from "./icons";
 
 /**
@@ -13,7 +14,7 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
     db.collection.findMany({
       where: { workspaceId: user.workspace.id },
       orderBy: { position: "asc" },
-      select: { id: true, name: true, icon: true, color: true, workbookId: true },
+      select: { id: true, name: true, slug: true, icon: true, color: true, workbookId: true },
     }),
     db.workbook.findMany({
       where: { workspaceId: user.workspace.id },
@@ -27,10 +28,23 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
     }),
   ]);
 
+  // CRM core objects lead the nav — they are the master customer database,
+  // not just another imported sheet.
+  const crmOrder = new Map(CRM_SLUGS.map((s, i) => [s, i]));
+  const crmSheets = collections
+    .filter((c) => crmOrder.has(c.slug as (typeof CRM_SLUGS)[number]))
+    .sort(
+      (a, b) =>
+        (crmOrder.get(a.slug as (typeof CRM_SLUGS)[number]) ?? 0) -
+        (crmOrder.get(b.slug as (typeof CRM_SLUGS)[number]) ?? 0),
+    );
+  const crmIds = new Set(crmSheets.map((c) => c.id));
+  const rest = collections.filter((c) => !crmIds.has(c.id));
+
   // Group sheets under their workbook (file); loose sheets have no workbook.
   const byWorkbook = new Map<string, typeof collections>();
   const loose: typeof collections = [];
-  for (const c of collections) {
+  for (const c of rest) {
     if (c.workbookId) {
       const arr = byWorkbook.get(c.workbookId) ?? [];
       arr.push(c);
@@ -46,16 +60,38 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-ink-line bg-paper-raised">
       <div className="flex h-14 items-center px-4 border-b border-ink-line">
-        <Link href="/dashboard" aria-label="DashDrop ダッシュボード">
+        <Link href="/home" aria-label="DashDrop ホーム">
           <Logo />
         </Link>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 py-3">
-        <NavLink href="/dashboard" icon="dashboard" label="サマリー" />
+        <NavLink href="/home" icon="dashboard" label="ホーム" />
         <NavLink href="/import" icon="upload" label="Excel取り込み" />
         <NavLink href="/alerts" icon="bell" label="アラート" />
         <NavLink href="/reports" icon="report" label="レポート" />
+
+        {/* CRM core — DashDrop's master customer database */}
+        {crmSheets.length > 0 && (
+          <>
+            <p className="px-3 pt-5 pb-1.5 text-2xs font-semibold uppercase tracking-wider text-ink-faint">
+              顧客データベース
+            </p>
+            <ul className="space-y-0.5">
+              {crmSheets.map((c) => (
+                <li key={c.id}>
+                  <Link
+                    href={`/c/${c.id}`}
+                    className="flex items-center gap-2.5 rounded px-3 py-2 text-sm text-ink-soft hover:bg-paper-sunken hover:text-ink transition-colors"
+                  >
+                    <CollectionIcon name={c.icon} className="h-4 w-4 text-khaki-500" />
+                    <span className="truncate">{c.name}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
 
         <div className="flex items-center justify-between px-3 pt-5 pb-1.5">
           <p className="text-2xs font-semibold uppercase tracking-wider text-ink-faint">

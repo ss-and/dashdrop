@@ -45,7 +45,7 @@ export async function POST(req: Request) {
     // A user without a membership still authenticates; the session layer will
     // resolve their workspace later (or surface an appropriate empty state).
     await setSessionCookie(user.id);
-    return ok({ redirect: "/dashboard" });
+    return ok({ redirect: "/home" });
   } catch (err) {
     if (err instanceof ZodError) {
       return fail(GENERIC_401, 401);

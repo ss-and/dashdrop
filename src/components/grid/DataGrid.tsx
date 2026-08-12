@@ -8,6 +8,7 @@
  * field). Persistence goes through the records + fields API routes.
  */
 import { useCallback, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
 import {
@@ -649,6 +650,11 @@ export function DataGrid({
                   </div>
                 </th>
               ))}
+              {/* Record-page affordance; header intentionally blank. */}
+              <th
+                className="w-14 border-b border-r border-ink-line px-2 py-1.5"
+                aria-label="レコードを開く"
+              />
               <th className="w-10 border-b border-ink-line px-1 py-1.5">
                 <button
                   type="button"
@@ -666,7 +672,7 @@ export function DataGrid({
             {query.trim() !== "" && visibleRecords.length === 0 && (
               <tr className="border-b border-ink-line/70 bg-paper">
                 <td
-                  colSpan={columns.length + 2}
+                  colSpan={columns.length + 3}
                   className="px-3 py-8 text-center text-sm text-ink-muted"
                 >
                   該当する行がありません
@@ -697,6 +703,15 @@ export function DataGrid({
                     {renderCell(rec.id, field, rec.data, rec.computed)}
                   </td>
                 ))}
+                {/* Open this row as a Salesforce-style record page. */}
+                <td className="border-r border-ink-line/70 px-2 text-center align-middle">
+                  <Link
+                    href={`/r/${collection.id}/${rec.id}`}
+                    className="text-2xs font-medium text-ink-faint hover:text-khaki-700 hover:underline"
+                  >
+                    開く
+                  </Link>
+                </td>
                 <td className="bg-transparent" />
               </tr>
             ))}
@@ -714,6 +729,8 @@ export function DataGrid({
                   {renderCell(DRAFT_ID, field, draft, EMPTY_COMPUTED)}
                 </td>
               ))}
+              {/* Draft row has no record id yet — nothing to open. */}
+              <td className="border-r border-ink-line/70" />
               <td className="bg-transparent" />
             </tr>
           </tbody>

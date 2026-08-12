@@ -7,6 +7,7 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { TEMPLATES } from "../src/lib/templates";
+import { installCrm } from "../src/lib/install-crm";
 
 const db = new PrismaClient();
 
@@ -224,7 +225,29 @@ async function main() {
     },
   });
 
-  console.log(`✅ Seeded workspace "${workspace.name}" with demo inquiries, tasks & 2 dashboards.`);
+  // --- CRM core: the master customer database (顧客/担当者/商談/活動) ---------
+  const crm = await installCrm(
+    {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      workspace: {
+        id: workspace.id,
+        name: workspace.name,
+        slug: workspace.slug,
+        plan: workspace.plan,
+        role: "owner",
+      },
+    },
+    { withSampleData: true },
+  );
+
+  console.log(
+    `✅ Seeded workspace "${workspace.name}" with demo inquiries, tasks & 2 dashboards.`,
+  );
+  console.log(
+    `   顧客データベース: ${crm.created.map((c) => c.name).join(" / ")}（${crm.seededRows} 行）`,
+  );
   console.log(`   Login → ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
 }
 

@@ -12,7 +12,19 @@ import { jwtVerify } from "jose";
 
 const SESSION_COOKIE = "dashdrop_session";
 
-const PROTECTED_PREFIXES = ["/dashboard", "/c", "/import", "/settings"];
+const PROTECTED_PREFIXES = [
+  "/home",
+  "/dashboard",
+  "/dashboards",
+  "/c", // spreadsheet grid
+  "/r", // record detail
+  "/f", // file (workbook) overview
+  "/d", // dashboard renderer
+  "/import",
+  "/alerts",
+  "/reports",
+  "/settings",
+];
 const AUTH_PAGES = ["/login", "/signup"];
 
 async function hasValidSession(token: string | undefined): Promise<boolean> {
@@ -45,10 +57,10 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Already-authenticated user hitting login/signup -> straight to dashboard.
+  // Already-authenticated user hitting login/signup -> straight to Home.
   if (isAuthPage && valid) {
     const url = req.nextUrl.clone();
-    url.pathname = "/dashboard";
+    url.pathname = "/home";
     url.search = "";
     return NextResponse.redirect(url);
   }

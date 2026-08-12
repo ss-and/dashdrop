@@ -5,7 +5,7 @@
  * collection slugs. Tenant-safe and plan-limited.
  */
 import { db, toJson } from "./db";
-import { ApiError } from "./api";
+import { ApiError } from "./errors";
 import { slugify, uniqueName } from "./utils";
 import { getPlan } from "./plans";
 import { logActivity } from "./workspace";

@@ -123,7 +123,7 @@ export async function POST(req: Request) {
     await logActivity(workspaceId, "collection.created", { template: "task" });
 
     await setSessionCookie(user.id);
-    return ok({ redirect: "/dashboard" });
+    return ok({ redirect: "/home" });
   } catch (err) {
     if (err instanceof ZodError) {
       const first = err.issues[0]?.message ?? "入力内容を確認してください";

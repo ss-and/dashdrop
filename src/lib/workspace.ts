@@ -6,7 +6,7 @@
  * limits are enforced in one auditable place.
  */
 import { db, toJson } from "./db";
-import { ApiError } from "./api";
+import { ApiError } from "./errors";
 import { getPlan } from "./plans";
 import type { CurrentUser } from "./auth";
 import type { Collection, Field } from "@prisma/client";

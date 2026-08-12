@@ -28,15 +28,18 @@ export const PLANS: Record<PlanId, Plan> = {
     name: "Free",
     tagline: "個人・小さく始めるチーム向け",
     priceMonthly: 0,
+    // Roomy enough for the CRM core (顧客/担当者/商談/活動) plus a few imports —
+    // the customer database is the product's backbone, not a paid add-on.
     limits: {
-      collections: 3,
+      collections: 10,
       recordsPerCollection: 500,
       members: 2,
       monthlyImports: 10,
       apiAccess: false,
     },
     features: [
-      "スプレッドシート 3個まで",
+      "顧客データベース（顧客・担当者・商談・活動）",
+      "スプレッドシート 10個まで",
       "1シート 500行まで",
       "メンバー 2名まで",
       "Excel / CSV インポート・エクスポート",

@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { getSession, type CurrentUser } from "./auth";
+import { ApiError } from "./errors";
 
 export function ok<T>(data: T, init?: ResponseInit): NextResponse {
   return NextResponse.json({ ok: true, data }, init);
@@ -19,13 +20,9 @@ export function fail(
   return NextResponse.json({ ok: false, error: message, ...extra }, { status });
 }
 
-export class ApiError extends Error {
-  status: number;
-  constructor(message: string, status = 400) {
-    super(message);
-    this.status = status;
-  }
-}
+// Defined in ./errors (framework-free) and re-exported here so every existing
+// `import { ApiError } from "@/lib/api"` keeps working.
+export { ApiError } from "./errors";
 
 type Handler = (
   req: Request,

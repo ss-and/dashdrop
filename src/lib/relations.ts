@@ -12,7 +12,7 @@
  */
 import "server-only";
 import { db } from "./db";
-import { ApiError } from "./api";
+import { ApiError } from "./errors";
 import { displayValue, type FieldType } from "./field-types";
 
 export interface RelationConfig {
