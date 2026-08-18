@@ -26,7 +26,7 @@ export function ObjectNav({ items }: { items: ObjectNavItem[] }) {
 
   return (
     <nav
-      aria-label="オブジェクトナビゲーション"
+      aria-label="スプレッドシートナビゲーション"
       className="flex h-11 items-stretch gap-0.5 overflow-x-auto overflow-y-hidden px-3"
     >
       {items.map((item) => {

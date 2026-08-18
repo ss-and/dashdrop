@@ -369,10 +369,10 @@ export function GlobalSearch({ className }: { className?: string }) {
                   </>
                 )}
 
-                {/* オブジェクト */}
+                {/* スプレッドシート */}
                 {model.objects.length > 0 && (
                   <>
-                    <SectionTitle>オブジェクト</SectionTitle>
+                    <SectionTitle>スプレッドシート</SectionTitle>
                     {model.objects.map((o) => (
                       <Link
                         key={o.id}

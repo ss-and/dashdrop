@@ -42,7 +42,7 @@ export function RecordHeader({
             <CollectionIcon name={collectionIcon} className="h-5 w-5 text-khaki-500" />
           </span>
           <div className="min-w-0">
-            {/* Breadcrumb: ファイル › オブジェクト */}
+            {/* Breadcrumb: ファイル › スプレッドシート */}
             <nav
               aria-label="パンくずリスト"
               className="flex flex-wrap items-center gap-1 text-2xs font-semibold uppercase tracking-wider text-ink-faint"

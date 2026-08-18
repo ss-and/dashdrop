@@ -34,7 +34,7 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 
 const TYPE_LABEL: Record<string, string> = {
-  "collection.created": "スプレッドシート/オブジェクトを作成",
+  "collection.created": "スプレッドシートを作成",
   "record.created": "レコードを追加",
   "record.updated": "レコードを更新",
   "record.deleted": "レコードを削除",

@@ -214,8 +214,8 @@ export function AppLauncher({
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="アプリやオブジェクトを検索…"
-              aria-label="アプリやオブジェクトを検索"
+              placeholder="スプレッドシート・レコードを検索…"
+              aria-label="スプレッドシート・レコードを検索"
               className="w-full rounded border border-ink-line bg-paper px-3 py-2 text-sm text-ink placeholder:text-ink-faint transition-colors focus:border-khaki-400 focus:outline-none focus:ring-2 focus:ring-khaki-500/25"
             />
 
