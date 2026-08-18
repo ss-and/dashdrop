@@ -12,7 +12,7 @@ import { CreateCrmButton } from "./CreateCrmButton";
  * so it never depends on a client fetch. Shared by every /(app) page.
  *
  * Shape: ホーム → スプレッドシート（ファイル＞シートの入れ子）→ ダッシュボード、
- * 最下段に顧客データベース（マスター）、その下に 設定 / プラン。
+ * 最下段に顧客データベース、その下に 設定 / プラン。
  * Top-level links are deliberately kept to a
  * single item so the sidebar reads as a few calm groups instead of a long list;
  * secondary destinations (取り込み / ギャラリー) live in their section header.
@@ -22,7 +22,15 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
     db.collection.findMany({
       where: { workspaceId: user.workspace.id },
       orderBy: { position: "asc" },
-      select: { id: true, name: true, slug: true, icon: true, color: true, workbookId: true },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        icon: true,
+        color: true,
+        workbookId: true,
+        _count: { select: { records: true } },
+      },
     }),
     db.workbook.findMany({
       where: { workspaceId: user.workspace.id },
@@ -36,8 +44,9 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
     }),
   ]);
 
-  // CRM core objects lead the nav — they are the master customer database,
-  // not just another imported sheet. Order follows CRM_SLUGS, whatever it holds.
+  // 顧客データベースのシートも、ファイルの中のシートも、同じスプレッドシート。
+  // 並べる場所が違うだけなので、行の見た目は共通（SheetLink）。
+  // Order follows CRM_SLUGS, whatever it holds.
   const crmOrder = new Map<string, number>(CRM_SLUGS.map((s, i) => [s, i]));
   const crmSheets = collections
     .filter((c) => crmOrder.has(c.slug))
@@ -88,7 +97,14 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
           {fileGroups.map((w) => (
             <FileGroup key={w.id} title={w.name} href={`/f/${w.id}`} count={w.sheets.length}>
               {w.sheets.map((c) => (
-                <SheetLink key={c.id} id={c.id} icon={c.icon} name={c.name} nested />
+                <SheetLink
+                  key={c.id}
+                  id={c.id}
+                  icon={c.icon}
+                  name={c.name}
+                  count={c._count.records}
+                  nested
+                />
               ))}
             </FileGroup>
           ))}
@@ -99,13 +115,26 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
             (fileGroups.length > 0 ? (
               <FileGroup title="その他" count={loose.length} muted>
                 {loose.map((c) => (
-                  <SheetLink key={c.id} id={c.id} icon={c.icon} name={c.name} nested />
+                  <SheetLink
+                    key={c.id}
+                    id={c.id}
+                    icon={c.icon}
+                    name={c.name}
+                    count={c._count.records}
+                    nested
+                  />
                 ))}
               </FileGroup>
             ) : (
               <ul className="space-y-0.5">
                 {loose.map((c) => (
-                  <SheetLink key={c.id} id={c.id} icon={c.icon} name={c.name} />
+                  <SheetLink
+                    key={c.id}
+                    id={c.id}
+                    icon={c.icon}
+                    name={c.name}
+                    count={c._count.records}
+                  />
                 ))}
               </ul>
             ))}
@@ -169,31 +198,26 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
         scrolling with the file tree). Clicking an object name opens that DB.
       */}
       <div className="shrink-0 border-t border-ink-line px-2 py-2">
-        <div className="flex items-center justify-between px-3 pb-1.5">
-          <p className="text-2xs font-semibold uppercase tracking-wider text-ink-faint">
+        <div className="flex items-center px-3 pb-1.5">
+          <span className="text-2xs font-semibold uppercase tracking-wider text-ink-muted">
             顧客データベース
-          </p>
-          {crmSheets.length > 0 && (
-            <Link
-              href="/home"
-              className="text-2xs font-medium text-khaki-600 hover:text-khaki-700"
-            >
-              サマリー
-            </Link>
-          )}
+          </span>
         </div>
 
         {crmSheets.length > 0 ? (
           <ul className="max-h-56 space-y-0.5 overflow-y-auto">
             {crmSheets.map((c) => (
-              <SheetLink key={c.id} id={c.id} icon={c.icon} name={c.name} />
+              <SheetLink
+                key={c.id}
+                id={c.id}
+                icon={c.icon}
+                name={c.name}
+                count={c._count.records}
+              />
             ))}
           </ul>
         ) : (
           <div className="px-1 pb-1">
-            <p className="px-2 pb-2 text-xs leading-relaxed text-ink-muted">
-              顧客・商談・請求書をDashDrop側で一元管理できます。
-            </p>
             <CreateCrmButton />
           </div>
         )}
@@ -298,23 +322,34 @@ function FileGroup({
   );
 }
 
-/** A single sheet row. `nested` tightens it slightly when it sits inside a file. */
+/**
+ * A single spreadsheet row — used for 顧客データベース のシートにも、ファイルの中の
+ * シートにも。`nested` tightens it slightly when it sits inside a file.
+ */
 function SheetLink({
   id,
   icon,
   name,
+  count,
   nested,
 }: {
   id: string;
   icon: string;
   name: string;
+  /** 行数。あるときだけ、右端に控えめに出す。 */
+  count?: number;
   nested?: boolean;
 }) {
   return (
     <li>
       <NavItem href={`/c/${id}`} className={nested ? "py-1.5" : undefined}>
         <CollectionIcon name={icon} className="h-4 w-4 shrink-0 text-ink-muted" />
-        <span className="truncate">{name}</span>
+        <span className="min-w-0 flex-1 truncate">{name}</span>
+        {count !== undefined && (
+          <span className="shrink-0 text-2xs font-normal tabular-nums text-ink-faint">
+            {count.toLocaleString()}
+          </span>
+        )}
       </NavItem>
     </li>
   );

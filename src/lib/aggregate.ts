@@ -65,6 +65,26 @@ function recordDate(rec: AggRecord, dateField?: string): Date | null {
   return toDate(rec.createdAt);
 }
 
+/** ISO-ish date string: "2026-07-19" or "2026-07-19T09:00:00Z". */
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
+
+/**
+ * Order a value for gt/gte/lt/lte.
+ *
+ * Dates must be handled before numbers: `Number("2026-07-19")` is NaN, so a
+ * range filter on a date column used to match *nothing at all* — silently, with
+ * no error. Date values are stored as "YYYY-MM-DD" (coerceValue slices to 10
+ * chars), so we parse those to a timestamp and compare on that.
+ */
+function toComparable(v: unknown): number | null {
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === "string" && ISO_DATE_RE.test(v)) {
+    const t = Date.parse(v.length === 10 ? `${v}T00:00:00Z` : v);
+    if (Number.isFinite(t)) return t;
+  }
+  return toNumber(v);
+}
+
 function matchFilter(rec: AggRecord, f: Filter): boolean {
   const v = rec.data[f.field];
   switch (f.op) {
@@ -82,8 +102,8 @@ function matchFilter(rec: AggRecord, f: Filter): boolean {
     case "gte":
     case "lt":
     case "lte": {
-      const a = toNumber(v);
-      const b = toNumber(f.value);
+      const a = toComparable(v);
+      const b = toComparable(f.value);
       if (a === null || b === null) return false;
       if (f.op === "gt") return a > b;
       if (f.op === "gte") return a >= b;

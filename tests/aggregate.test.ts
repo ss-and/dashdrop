@@ -212,3 +212,59 @@ describe("generateSampleRows", () => {
     }
   });
 });
+
+describe("date-aware range filters", () => {
+  // Regression: Number("2026-07-19") is NaN, so gte/lte on a date column used
+  // to match nothing at all — silently. Any dashboard with a date range filter
+  // was quietly showing zero.
+  const dateCollection = {
+    slug: "orders",
+    name: "受注",
+    fields: [
+      { key: "closed", name: "完了日", type: "date", options: null },
+      { key: "amount", name: "金額", type: "currency", options: null },
+    ],
+    records: [
+      { id: "1", data: { closed: "2026-01-10", amount: 100 }, createdAt: new Date("2026-01-10"), isSampleData: false },
+      { id: "2", data: { closed: "2026-06-15", amount: 200 }, createdAt: new Date("2026-06-15"), isSampleData: false },
+      { id: "3", data: { closed: "2026-12-31", amount: 300 }, createdAt: new Date("2026-12-31"), isSampleData: false },
+    ],
+  };
+  const map = new Map([["orders", dateCollection as never]]);
+
+  function countWith(filters: unknown[]): number {
+    const data = computeWidget(
+      {
+        id: "w",
+        type: "kpi",
+        title: "件数",
+        collection: "orders",
+        measure: { kind: "count" },
+        filters: filters as never,
+      } as never,
+      map as never,
+    );
+    return (data as { value: number }).value;
+  }
+
+  it("gte on a date column keeps the later rows", () => {
+    expect(countWith([{ field: "closed", op: "gte", value: "2026-06-01" }])).toBe(2);
+  });
+
+  it("lte on a date column keeps the earlier rows", () => {
+    expect(countWith([{ field: "closed", op: "lte", value: "2026-06-15" }])).toBe(2);
+  });
+
+  it("a gte+lte pair bounds the range on both sides", () => {
+    expect(
+      countWith([
+        { field: "closed", op: "gte", value: "2026-02-01" },
+        { field: "closed", op: "lte", value: "2026-11-30" },
+      ]),
+    ).toBe(1);
+  });
+
+  it("still compares plain numbers numerically", () => {
+    expect(countWith([{ field: "amount", op: "gte", value: 200 }])).toBe(2);
+  });
+});

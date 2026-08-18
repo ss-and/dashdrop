@@ -1,7 +1,11 @@
 /**
- * Collection (table) view — the spreadsheet grid for one Collection.
- * Server component: loads the tenant-scoped collection + its first page of
- * records, then hands off to the client <DataGrid/>.
+ * Collection (table) view — one spreadsheet, with its data and its analysis.
+ *
+ * Two tabs live here, driven by `?view=`:
+ *   表   — the client <DataGrid/> (default)
+ *   分析 — <AnalyzeView/>, charts for THIS sheet, built the moment you open it
+ * Server component: loads the tenant-scoped collection, and only the records
+ * the active tab actually needs.
  */
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -12,21 +16,28 @@ import {
   resolveCollectionRecords,
   type EngineCollection,
 } from "@/lib/relations";
+import type { SelectOption } from "@/lib/field-types";
 import { Topbar } from "@/components/app/Topbar";
 import { CollectionIcon, NavIcon } from "@/components/app/icons";
 import { HelpTip } from "@/components/ui/HelpTip";
 import { DataGrid } from "@/components/grid/DataGrid";
 import { AutoDashboardButton } from "@/components/dashboard/AutoDashboardButton";
+import { SheetTabs } from "@/components/sheet/SheetTabs";
+import { AnalyzeView } from "@/components/sheet/AnalyzeView";
 
 export default async function CollectionPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ collectionId: string }>;
+  searchParams: Promise<{ view?: string }>;
 }) {
   const user = await getSession();
   if (!user) redirect("/login");
 
   const { collectionId } = await params;
+  const { view } = await searchParams;
+  const isAnalyze = view === "analyze";
 
   let collection: Awaited<ReturnType<typeof getCollectionForUser>>;
   try {
@@ -43,34 +54,44 @@ export default async function CollectionPage({
       })
     : null;
 
-  const records = await db.record.findMany({
-    where: { collectionId: collection.id },
-    orderBy: { createdAt: "desc" },
-    take: 100,
-    select: { id: true, data: true },
-  });
+  /** Everything only the 表 tab needs — skipped entirely on the 分析 tab. */
+  async function loadGrid() {
+    const records = await db.record.findMany({
+      where: { collectionId: collection.id },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: { id: true, data: true },
+    });
 
-  // Resolve cross-spreadsheet lookup/rollup values + relation labels.
-  const resolved = await resolveCollectionRecords(
-    user.workspace.id,
-    collection as unknown as EngineCollection,
-    records.map((r) => ({ id: r.id, data: (r.data as Record<string, unknown>) ?? {} })),
-  );
+    // Resolve cross-spreadsheet lookup/rollup values + relation labels.
+    const resolved = await resolveCollectionRecords(
+      user!.workspace.id,
+      collection as unknown as EngineCollection,
+      records.map((r) => ({
+        id: r.id,
+        data: (r.data as Record<string, unknown>) ?? {},
+      })),
+    );
 
-  // Other spreadsheets in this workspace — used by the field editor to
-  // configure relation / lookup / rollup targets.
-  const workspaceCollections = await db.collection.findMany({
-    where: { workspaceId: user.workspace.id },
-    orderBy: { position: "asc" },
-    select: {
-      id: true,
-      name: true,
-      fields: {
-        orderBy: { position: "asc" },
-        select: { key: true, name: true, type: true, config: true },
+    // Other spreadsheets in this workspace — used by the field editor to
+    // configure relation / lookup / rollup targets.
+    const workspaceCollections = await db.collection.findMany({
+      where: { workspaceId: user!.workspace.id },
+      orderBy: { position: "asc" },
+      select: {
+        id: true,
+        name: true,
+        fields: {
+          orderBy: { position: "asc" },
+          select: { key: true, name: true, type: true, config: true },
+        },
       },
-    },
-  });
+    });
+
+    return { resolved, workspaceCollections };
+  }
+
+  const gridData = isAnalyze ? null : await loadGrid();
 
   return (
     <>
@@ -106,7 +127,8 @@ export default async function CollectionPage({
                   <HelpTip label="スプレッドシートの使い方">
                     セルをクリックすると直接編集できます（Enterで確定 / Escで取消）。
                     一番下の行から新規追加、列見出しの「…」から項目の追加・変更、
-                    右上からExcel書き出しができます。
+                    右上からExcel書き出しができます。「分析」タブでは、このシートの
+                    グラフをそのまま開けます。
                   </HelpTip>
                 </div>
                 {collection.description && (
@@ -118,10 +140,13 @@ export default async function CollectionPage({
             </div>
 
             <div className="flex shrink-0 items-start gap-2">
-              <AutoDashboardButton
-                collectionId={collection.id}
-                label="ダッシュボード自動作成"
-              />
+              {/* Redundant on the 分析 tab — the analysis is already on screen. */}
+              {!isAnalyze && (
+                <AutoDashboardButton
+                  collectionId={collection.id}
+                  label="ダッシュボード自動作成"
+                />
+              )}
               <Link
                 href={`/dashboards/build?sheet=${collection.id}`}
                 className="inline-flex h-9 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
@@ -139,13 +164,34 @@ export default async function CollectionPage({
             </div>
           </div>
 
-          <DataGrid
-            collection={{ id: collection.id, template: collection.template }}
-            fields={collection.fields}
-            initialRecords={resolved.records}
-            relationLabels={resolved.relationLabels}
-            workspaceCollections={workspaceCollections}
+          <SheetTabs
+            collectionId={collection.id}
+            active={isAnalyze ? "analyze" : "table"}
           />
+
+          {gridData ? (
+            <DataGrid
+              collection={{ id: collection.id, template: collection.template }}
+              fields={collection.fields}
+              initialRecords={gridData.resolved.records}
+              relationLabels={gridData.resolved.relationLabels}
+              workspaceCollections={gridData.workspaceCollections}
+            />
+          ) : (
+            <AnalyzeView
+              sheet={{
+                id: collection.id,
+                slug: collection.slug,
+                name: collection.name,
+              }}
+              fields={collection.fields.map((f) => ({
+                key: f.key,
+                name: f.name,
+                type: f.type,
+                options: (f.options as unknown as SelectOption[] | null) ?? null,
+              }))}
+            />
+          )}
         </div>
       </main>
     </>

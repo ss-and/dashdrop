@@ -1,35 +1,20 @@
 /**
- * ホーム — the workspace's front door.
+ * ホーム — the workspace's front door, in three blocks:
  *
- * Three layers, top to bottom:
- *   1. a KPI band summarising the customer database (顧客数 / 商談金額 …),
- *   2. a tab strip: 「サマリー」 plus every saved dashboard, driven by the URL
- *      (`/home?tab=<dashboardId>`) so tabs are shareable and only the selected
- *      dashboard is computed,
- *   3. the サマリー body — a Salesforce-style list view per CRM object with
- *      hyperlinked rows — and the imported files strip.
+ *   1. 今日の数字 — at most four KPIs, the first one the band's subject,
+ *   2. スプレッドシート — 顧客データベース と 取り込んだファイル を、同じ「行」で,
+ *   3. ダッシュボード — 保存済みダッシュボードへのリンク一覧。
  *
+ * 中身（表・分析）はすべて 1 クリック先にあるので、ホームは入口に徹する。
  * Server component: everything is loaded with workspace-scoped Prisma queries.
  */
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { CRM_OBJECTS, type CrmObject } from "@/lib/crm-objects";
-import {
-  resolveCollectionRecords,
-  type EngineCollection,
-} from "@/lib/relations";
-import { loadDashboardCollections } from "@/lib/apply-template";
-import { computeDashboard } from "@/lib/aggregate";
-import type { WidgetSpec } from "@/lib/widgets";
+import { CRM_OBJECTS, CRM_SLUGS } from "@/lib/crm-objects";
 import type { SelectOption } from "@/lib/field-types";
 import { Topbar } from "@/components/app/Topbar";
-import { NavIcon } from "@/components/app/icons";
-import { HelpTip } from "@/components/ui/HelpTip";
-import { DashboardGrid } from "@/components/dashboard/DashboardGrid";
 import { GettingStarted } from "@/components/help/GettingStarted";
-import { HomeTabs } from "@/components/home/HomeTabs";
 import { SummaryBand, type SummaryTile } from "@/components/home/SummaryBand";
 import {
   RevenueSummary,
@@ -37,14 +22,12 @@ import {
   type RevenueStep,
 } from "@/components/home/RevenueSummary";
 import {
-  CrmSection,
-  type CrmColumn,
-  type CrmObjectView,
-} from "@/components/home/CrmSection";
-import { FilesStrip } from "@/components/home/FilesStrip";
+  SpreadsheetSection,
+  type SheetEntry,
+  type SheetGroup,
+} from "@/components/home/SpreadsheetSection";
+import { DashboardSection } from "@/components/home/DashboardSection";
 import { SetupCrmButton } from "@/components/home/SetupCrmButton";
-
-const LIST_ROWS = 5;
 
 function toNumber(v: unknown): number {
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
@@ -59,63 +42,62 @@ function yen(n: number): string {
   return `¥${Math.round(n).toLocaleString()}`;
 }
 
-/** The field key that labels a record of this object (its 主キー). */
-function primaryKeyOf(obj: CrmObject): string {
-  return (obj.fields.find((f) => f.required) ?? obj.fields[0]).key;
-}
-
-export default async function HomePage({
-  searchParams,
-}: {
-  searchParams: Promise<{ tab?: string }>;
-}) {
+export default async function HomePage() {
   const user = await getSession();
   if (!user) redirect("/login");
 
-  const { tab } = await searchParams;
   const workspaceId = user.workspace.id;
 
   /* ------------------------------ base loading ----------------------------- */
 
-  const [crmCollections, dashboards, workbooks] = await Promise.all([
-    db.collection.findMany({
-      where: { workspaceId, slug: { in: CRM_OBJECTS.map((o) => o.slug) } },
-      include: {
-        fields: { orderBy: { position: "asc" } },
-        _count: { select: { records: true } },
-      },
-    }),
-    db.dashboard.findMany({
-      where: { workspaceId },
-      orderBy: [{ position: "asc" }, { createdAt: "asc" }],
-      select: { id: true, name: true, icon: true },
-    }),
-    db.workbook.findMany({
-      where: { workspaceId },
-      orderBy: [{ position: "asc" }, { createdAt: "asc" }],
-      select: {
-        id: true,
-        name: true,
-        _count: { select: { collections: true } },
-      },
-    }),
-  ]);
+  const [crmCollections, otherCollections, dashboards, workbooks] =
+    await Promise.all([
+      db.collection.findMany({
+        where: { workspaceId, slug: { in: CRM_SLUGS } },
+        include: {
+          fields: { orderBy: { position: "asc" } },
+          _count: { select: { records: true } },
+        },
+      }),
+      db.collection.findMany({
+        where: { workspaceId, slug: { notIn: CRM_SLUGS } },
+        orderBy: { position: "asc" },
+        select: {
+          id: true,
+          name: true,
+          icon: true,
+          workbookId: true,
+          _count: { select: { records: true } },
+        },
+      }),
+      db.dashboard.findMany({
+        where: { workspaceId },
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+        select: { id: true, name: true, icon: true },
+      }),
+      db.workbook.findMany({
+        where: { workspaceId },
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+        select: {
+          id: true,
+          name: true,
+          _count: { select: { collections: true } },
+        },
+      }),
+    ]);
 
   type CrmCollection = (typeof crmCollections)[number];
   const bySlug = new Map<string, CrmCollection>(
     crmCollections.map((c) => [c.slug, c]),
   );
-  const hasCrm = crmCollections.length > 0;
 
   const accounts = bySlug.get("accounts");
-  const contacts = bySlug.get("contacts");
   const opportunities = bySlug.get("opportunities");
   const invoices = bySlug.get("invoices");
-  const activities = bySlug.get("activities");
 
-  /* --------------------------------- KPIs ---------------------------------- */
+  /* --------------------------------- 商談 ---------------------------------- */
 
-  // 商談金額はレコードの JSON に入っているため、行を読んでアプリ側で集計する。
+  // 金額はレコードの JSON に入っているため、行を読んでアプリ側で集計する。
   const oppRecords = opportunities
     ? await db.record.findMany({
         where: { collectionId: opportunities.id },
@@ -142,8 +124,6 @@ export default async function HomePage({
 
   /* ----------------------- 請求書 — 請求と入金の集計 ------------------------ */
 
-  // 入金状況ごとの件数と金額。ステータスの表示名・色は、実際に作成された
-  // フィールドの選択肢（無ければ CRM 定義）から引くので、名称変更にも追従する。
   const invoiceRecords = invoices
     ? await db.record.findMany({
         where: { collectionId: invoices.id },
@@ -172,12 +152,6 @@ export default async function HomePage({
   /** 未入金 — 送付済みで、まだ入金されていない分（下書きは含めない）。 */
   const unpaidAmount = issuedStat.amount + overdueStat.amount;
   const unpaidCount = issuedStat.count + overdueStat.count;
-  /**
-   * 請求済み — 実際に相手に出した請求の総額。下書きは「まだ出していない」ので
-   * 除外し、入金済みは「出したうえで回収できた」分なので含める。
-   */
-  const billedAmount = unpaidAmount + paidStat.amount;
-  const billedCount = unpaidCount + paidStat.count;
 
   const invoiceStatusOptions: SelectOption[] = (() => {
     const stored = invoices?.fields.find((f) => f.key === "status");
@@ -227,296 +201,138 @@ export default async function HomePage({
     })
     .filter((r) => r.count > 0);
 
-  const now = new Date();
-  const monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  /* ------------------------------ A) 今日の数字 ----------------------------- */
 
-  const activityRecords = activities
-    ? await db.record.findMany({
-        where: { collectionId: activities.id },
-        select: { data: true, createdAt: true },
-      })
-    : [];
-  const activitiesThisMonth = activityRecords.filter((r) => {
-    const d = (r.data as Record<string, unknown>) ?? {};
-    const date = d.date;
-    if (typeof date === "string" && date) return date.startsWith(monthPrefix);
-    return r.createdAt >= monthStart && r.createdAt < nextMonthStart;
-  }).length;
-
-  const tiles: SummaryTile[] = [];
-  if (accounts) {
-    tiles.push({
-      key: "accounts",
-      label: "顧客数",
-      value: accounts._count.records.toLocaleString(),
-      href: `/c/${accounts.id}`,
-    });
-  }
+  // オーナーがアプリを開く理由になる数字だけ。存在するものから最大 4 つ、
+  // 先頭がヒーロー（幅も文字も大きい）。
+  const candidates: SummaryTile[] = [];
   if (opportunities) {
-    tiles.push({
-      key: "opportunities",
-      label: "商談数",
-      value: opportunities._count.records.toLocaleString(),
-      href: `/c/${opportunities.id}`,
-    });
-    tiles.push({
+    candidates.push({
       key: "pipeline",
       label: "進行中の商談金額",
       value: yen(openAmount),
       hint: `${openCount.toLocaleString()} 件`,
       href: `/c/${opportunities.id}`,
     });
-    tiles.push({
+    candidates.push({
       key: "won",
       label: "受注金額",
       value: yen(wonAmount),
+      hint: `${wonCount.toLocaleString()} 件`,
       href: `/c/${opportunities.id}`,
     });
   }
   if (invoices) {
-    tiles.push({
-      key: "invoiced",
-      label: "請求済み金額",
-      value: yen(billedAmount),
-      hint: `${billedCount.toLocaleString()} 件`,
-      href: `/c/${invoices.id}`,
-    });
-    tiles.push({
-      key: "paid",
-      label: "入金済み金額",
-      value: yen(paidStat.amount),
-      hint: `${paidStat.count.toLocaleString()} 件`,
-      href: `/c/${invoices.id}`,
-    });
-    tiles.push({
+    candidates.push({
       key: "unpaid",
       label: "未入金",
       value: yen(unpaidAmount),
       hint:
         overdueStat.count > 0
           ? `うち期限超過 ${overdueStat.count.toLocaleString()} 件`
-          : undefined,
+          : `${unpaidCount.toLocaleString()} 件`,
       href: `/c/${invoices.id}`,
     });
   }
-  if (contacts) {
-    tiles.push({
-      key: "contacts",
-      label: "担当者数",
-      value: contacts._count.records.toLocaleString(),
-      href: `/c/${contacts.id}`,
+  if (accounts) {
+    candidates.push({
+      key: "accounts",
+      label: "顧客数",
+      value: accounts._count.records.toLocaleString(),
+      href: `/c/${accounts.id}`,
     });
   }
-  if (activities) {
-    tiles.push({
-      key: "activities",
-      label: "今月の活動数",
-      value: activitiesThisMonth.toLocaleString(),
-      href: `/c/${activities.id}`,
-    });
-  }
+  const tiles = candidates.slice(0, 4);
 
-  /* ------------------------------- tab routing ----------------------------- */
+  /* --------------------------- B) スプレッドシート -------------------------- */
 
-  const activeDashboard =
-    tab && tab !== "summary" ? dashboards.find((d) => d.id === tab) : undefined;
-  const activeTab = activeDashboard ? activeDashboard.id : "summary";
+  const crmEntries: SheetEntry[] = CRM_OBJECTS.flatMap((obj) => {
+    const c = bySlug.get(obj.slug);
+    if (!c) return [];
+    return [
+      {
+        id: c.id,
+        name: c.name,
+        icon: c.icon,
+        meta: `${c._count.records.toLocaleString()} 件`,
+        href: `/c/${c.id}`,
+      },
+    ];
+  });
 
-  // Only the selected dashboard is computed, so the page stays fast.
-  let computed: Awaited<ReturnType<typeof computeDashboard>> = [];
-  if (activeDashboard) {
-    const record = await db.dashboard.findFirst({
-      where: { id: activeDashboard.id, workspaceId },
-      select: { collectionSlugs: true, layout: true, description: true },
-    });
-    if (record) {
-      const slugs = Array.isArray(record.collectionSlugs)
-        ? record.collectionSlugs.filter((s): s is string => typeof s === "string")
-        : [];
-      const layout = (record.layout as WidgetSpec[]) ?? [];
-      const map = await loadDashboardCollections(workspaceId, slugs);
-      computed = computeDashboard(layout, map);
-    }
-  }
+  const fileEntries: SheetEntry[] = workbooks.map((w) => ({
+    id: w.id,
+    name: w.name,
+    meta: `${w._count.collections.toLocaleString()} シート`,
+    href: `/f/${w.id}`,
+    folder: true,
+  }));
 
-  /* --------------------------- CRM list views (サマリー) --------------------- */
+  const looseEntries: SheetEntry[] = otherCollections
+    .filter((c) => !c.workbookId)
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      icon: c.icon,
+      meta: `${c._count.records.toLocaleString()} 件`,
+      href: `/c/${c.id}`,
+    }));
 
-  const views: CrmObjectView[] = [];
-  if (!activeDashboard) {
-    for (const obj of CRM_OBJECTS) {
-      const collection = bySlug.get(obj.slug);
-      if (!collection) continue;
-
-      const fieldByKey = new Map(collection.fields.map((f) => [f.key, f]));
-      const columns: CrmColumn[] = [];
-      for (const key of obj.listColumns) {
-        const f = fieldByKey.get(key);
-        if (!f) continue;
-        const config = (f.config ?? null) as {
-          targetCollectionId?: string;
-        } | null;
-        columns.push({
-          key: f.key,
-          name: f.name,
-          type: f.type,
-          options: (f.options as SelectOption[] | null) ?? null,
-          targetCollectionId: config?.targetCollectionId ?? null,
-        });
-      }
-
-      const records = await db.record.findMany({
-        where: { collectionId: collection.id },
-        orderBy: { createdAt: "desc" },
-        take: LIST_ROWS,
-        select: { id: true, data: true },
-      });
-
-      const resolved = await resolveCollectionRecords(
-        workspaceId,
-        collection as unknown as EngineCollection,
-        records.map((r) => ({
-          id: r.id,
-          data: (r.data as Record<string, unknown>) ?? {},
-        })),
-      );
-
-      views.push({
-        slug: obj.slug,
-        name: collection.name,
-        icon: collection.icon,
-        description: obj.description,
-        collectionId: collection.id,
-        count: collection._count.records,
-        primaryKey: primaryKeyOf(obj),
-        columns,
-        rows: resolved.records.map((r) => ({
-          id: r.id,
-          values: { ...r.data, ...r.computed },
-        })),
-        relationLabels: resolved.relationLabels,
-      });
-    }
-  }
+  const groups: SheetGroup[] = [
+    { key: "crm", label: "顧客データベース", entries: crmEntries },
+    { key: "files", label: "取り込んだファイル", entries: fileEntries },
+    { key: "loose", label: "その他", entries: looseEntries },
+  ];
 
   /* --------------------------------- render -------------------------------- */
 
   const crmHref = accounts ? `/c/${accounts.id}` : null;
-  const isNewWorkspace = !hasCrm || (accounts?._count.records ?? 0) === 0;
+  const crmRecords = crmCollections.reduce(
+    (sum, c) => sum + c._count.records,
+    0,
+  );
+  /** 本当に新しいワークスペース — CRM のデータも、取り込んだファイルも無い。 */
+  const isNewWorkspace =
+    crmRecords === 0 && workbooks.length === 0 && otherCollections.length === 0;
 
   return (
     <>
       <Topbar user={user} title="ホーム" />
       <main className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto max-w-6xl space-y-6">
-          {/* Header — the workspace name is the page's subject; it does not need
-              a sentence underneath explaining what a home page is. */}
-          <div className="flex items-center gap-1.5">
-            <h2 className="text-xl font-semibold text-ink">
-              {user.workspace.name}
-            </h2>
-            <HelpTip label="ホームの見方">
-              上段は全体のサマリー、タブで保存済みダッシュボードに切り替えられます。一覧の名前をクリックすると詳細が開きます。
-            </HelpTip>
-          </div>
+        <div className="mx-auto max-w-6xl space-y-8">
+          <h2 className="text-xl font-semibold text-ink">
+            {user.workspace.name}
+          </h2>
 
-          {/* A) サマリー band — or, before the database exists, the two ways in.
-              These are mutually exclusive: the old page rendered the onboarding
-              block AND a second panel making the same offer in more words. */}
-          {hasCrm ? (
-            <SummaryBand tiles={tiles} />
-          ) : (
-            !activeDashboard && (
-              <GettingStarted
-                crmHref={crmHref}
-                crmAction={<SetupCrmButton size="sm" variant="secondary" />}
-              />
-            )
+          {/* A) 今日の数字 */}
+          {tiles.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="section-title">今日の数字</h2>
+              <SummaryBand tiles={tiles} />
+              {/* 売上サマリーは、請求書に実データがあるときだけ。空の枠は置かない。 */}
+              {invoices && invoiceRecords.length > 0 && (
+                <RevenueSummary
+                  steps={revenueSteps}
+                  statuses={revenueStatuses}
+                  invoicesHref={`/c/${invoices.id}`}
+                />
+              )}
+            </div>
           )}
 
-          {/* B) タブ */}
-          <div className="space-y-5">
-            <HomeTabs
-              tabs={dashboards.map((d) => ({
-                id: d.id,
-                name: d.name,
-                icon: d.icon,
-              }))}
-              active={activeTab}
+          {/* B) スプレッドシート */}
+          <SpreadsheetSection groups={groups} />
+
+          {/* C) ダッシュボード */}
+          <DashboardSection dashboards={dashboards} />
+
+          {/* はじめかた — 何も無いワークスペースのときだけ。 */}
+          {isNewWorkspace && (
+            <GettingStarted
+              crmHref={crmHref}
+              crmAction={<SetupCrmButton size="sm" variant="secondary" />}
             />
-
-            {activeDashboard ? (
-              <div className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="section-title">{activeDashboard.name}</h3>
-                  <Link
-                    href={`/d/${activeDashboard.id}`}
-                    className="inline-flex items-center gap-1 text-sm font-medium text-khaki-700 hover:underline"
-                  >
-                    このダッシュボードを開く
-                    <NavIcon name="chevron" className="h-3 w-3" />
-                  </Link>
-                </div>
-                {computed.length === 0 ? (
-                  <p className="py-12 text-center text-sm text-ink-muted">
-                    表示できるウィジェットがありません。
-                  </p>
-                ) : (
-                  <DashboardGrid computed={computed} />
-                )}
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {dashboards.length === 0 && (
-                  <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-muted">
-                    保存したダッシュボードはまだありません。
-                    <Link
-                      href="/dashboards"
-                      className="font-medium text-khaki-700 hover:underline"
-                    >
-                      ダッシュボードを追加
-                    </Link>
-                  </p>
-                )}
-
-                {/* B2) 売上サマリー — 商談 → 請求書 → 入金 */}
-                {invoices && (
-                  <RevenueSummary
-                    steps={revenueSteps}
-                    statuses={revenueStatuses}
-                    invoicesHref={`/c/${invoices.id}`}
-                  />
-                )}
-
-                {/* C) 顧客データベース */}
-                {views.length > 0 ? (
-                  <CrmSection views={views} />
-                ) : (
-                  hasCrm && (
-                    <p className="text-sm text-ink-muted">
-                      顧客データベースのオブジェクトが見つかりませんでした。
-                    </p>
-                  )
-                )}
-
-                {/* C2) はじめかた — 一度データが育ったら、この案内は不要になる。
-                    以前は常時2箇所に出ていたため、同じ説明を2度読ませていた。 */}
-                {hasCrm && isNewWorkspace && (
-                  <GettingStarted crmHref={crmHref} />
-                )}
-
-                {/* D) 取り込んだファイル */}
-                <FilesStrip
-                  workbooks={workbooks.map((w) => ({
-                    id: w.id,
-                    name: w.name,
-                    sheetCount: w._count.collections,
-                  }))}
-                />
-              </div>
-            )}
-          </div>
+          )}
         </div>
       </main>
     </>
