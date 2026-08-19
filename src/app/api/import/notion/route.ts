@@ -25,10 +25,19 @@ import {
   notionFields,
   databaseTitle,
   readPropertyValue,
+  truncationMessage,
   DEFAULT_MAX_ROWS,
+  NOTION_IMPORT_BUDGET_MS,
+  type NotionQueryResult,
 } from "@/lib/notion";
 
 const BATCH_SIZE = 500;
+
+/**
+ * Notionの読み取り予算（40秒）＋行の書き込み分。予算を先に使い切れば日本語の
+ * エラー／警告を返せるが、プラットフォーム側に切られると利用者には何も残らない。
+ */
+export const maxDuration = 60;
 
 const bodySchema = z.object({
   databaseId: z.string().min(1, "データベースを選択してください。"),
@@ -51,12 +60,15 @@ export const POST = withAuth(async (req, { user }) => {
   const plan = getPlan(user.workspace.plan);
 
   // --- Read Notion: schema first, then rows ---
+  // 全体の締め切り。1リクエスト15秒×30往復＝最悪450秒を防ぐ唯一の歯止め。
+  const deadlineAt = Date.now() + NOTION_IMPORT_BUDGET_MS;
   let database: Record<string, unknown>;
-  let pages: Record<string, unknown>[];
+  let query: NotionQueryResult;
   try {
-    database = await fetchDatabase(token, body.databaseId);
-    pages = await queryDatabase(token, body.databaseId, {
+    database = await fetchDatabase(token, body.databaseId, { deadlineAt });
+    query = await queryDatabase(token, body.databaseId, {
       maxRows: Math.min(DEFAULT_MAX_ROWS, plan.limits.recordsPerCollection + 1),
+      deadlineAt,
     });
     await recordResult(user.workspace.id, "notion", true);
   } catch (err) {
@@ -65,6 +77,12 @@ export const POST = withAuth(async (req, { user }) => {
     await recordResult(user.workspace.id, "notion", false, message);
     throw err instanceof ApiError ? err : new ApiError(message, 502);
   }
+
+  const pages = query.pages;
+  // 打ち切りは「警告付きの成功」。ここでエラーにすると上限超えの利用者は
+  // 何も取り込めなくなるので、代わりにAPIレスポンスと操作ログの両方に載せて
+  // 「完全に取り込めた」と誤解させない。
+  const truncatedMessage = truncationMessage(query);
 
   const fields = notionFields(database);
   if (fields.length === 0) {
@@ -183,12 +201,45 @@ export const POST = withAuth(async (req, { user }) => {
     // All-or-nothing: drop the collection (fields/records cascade) first — the
     // workbook relation is SetNull, so deleting the workbook alone would leave
     // a half-imported orphan spreadsheet behind.
+    //
+    // 順序は「保証」でなければ意味がない。以前は両方 .catch(() => {}) で、
+    // Workbook の削除も無条件に走っていた。Collection の削除だけ失敗すると
+    // 「失敗しました」と伝えた裏で中途半端なシートが独立して残る。
+    let rolledBack = true;
     if (createdCollectionId) {
-      await db.collection
-        .delete({ where: { id: createdCollectionId } })
-        .catch(() => {});
+      try {
+        await db.collection.delete({ where: { id: createdCollectionId } });
+      } catch (cleanupErr) {
+        rolledBack = false;
+        console.error(
+          `Notion import rollback: collection ${createdCollectionId} could not be deleted; workbook ${workbook.id} kept so it is not orphaned`,
+          cleanupErr,
+        );
+      }
     }
-    await db.workbook.delete({ where: { id: workbook.id } }).catch(() => {});
+    if (rolledBack) {
+      try {
+        await db.workbook.delete({ where: { id: workbook.id } });
+      } catch (cleanupErr) {
+        // Collection は消えているので孤児は残らない。空の Workbook のみ。
+        rolledBack = false;
+        console.error(
+          `Notion import rollback: empty workbook ${workbook.id} could not be deleted`,
+          cleanupErr,
+        );
+      }
+    }
+
+    if (!rolledBack) {
+      // 片付けきれなかったことは黙らない。利用者にも管理者にも伝える。
+      const base =
+        err instanceof ApiError ? err.message : "インポート中にエラーが発生しました";
+      console.error("Notion import failed and rollback was incomplete:", err);
+      throw new ApiError(
+        `${base}（取り込み途中のデータを削除できませんでした。スプレッドシート一覧をご確認ください）`,
+        err instanceof ApiError ? err.status : 500,
+      );
+    }
     if (err instanceof ApiError) throw err;
     console.error("Notion import failed:", err);
     throw new ApiError("インポート中にエラーが発生しました", 500);
@@ -203,6 +254,10 @@ export const POST = withAuth(async (req, { user }) => {
     fileName: collectionName,
     sheetNames: [collectionName],
     skipped,
+    // 監査ログを見ただけで「全行入ったのか」が分かるようにする。
+    truncated: query.truncated,
+    truncationReason: query.stoppedBy,
+    ...(truncatedMessage ? { truncationMessage: truncatedMessage } : {}),
   });
 
   return ok({
@@ -211,6 +266,10 @@ export const POST = withAuth(async (req, { user }) => {
     imported: pages.length,
     skipped,
     sheetsImported: 1,
+    truncated: query.truncated,
+    truncationReason: query.stoppedBy,
+    // UIはこの文言をそのまま表示する。null なら全行取り込めている。
+    warning: truncatedMessage,
     collections: [
       { id: collectionId, name: collectionName, imported: pages.length, skipped },
     ],

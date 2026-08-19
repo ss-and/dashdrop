@@ -49,6 +49,13 @@ interface NotionDatabase {
   url: string;
 }
 
+/** /api/import/notion の成功ペイロードのうち、この画面が使う部分。 */
+interface NotionImportResult {
+  collectionId?: string;
+  /** 行が途中で打ち切られたときの日本語の警告。全行取り込めていれば null。 */
+  warning?: string | null;
+}
+
 const ALLOWED = ".xlsx,.xls,.csv";
 
 function renderCell(value: unknown): string {
@@ -83,6 +90,14 @@ export function ImportWizard() {
   const [notionLoading, setNotionLoading] = useState(false);
   const [notionImporting, setNotionImporting] = useState(false);
   const [notionNotConnected, setNotionNotConnected] = useState(false);
+  // 部分的にしか取り込めなかったときの警告と、その結果できたシートのID。
+  const [notionWarning, setNotionWarning] = useState<string | null>(null);
+  const [notionResultId, setNotionResultId] = useState<string | null>(null);
+
+  // Notionの取り込み中は他のソースを触らせない。ファイルやGoogle Sheetsを
+  // 開始するとmapステップへ移るが、そのあと解決したNotion取り込みが
+  // router.pushで画面を奪い、入力内容が説明なく消えるため。
+  const notionBusy = notionImporting;
 
   const step: "upload" | "map" = sheets ? "map" : "upload";
   const selectedCount = sheets?.filter((s) => s.selected).length ?? 0;
@@ -97,6 +112,8 @@ export function ImportWizard() {
     setNotionDbId("");
     setNotionName("");
     setNotionNotConnected(false);
+    setNotionWarning(null);
+    setNotionResultId(null);
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -190,7 +207,9 @@ export function ImportWizard() {
         else setError(body?.error ?? "Notionのデータベース一覧を取得できませんでした");
         return;
       }
-      const list = (body.data.databases ?? []) as NotionDatabase[];
+      // ok:true でも data ごと欠けている envelope があり得る（TypeError防止）。
+      const data = body.data as { databases?: NotionDatabase[] } | undefined;
+      const list = Array.isArray(data?.databases) ? data.databases : [];
       setNotionDbs(list);
       if (list.length > 0) {
         setNotionDbId(list[0].id);
@@ -207,6 +226,8 @@ export function ImportWizard() {
   async function runNotionImport() {
     if (!notionDbId) return;
     setError(null);
+    setNotionWarning(null);
+    setNotionResultId(null);
     setSource("notion");
     setNotionImporting(true);
     try {
@@ -223,7 +244,21 @@ export function ImportWizard() {
         setError(body?.error ?? "Notionからの取り込みに失敗しました");
         return;
       }
-      router.push(`/c/${body.data.collectionId}`);
+      const data = body.data as NotionImportResult | undefined;
+      const collectionId = data?.collectionId;
+      if (!collectionId) {
+        setError("取り込み結果を受け取れませんでした。スプレッドシート一覧をご確認ください。");
+        return;
+      }
+      if (data?.warning) {
+        // 一部しか取り込めていない場合に自動遷移すると警告ごと消え、利用者は
+        // 「全行入った」と誤解する。遷移するかどうかは本人に決めてもらう。
+        setNotionWarning(data.warning);
+        setNotionResultId(collectionId);
+        router.refresh();
+        return;
+      }
+      router.push(`/c/${collectionId}`);
       router.refresh();
     } catch {
       setError("通信エラーが発生しました。しばらくして再度お試しください。");
@@ -233,12 +268,14 @@ export function ImportWizard() {
   }
 
   function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    if (notionBusy) return;
     const picked = e.target.files?.[0];
     if (picked) void handleFile(picked);
   }
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragging(false);
+    if (notionBusy) return;
     const dropped = e.dataTransfer.files?.[0];
     if (dropped) void handleFile(dropped);
   }
@@ -325,16 +362,20 @@ export function ImportWizard() {
               複数シート（タブ）がある場合は、それぞれを別のスプレッドシートとして取り込めます。
             </p>
             <div
-              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+              onDragOver={(e) => { e.preventDefault(); if (!notionBusy) setDragging(true); }}
               onDragLeave={() => setDragging(false)}
               onDrop={onDrop}
-              onClick={() => inputRef.current?.click()}
+              onClick={() => { if (!notionBusy) inputRef.current?.click(); }}
               role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") inputRef.current?.click(); }}
+              tabIndex={notionBusy ? -1 : 0}
+              aria-disabled={notionBusy}
+              onKeyDown={(e) => { if (!notionBusy && (e.key === "Enter" || e.key === " ")) inputRef.current?.click(); }}
               className={cn(
-                "flex cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed px-6 py-12 text-center transition-colors",
-                dragging ? "border-khaki-500 bg-khaki-50" : "border-ink-line bg-paper-sunken hover:bg-khaki-50/60",
+                "flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed px-6 py-12 text-center transition-colors",
+                notionBusy
+                  ? "pointer-events-none cursor-not-allowed border-ink-line bg-paper-sunken opacity-50"
+                  : "cursor-pointer",
+                !notionBusy && (dragging ? "border-khaki-500 bg-khaki-50" : "border-ink-line bg-paper-sunken hover:bg-khaki-50/60"),
               )}
             >
               <span className="flex h-12 w-12 items-center justify-center rounded-full bg-khaki-100 text-khaki-700">
@@ -348,7 +389,7 @@ export function ImportWizard() {
                   <p className="text-xs text-ink-muted">またはクリックして選択（.xlsx / .xls / .csv、15MBまで）</p>
                 </>
               )}
-              <input ref={inputRef} type="file" accept={ALLOWED} className="hidden" onChange={onPick} />
+              <input ref={inputRef} type="file" accept={ALLOWED} className="hidden" onChange={onPick} disabled={notionBusy} />
             </div>
 
             <div className="mt-5 rounded-lg border border-ink-line bg-paper-raised p-4">
@@ -365,16 +406,16 @@ export function ImportWizard() {
                 <Input
                   value={gsheetsUrl}
                   onChange={(e) => setGsheetsUrl(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleGsheets(); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !notionBusy) { e.preventDefault(); void handleGsheets(); } }}
                   placeholder="https://docs.google.com/spreadsheets/d/…"
                   className="flex-1"
                   inputMode="url"
-                  disabled={gsheetsLoading}
+                  disabled={gsheetsLoading || notionBusy}
                 />
                 <Button
                   variant="secondary"
                   onClick={() => void handleGsheets()}
-                  disabled={gsheetsLoading || !gsheetsUrl.trim()}
+                  disabled={gsheetsLoading || notionBusy || !gsheetsUrl.trim()}
                 >
                   {gsheetsLoading ? "読み込み中…" : "読み込む"}
                 </Button>
@@ -397,16 +438,55 @@ export function ImportWizard() {
                 </div>
               </div>
 
-              {notionNotConnected ? (
-                <p className="text-sm text-ink-muted">
-                  <a
-                    href="/settings"
-                    className="text-khaki-700 underline underline-offset-2 hover:text-khaki-800"
-                  >
-                    Notionを接続してください
-                  </a>
-                  （設定画面でインテグレーション トークンを登録します）
+              {notionWarning && (
+                <div
+                  role="status"
+                  className="mb-3 rounded border border-warning/30 bg-warning-soft px-3 py-2 text-sm text-warning"
+                >
+                  <p>{notionWarning}</p>
+                  {notionResultId && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="mt-2"
+                      onClick={() => {
+                        router.push(`/c/${notionResultId}`);
+                        router.refresh();
+                      }}
+                    >
+                      取り込んだスプレッドシートを開く
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              {notionBusy && (
+                <p className="mb-3 text-xs text-ink-muted">
+                  Notionから取り込み中は、ファイルとGoogle スプレッドシートの読み込みを一時的に停止しています。
                 </p>
+              )}
+
+              {notionNotConnected ? (
+                // 接続前でも「共有し直したので読み直したい」が必ず起きる。
+                // 再読み込みの導線がないと画面ごとリロードするしかなかった。
+                <div className="space-y-2">
+                  <p className="text-sm text-ink-muted">
+                    <a
+                      href="/settings"
+                      className="text-khaki-700 underline underline-offset-2 hover:text-khaki-800"
+                    >
+                      Notionを接続してください
+                    </a>
+                    （設定画面でインテグレーション トークンを登録します）
+                  </p>
+                  <Button
+                    variant="secondary"
+                    onClick={() => void loadNotionDatabases()}
+                    disabled={notionLoading}
+                  >
+                    {notionLoading ? "読み込み中…" : "再読み込み"}
+                  </Button>
+                </div>
               ) : notionDbs === null ? (
                 <Button
                   variant="secondary"
@@ -416,9 +496,20 @@ export function ImportWizard() {
                   {notionLoading ? "読み込み中…" : "データベースを読み込む"}
                 </Button>
               ) : notionDbs.length === 0 ? (
-                <p className="text-sm text-ink-muted">
-                  表示できるデータベースがありません。Notionでページを開き、「…」→「接続」からインテグレーションに共有してください。
-                </p>
+                // 共有し直した直後に押せるボタンがないと、案内どおり操作しても
+                // 画面をリロードするまで反映されない。
+                <div className="space-y-2">
+                  <p className="text-sm text-ink-muted">
+                    表示できるデータベースがありません。Notionでページを開き、「…」→「接続」からインテグレーションに共有してください。
+                  </p>
+                  <Button
+                    variant="secondary"
+                    onClick={() => void loadNotionDatabases()}
+                    disabled={notionLoading}
+                  >
+                    {notionLoading ? "読み込み中…" : "再読み込み"}
+                  </Button>
+                </div>
               ) : (
                 <div className="space-y-3">
                   <div>

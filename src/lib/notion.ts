@@ -26,6 +26,15 @@ export const NOTION_PAGE_SIZE = 100;
 export const DEFAULT_MAX_ROWS = 2000;
 /** Never issue more than this many query requests, whatever maxRows says. */
 export const MAX_QUERY_PAGES = 30;
+/**
+ * 1回のインポートでNotionの読み取りに使ってよい合計時間。
+ *
+ * 最悪ケースは MAX_QUERY_PAGES × TIMEOUT_MS = 450秒で、これは1リクエストが
+ * 数分間ハングし得るということ。ページ間でこの締め切りを見て打ち切ることで、
+ * 病的なデータベースでもリクエストが開きっぱなしにならないようにする。
+ * ルート側の `maxDuration` はこの予算＋DB書き込み分を見込んだ値にする。
+ */
+export const NOTION_IMPORT_BUDGET_MS = 40_000;
 
 /** Placeholder for a database (or select option) with no name. */
 export const UNTITLED = "無題";
@@ -105,16 +114,65 @@ function asString(v: unknown): string | null {
   return typeof v === "string" && v.trim() !== "" ? v : null;
 }
 
+/** 接続がタイムアウト/中断されたときの共通エラー。 */
+function timeoutError(): ApiError {
+  return new ApiError(
+    "Notionへの接続がタイムアウトしました。時間をおいて再度お試しください。",
+    504,
+  );
+}
+
+/** インポート全体の制限時間を使い切ったときのエラー。 */
+function budgetError(): ApiError {
+  return new ApiError(
+    "Notionからの読み込みが制限時間を超えました。データベースの行数を減らすか、時間をおいて再度お試しください。",
+    504,
+  );
+}
+
 /**
- * One authenticated Notion request. Always time-limited; always returns a plain
- * object (a non-JSON body — Notion's HTML error pages, an empty 200 — becomes
- * `{}` rather than a parse exception).
+ * タイムアウト/中断由来か。`AbortSignal.timeout` は TimeoutError、明示的な
+ * abort は AbortError を投げる。どちらも生のDOM例外として利用者に見せない。
+ */
+function isAbortLike(err: unknown): boolean {
+  const name = err instanceof Error ? err.name : "";
+  return name === "TimeoutError" || name === "AbortError";
+}
+
+/**
+ * 本文が最後まで届いたうえでJSONではなかったか。
+ *
+ * `res.json()` の失敗を一律に握り潰すと「無音の成功」になる。HTMLエラーページや
+ * 空の200は SyntaxError で、本文は全部届いている＝「JSONではない」という情報が
+ * 得られたのだから `{}` として扱ってよい。逆にヘッダ受信後のタイムアウトや
+ * 切断は本文が途中までしか届いておらず、results が空に見えるだけ。ここを
+ * `{}` にすると30ページ中5ページ目のタイムアウトが「完了した部分インポート」に
+ * 化けるので、必ず例外として上げる。
+ */
+function isJsonSyntaxError(err: unknown): boolean {
+  return (
+    err instanceof SyntaxError ||
+    (err instanceof Error && err.name === "SyntaxError")
+  );
+}
+
+/**
+ * One authenticated Notion request. Always time-limited; a body that arrived
+ * intact but is not JSON (Notion's HTML error pages, an empty 200) becomes `{}`.
+ * A body that never finished arriving always throws — see `isJsonSyntaxError`.
+ *
+ * `deadlineAt` はインポート全体の締め切り（epoch ms）。指定されている場合、
+ * 1リクエストの制限時間は残り時間まで縮める。
  */
 async function notionFetch(
   token: string,
   path: string,
-  init: { method: "GET" | "POST"; body?: unknown },
+  init: { method: "GET" | "POST"; body?: unknown; deadlineAt?: number },
 ): Promise<Record<string, unknown>> {
+  const remaining =
+    init.deadlineAt === undefined ? TIMEOUT_MS : init.deadlineAt - Date.now();
+  if (remaining <= 0) throw budgetError();
+
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
@@ -126,18 +184,10 @@ async function notionFetch(
         Accept: "application/json",
       },
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(Math.min(TIMEOUT_MS, remaining)),
     });
   } catch (err) {
-    // AbortSignal.timeout rejects with a TimeoutError; an aborted request with
-    // an AbortError. Neither should reach the user as a raw DOM exception.
-    const name = err instanceof Error ? err.name : "";
-    if (name === "TimeoutError" || name === "AbortError") {
-      throw new ApiError(
-        "Notionへの接続がタイムアウトしました。時間をおいて再度お試しください。",
-        504,
-      );
-    }
+    if (isAbortLike(err)) throw timeoutError();
     throw new ApiError(
       "Notionへの接続に失敗しました。ネットワーク環境をご確認ください。",
       502,
@@ -146,11 +196,18 @@ async function notionFetch(
 
   if (!res.ok) throw notionError(res.status);
 
-  let json: unknown = null;
+  let json: unknown;
   try {
     json = await res.json();
-  } catch {
-    json = null;
+  } catch (err) {
+    if (isJsonSyntaxError(err)) return {};
+    if (isAbortLike(err)) throw timeoutError();
+    // undici は本文の途中切断を TypeError("terminated") で返す。JSONの構文
+    // エラーではない以上、中身が全部届いた保証はないので成功扱いにしない。
+    throw new ApiError(
+      "Notionからの応答が途中で切断されました。時間をおいて再度お試しください。",
+      502,
+    );
   }
   return isRecord(json) ? json : {};
 }
@@ -208,6 +265,7 @@ export async function listDatabases(
 export async function fetchDatabase(
   token: string,
   databaseId: string,
+  opts: { deadlineAt?: number } = {},
 ): Promise<Record<string, unknown>> {
   const id = String(databaseId ?? "").trim();
   if (!id) {
@@ -215,6 +273,7 @@ export async function fetchDatabase(
   }
   return notionFetch(token, `/databases/${encodeURIComponent(id)}`, {
     method: "GET",
+    deadlineAt: opts.deadlineAt,
   });
 }
 
@@ -224,17 +283,38 @@ export function databaseTitle(database: unknown): string {
   return plainText(database.title) || UNTITLED;
 }
 
+/** 行の取得を打ち切った理由。`complete` 以外は必ず利用者に伝える。 */
+export type NotionQueryStop = "complete" | "maxRows" | "maxPages" | "deadline";
+
+export interface NotionQueryResult {
+  /** 実際に取得できたページ（＝行）。 */
+  pages: Record<string, unknown>[];
+  /** データベースにまだ続きがあるのに打ち切ったか。 */
+  truncated: boolean;
+  /** どのブレーキが効いたか。 */
+  stoppedBy: NotionQueryStop;
+  /** このクエリに適用した実効の行上限。 */
+  limit: number;
+}
+
 /**
  * Every page in a database, following `next_cursor` until exhausted.
  *
- * Two independent brakes so one enormous database cannot hang a request:
- * `maxRows` (default 2000) and `MAX_QUERY_PAGES` (30 round-trips).
+ * Three independent brakes so one enormous database cannot hang a request:
+ * `maxRows` (default 2000)、`MAX_QUERY_PAGES`（30往復）、そして `deadlineAt`
+ * （インポート全体の制限時間）。
+ *
+ * 打ち切りは戻り値で必ず申告する。以前は行を返すだけだったので、5,000行の
+ * データベースが黙って2,000行になり、呼び出し側は「完了」としか伝えられなかった。
+ * 打ち切りを「エラー」ではなく「警告付きの成功」にしているのは、上限に当たった
+ * 利用者が何も取り込めなくなるより、取り込めた分＋明示的な警告のほうが行動
+ * できるため。ただし黙って成功にすることは許さない。
  */
 export async function queryDatabase(
   token: string,
   databaseId: string,
-  opts: { maxRows?: number } = {},
-): Promise<Record<string, unknown>[]> {
+  opts: { maxRows?: number; deadlineAt?: number } = {},
+): Promise<NotionQueryResult> {
   const id = String(databaseId ?? "").trim();
   if (!id) {
     throw new ApiError("データベースを選択してください。", 400);
@@ -246,6 +326,9 @@ export async function queryDatabase(
 
   const pages: Record<string, unknown>[] = [];
   let cursor: string | null = null;
+  // ループを抜けきった＝ページ上限。その場合は必ず続きが残っている。
+  let stoppedBy: NotionQueryStop = "maxPages";
+  let truncated = true;
 
   for (let page = 0; page < MAX_QUERY_PAGES; page++) {
     const body: Record<string, unknown> = {
@@ -256,22 +339,59 @@ export async function queryDatabase(
     const json: Record<string, unknown> = await notionFetch(
       token,
       `/databases/${encodeURIComponent(id)}/query`,
-      { method: "POST", body },
+      { method: "POST", body, deadlineAt: opts.deadlineAt },
     );
 
-    for (const row of asArray(json.results)) {
+    const results = asArray(json.results);
+    let consumed = 0;
+    for (const row of results) {
+      consumed += 1;
       if (isRecord(row)) pages.push(row);
       if (pages.length >= maxRows) break;
     }
-    if (pages.length >= maxRows) break;
 
-    const hasMore = json.has_more === true;
     const next = asString(json.next_cursor);
-    if (!hasMore || !next) break;
+    const hasMore = json.has_more === true && next !== null;
+
+    if (pages.length >= maxRows) {
+      stoppedBy = "maxRows";
+      // ちょうど上限で本当に終わっていた場合まで警告するとノイズになる。
+      truncated = consumed < results.length || hasMore;
+      break;
+    }
+    if (!hasMore) {
+      stoppedBy = "complete";
+      truncated = false;
+      break;
+    }
+    if (opts.deadlineAt !== undefined && Date.now() >= opts.deadlineAt) {
+      stoppedBy = "deadline";
+      truncated = true;
+      break;
+    }
     cursor = next;
   }
 
-  return pages;
+  return { pages, truncated, stoppedBy, limit: maxRows };
+}
+
+/**
+ * 打ち切りを利用者向けの日本語にする。完全に読み切れていれば null。
+ * 呼び出し側はこの文字列をAPIレスポンスと操作ログの両方に載せる。
+ */
+export function truncationMessage(result: NotionQueryResult): string | null {
+  if (!result.truncated) return null;
+  const rows = result.pages.length.toLocaleString();
+  switch (result.stoppedBy) {
+    case "maxRows":
+      return `1回の取り込みで読み込める上限（${result.limit.toLocaleString()}行）に達したため、先頭${rows}行のみ取り込みました。残りの行は取り込まれていません。`;
+    case "maxPages":
+      return `Notionへの問い合わせ回数の上限（${MAX_QUERY_PAGES}回）に達したため、先頭${rows}行のみ取り込みました。残りの行は取り込まれていません。`;
+    case "deadline":
+      return `Notionからの読み込みが制限時間に達したため、先頭${rows}行のみ取り込みました。残りの行は取り込まれていません。時間をおいて再度お試しください。`;
+    default:
+      return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
