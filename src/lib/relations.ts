@@ -523,6 +523,20 @@ export async function validateFieldConfig(
       typeof cfg.displayFieldKey === "string" && cfg.displayFieldKey
         ? cfg.displayFieldKey
         : (pickDisplayField(target.fields as unknown as EngineField[])?.key ?? undefined);
+    // 表示列に自動計算の列は選べない。チップのラベルはリンク先の「保存済みの
+    // データ」から引くので、計算列を指定すると全件が「（無題）」になる。
+    // 回帰: 画面側の候補が lookup / rollup 決め打ちで formula / vlookup を出して
+    // しまい、サーバも素通ししていた（pickDisplayField は元から計算列を除外して
+    // いるので、明示指定のときだけの穴だった）。
+    const displayField = displayFieldKey
+      ? target.fields.find((f) => f.key === displayFieldKey)
+      : undefined;
+    if (displayField && isComputedField(displayField.type)) {
+      throw new ApiError(
+        `「${displayField.name}」は自動計算の列なので、表示する列には使えません。文字や数値など、値が入力されている列を選んでください。`,
+        422,
+      );
+    }
     return { targetCollectionId, displayFieldKey, multiple: cfg.multiple === true };
   }
 
@@ -549,6 +563,19 @@ export async function validateFieldConfig(
     const tf = target.fields.find((f) => f.key === targetKey);
     if (!tf) {
       throw new ApiError("集計・参照する項目（リンク先の列）を選んでください。", 422);
+    }
+    // 解決時に読むのはリンク先の「保存済みの値」だけ（vlookup と同じく、これが
+    // A→B→A の循環を原理的に不可能にしている）。そのため自動計算の列を指すと、
+    // 保存は成功するのに値は永久に空のまま＝原因の分からない空列になる。
+    // 回帰: この分岐は列の存在しか見ておらず、vlookup 分岐（isComputedField で
+    // 弾いている）と食い違っていた。
+    if (isComputedField(tf.type)) {
+      throw new ApiError(
+        `「${tf.name}」は自動計算の列なので、${
+          type === "lookup" ? "ルックアップ" : "ロールアップ"
+        }の対象にできません。リンク先で値が入力されている列（文字・数値など）を選んでください。`,
+        422,
+      );
     }
     if (type === "rollup") {
       const op = String(cfg.op ?? "sum");

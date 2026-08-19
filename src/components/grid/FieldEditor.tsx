@@ -4,8 +4,12 @@
  * Add / edit a Field. Small centred modal: name, type, required, and — for
  * select / multiselect — an editable option list (label / value / colour).
  * Persists via POST (new) or PATCH (existing) to the fields endpoints.
+ *
+ * 表示上はダイアログなので、実装もダイアログにする（role / aria-modal / 見出しの
+ * 紐付け・フォーカスの出入り・Escape）。詳しくは下の FOCUSABLE_SELECTOR と
+ * useEffect のコメントを参照。
  */
-import { useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input, Label, Select } from "@/components/ui/Input";
 import { cn, toFieldKey } from "@/lib/utils";
@@ -61,6 +65,29 @@ const TONE_SWATCH: Record<string, string> = {
 
 interface OptionRow extends SelectOption {
   color: string;
+}
+
+/**
+ * ダイアログ内でフォーカスを受け取れる要素。フォーカストラップの端（先頭・末尾）を
+ * 求めるためだけに使う。`tabindex="-1"`（プログラムからのみフォーカスする要素、
+ * ダイアログ本体など）はタブ順に含めない。
+ */
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "summary",
+  '[tabindex]:not([tabindex="-1"])',
+].join(", ");
+
+/** root の中のフォーカス可能な要素を DOM 順（＝タブ順）で返す。 */
+function focusableIn(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (el) => !el.hasAttribute("hidden") && el.getAttribute("aria-hidden") !== "true",
+  );
 }
 
 export function FieldEditor({
@@ -138,6 +165,51 @@ export function FieldEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+
+  // 回帰: 見た目はモーダルなのに、role も aria-modal もフォーカス管理も無く、
+  // 閉じる手段は背景のクリックだけだった。そのため支援技術には「ダイアログが
+  // 開いた」ことが伝わらず、タブ移動は背後のグリッドへ抜け、キーボードだけでは
+  // 閉じられなかった。ここで開いた瞬間に中へフォーカスを移し、閉じたときは
+  // 開いたボタンへ戻す（戻さないとフォーカスが body に落ち、利用者は表のどこに
+  // いたのか分からなくなる）。
+  useEffect(() => {
+    // 呼び出し元（「＋項目を追加」ボタンなど）を控えてから中へ移す。入力欄の
+    // autoFocus に任せるとこの時点の activeElement が入力欄になってしまうので、
+    // フォーカスの初期移動もここで行う。
+    const opener = document.activeElement as HTMLElement | null;
+    const first = focusableIn(panelRef.current)[0] ?? panelRef.current;
+    first?.focus();
+    return () => {
+      if (opener && opener.isConnected) opener.focus();
+    };
+  }, []);
+
+  // Escape で閉じる／開いている間はタブ順をダイアログ内に閉じ込める。
+  const onDialogKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "Escape") {
+        // 保存中は「キャンセル」ボタンも無効なので、Escape も同じ扱いにする。
+        if (saving) return;
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusableIn(panelRef.current);
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey ? active === first : active === last) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      }
+    },
+    [onClose, saving],
+  );
+
   const optioned = FIELD_TYPE_META[type].optioned;
 
   // Spreadsheets we can link to (never the current one).
@@ -151,8 +223,13 @@ export function FieldEditor({
   const relationTarget = workspaceCollections.find(
     (c) => c.id === targetCollectionId,
   );
+  // 表示に使えるのは「値が保存されている列」だけ。自動計算の列（計算式・
+  // VLOOKUP など）を表示列に選ぶと、チップのラベルは保存済みデータから引かれる
+  // ため常に「（無題）」になってしまう。
+  // 回帰: ここが lookup / rollup の決め打ちだったせいで、あとから増えた計算列
+  // （formula・vlookup）がすり抜けていた。判定は必ず isComputedField に寄せる。
   const displayFieldOptions = (relationTarget?.fields ?? []).filter(
-    (f) => f.type !== "lookup" && f.type !== "rollup",
+    (f) => !isComputedField(f.type),
   );
 
   // For lookup/rollup: resolve the target collection via the chosen relation.
@@ -161,8 +238,11 @@ export function FieldEditor({
   const viaTarget = workspaceCollections.find(
     (c) => c.id === viaCfg.targetCollectionId,
   );
+  // ルックアップ／ロールアップが読むのはリンク先の「保存済みの値」だけ。計算列を
+  // 指すと解決時に何も見つからず、保存は成功するのに列が永久に空のままになる。
+  // 上と同じ理由で、ここも lookup / rollup の決め打ちから isComputedField へ。
   const viaTargetFieldOptions = (viaTarget?.fields ?? []).filter(
-    (f) => f.type !== "lookup" && f.type !== "rollup",
+    (f) => !isComputedField(f.type),
   );
 
   // vlookup: key/value columns must hold real data — a computed column can be
@@ -266,10 +346,18 @@ export function FieldEditor({
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
+      onKeyDown={onDialogKeyDown}
     >
-      <div className="w-full max-w-md animate-fade-in rounded-md border border-ink-line bg-paper-raised shadow-raised">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="w-full max-w-md animate-fade-in rounded-md border border-ink-line bg-paper-raised shadow-raised focus:outline-none"
+      >
         <div className="border-b border-ink-line px-5 py-4">
-          <h3 className="text-base font-semibold text-ink">
+          <h3 id={titleId} className="text-base font-semibold text-ink">
             {editing ? "項目を編集" : "項目を追加"}
           </h3>
         </div>
@@ -279,7 +367,6 @@ export function FieldEditor({
             <Label htmlFor="field-name">項目名</Label>
             <Input
               id="field-name"
-              autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="例：顧客名"
