@@ -437,3 +437,97 @@ describe("ルックアップ列の表示ラベル", () => {
     expect(leaked.records[0].computed.employmentType).toBeNull();
   });
 });
+
+describe("vlookup も選択肢のラベルで見せる", () => {
+  /**
+   * 回帰テスト: ラベル化を lookup にだけ入れて vlookup を忘れていたため、
+   * 「キー列で別シートを突合する」列では 雇用形態 が parttime のまま出ていた。
+   * 同じ症状が別の列に残るのは、直したうちに入らない。
+   */
+  it("キー突合で引いた select 列にラベル対応表が付く", async () => {
+    const ws = await db.workspace.create({
+      data: { name: "vlookup検証", slug: "vlookup-labels" },
+    });
+
+    const master = await db.collection.create({
+      data: {
+        workspaceId: ws.id,
+        name: "社員マスタ",
+        slug: "vl-master",
+        fields: {
+          create: [
+            { key: "code", name: "社員コード", type: "text", position: 0 },
+            {
+              key: "employmentType",
+              name: "雇用形態",
+              type: "select",
+              position: 1,
+              options: [
+                { label: "正社員", value: "fulltime" },
+                { label: "パート・アルバイト", value: "parttime" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    await db.record.create({
+      data: {
+        collectionId: master.id,
+        data: { code: "E-1", employmentType: "parttime" },
+      },
+    });
+
+    const sheet = await db.collection.create({
+      data: {
+        workspaceId: ws.id,
+        name: "勤務表",
+        slug: "vl-sheet",
+        fields: {
+          create: [
+            { key: "code", name: "社員コード", type: "text", position: 0 },
+            {
+              key: "kind",
+              name: "雇用形態",
+              type: "vlookup",
+              position: 1,
+              config: {
+                targetCollectionId: master.id,
+                localKey: "code",
+                targetKey: "code",
+                targetField: "employmentType",
+                aggregate: "first",
+              },
+            },
+          ],
+        },
+      },
+    });
+    const row = await db.record.create({
+      data: { collectionId: sheet.id, data: { code: "E-1" } },
+    });
+
+    const withFields = await db.collection.findFirstOrThrow({
+      where: { id: sheet.id },
+      include: { fields: { orderBy: { position: "asc" } } },
+    });
+    const resolved = await resolveCollectionRecords(
+      ws.id,
+      withFields as unknown as EngineCollection,
+      [{ id: row.id, data: { code: "E-1" } }],
+    );
+
+    // 集計・保存済みフィルタが読む値は生のまま。
+    expect(resolved.records[0].computed.kind).toBe("parttime");
+    // 表示用の対応表が付いていること。
+    expect(resolved.lookupLabels.kind).toEqual({
+      fulltime: "正社員",
+      parttime: "パート・アルバイト",
+    });
+    const shown = applyLookupLabels(
+      resolved.records[0].computed,
+      resolved.lookupLabels,
+    );
+    expect(shown.kind).toBe("パート・アルバイト");
+  });
+});

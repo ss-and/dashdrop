@@ -11,6 +11,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ApiError } from "@/lib/errors";
+import { buildMessage } from "@/lib/slack";
+import type { AlertMessage, AlertMessageInput } from "@/lib/alerts";
 
 // vi.mock の factory から参照するため、巻き上げに合わせて hoisted で用意する。
 const state = vi.hoisted(() => ({
@@ -50,7 +52,8 @@ const FALLBACK = "https://hooks.slack.com/services/T000/B000/abcdefg";
 process.env.SLACK_WEBHOOK_URL = FALLBACK;
 process.env.SLACK_WEBHOOK_SINGLE_TENANT = "true";
 
-const { runEachIsolated, describeRuleError } = await import("@/lib/alerts");
+const { runEachIsolated, describeRuleError, buildAlertMessage } =
+  await import("@/lib/alerts");
 const { resolveFallbackWebhook, sendWorkspaceSlack, isSingleTenantOptIn } =
   await import("@/lib/notify");
 
@@ -280,5 +283,229 @@ describe("sendWorkspaceSlack（F8: 実際の配信経路）", () => {
     expect(sent).toBe(true);
     expect(postToSlack).toHaveBeenCalledTimes(1);
     expect(postToSlack.mock.calls[0][0]).toBe(FALLBACK);
+  });
+});
+
+/**
+ * 通知の文面そのもの。DBに触れないので、実際に届く文字列を直接固定できる。
+ *
+ * 直したこと（すべて実際に届いていた文面の問題）:
+ *  - どのシートで起きたかを一度も言っていなかった（シートが十数枚あると特定不能）
+ *  - ルール名と現在値・しきい値が2回ずつ書かれ、分量の半分が繰り返しだった
+ *  - 手元にある lastValue を使わず、「どう動いたか」を伝えていなかった
+ *  - 金額フィールドでも displayValue("number", …) 固定で「¥」が落ちていた
+ *  - しきい値だけ書式化されず、整形済みの現在値と並んでいた
+ *  - リンクの文言が「DashDrop で開く」で、行き先が分からなかった
+ */
+describe("buildAlertMessage（通知の文面）", () => {
+  const base: AlertMessageInput = {
+    ruleName: "今月の売上が目標割れ",
+    collectionName: "売上台帳",
+    collectionId: "clx9a",
+    measure: { kind: "sum", field: "amount" },
+    fields: [{ key: "amount", type: "currency" }],
+    operator: "lt",
+    threshold: 3_000_000,
+    value: 2_842_300,
+    lastValue: 3_120_000,
+  };
+  const message = (over: Partial<AlertMessageInput> = {}): AlertMessage =>
+    buildAlertMessage({ ...base, ...over });
+
+  it("金額の集計は ¥ 付き・しきい値も同じ書式・前回からの動きを出す", () => {
+    const msg = message();
+
+    expect(msg.title).toBe("🚨 今月の売上が目標割れ｜売上台帳");
+    expect(msg.body).toBe(
+      "前回 ¥3,120,000 → 今回 ¥2,842,300（-¥277,700）\n" +
+        "しきい値 ¥3,000,000を下回りました",
+    );
+    expect(msg.url).toBe("/c/clx9a");
+    expect(msg.linkLabel).toBe("売上台帳を開く");
+
+    // 裸の数字（¥なし・書式なし）が残っていないこと。
+    expect(msg.body).not.toContain("3000000");
+    expect(msg.body).not.toMatch(/(?<!¥)2,842,300/);
+    // ルール名は見出しに1回だけ。
+    expect(msg.body).not.toContain(base.ruleName);
+  });
+
+  it("件数の集計は「件」を付け、金額記号は付けない", () => {
+    const msg = message({
+      ruleName: "未対応の問い合わせが増加",
+      collectionName: "問い合わせ",
+      measure: { kind: "count" },
+      fields: [{ key: "amount", type: "currency" }],
+      operator: "gte",
+      threshold: 10,
+      value: 14,
+      lastValue: 8,
+    });
+
+    expect(msg.title).toBe("🚨 未対応の問い合わせが増加｜問い合わせ");
+    expect(msg.body).toBe("前回 8件 → 今回 14件（+6件）\nしきい値 10件以上になりました");
+    // count は対象フィールドを持たないので、単位を偽ってはいけない。
+    expect(msg.body).not.toContain("¥");
+  });
+
+  it("初回の発火では「前回」を書かず、初回だと明示する", () => {
+    const msg = message({ lastValue: null });
+
+    expect(msg.body).toBe(
+      "現在 ¥2,842,300（初回の通知）\nしきい値 ¥3,000,000を下回りました",
+    );
+    expect(msg.body).not.toContain("前回");
+    expect(msg.body).not.toContain("null");
+    expect(msg.body).not.toContain("NaN");
+  });
+
+  it("値が 0 でも「0」として残る（消えると在庫切れ・売上ゼロを見落とす）", () => {
+    const zero = message({ value: 0, lastValue: 480_000 });
+    expect(zero.body).toContain("今回 ¥0");
+    expect(zero.body).toContain("前回 ¥480,000");
+    expect(zero.body).toContain("（-¥480,000）");
+
+    const zeroCount = message({
+      measure: { kind: "count" },
+      threshold: 1,
+      value: 0,
+      lastValue: null,
+      operator: "lt",
+    });
+    expect(zeroCount.body).toBe("現在 0件（初回の通知）\nしきい値 1件を下回りました");
+  });
+
+  it("しきい値も現在値も 0 のとき、しきい値が消えない", () => {
+    const msg = message({ threshold: 0, value: 0, lastValue: 100 });
+    expect(msg.body).toContain("しきい値 ¥0");
+  });
+
+  it("Infinity は ∞ と出し、差分は書かない（NaN を出さない）", () => {
+    const msg = message({ value: Infinity, lastValue: Infinity });
+    expect(msg.body).toContain("¥∞");
+    expect(msg.body).not.toContain("NaN");
+  });
+
+  it("ルール名もシート名も空なら DashDrop に落ちる", () => {
+    const msg = message({ ruleName: "   ", collectionName: "" });
+    expect(msg.title).toBe("DashDrop");
+    expect(msg.linkLabel).toBe("DashDrop で開く");
+  });
+
+  it("非常に長いシート名は省略し、ルール名を押し出さない", () => {
+    const long = "２０２５年度_関東エリア_全店舗_日次売上明細_統合版_バックアップ";
+    const msg = message({ collectionName: long });
+
+    expect(msg.title.startsWith("🚨 今月の売上が目標割れ｜")).toBe(true);
+    expect(msg.title.length).toBeLessThan(60);
+    expect(msg.title).toContain("…");
+    expect(msg.linkLabel.endsWith("を開く")).toBe(true);
+    expect(msg.linkLabel.length).toBeLessThan(40);
+  });
+});
+
+describe("アラート通知の実際のペイロード（Slack / アプリ内）", () => {
+  const input: AlertMessageInput = {
+    ruleName: "今月の売上が目標割れ",
+    collectionName: "売上台帳",
+    collectionId: "clx9a",
+    measure: { kind: "sum", field: "amount" },
+    fields: [{ key: "amount", type: "currency" }],
+    operator: "lt",
+    threshold: 3_000_000,
+    value: 2_842_300,
+    lastValue: 3_120_000,
+  };
+
+  /** 文面が「部品として正しい」だけでなく、送信される JSON ごと固定する。 */
+  it("Slack へ送る JSON を丸ごと固定する", () => {
+    const msg = buildAlertMessage(input);
+    const payload = buildMessage({
+      title: msg.title,
+      body: msg.body,
+      url: `https://app.example.com${msg.url}`,
+      linkLabel: msg.linkLabel,
+    });
+
+    expect(payload).toEqual({
+      text:
+        "🚨 今月の売上が目標割れ｜売上台帳 / " +
+        "前回 ¥3,120,000 → 今回 ¥2,842,300（-¥277,700）\n" +
+        "しきい値 ¥3,000,000を下回りました / " +
+        "https://app.example.com/c/clx9a",
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text:
+              "*🚨 今月の売上が目標割れ｜売上台帳*\n" +
+              "前回 ¥3,120,000 → 今回 ¥2,842,300（-¥277,700）\n" +
+              "しきい値 ¥3,000,000を下回りました",
+          },
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "<https://app.example.com/c/clx9a|売上台帳を開く>",
+          },
+        },
+        {
+          type: "context",
+          elements: [{ type: "mrkdwn", text: "DashDrop からの通知" }],
+        },
+      ],
+    });
+  });
+
+  /**
+   * 回帰テスト: ルール名・シート名は利用者が自由に付けられる。<!channel> を
+   * 含むまま送ると、通知先チャンネル全員をメンションできてしまう。
+   */
+  it("ルール名の <!channel> は blocks にも text にも素通ししない", () => {
+    const msg = buildAlertMessage({
+      ...input,
+      ruleName: "<!channel> 至急",
+      collectionName: "<!here> 売上台帳",
+    });
+
+    // 文面の組み立て自体はエスケープしない（アプリ内通知はHTMLとして解釈しない）。
+    expect(msg.title).toBe("🚨 <!channel> 至急｜<!here> 売上台帳");
+
+    const payload = buildMessage({
+      title: msg.title,
+      body: msg.body,
+      url: `https://app.example.com${msg.url}`,
+      linkLabel: msg.linkLabel,
+    });
+    const json = JSON.stringify(payload.blocks);
+    for (const raw of ["<!channel>", "<!here>"]) {
+      expect(payload.text).not.toContain(raw);
+      expect(json).not.toContain(raw);
+    }
+    expect(payload.text).toContain("&lt;!channel&gt;");
+    // リンクのラベル（シート名由来）にも同じエスケープが要る。
+    expect(json).toContain("&lt;!here&gt; 売上台帳を開く");
+  });
+
+  it("桁の大きい値でも Slack の上限を超えない", () => {
+    const msg = buildAlertMessage({
+      ...input,
+      value: Number.MAX_VALUE,
+      lastValue: Number.MAX_VALUE / 2,
+      threshold: Number.MAX_VALUE / 3,
+    });
+    const payload = buildMessage({
+      title: msg.title,
+      body: msg.body,
+      url: `https://app.example.com${msg.url}`,
+      linkLabel: msg.linkLabel,
+    });
+
+    expect(payload.text.length).toBeLessThanOrEqual(2000);
+    for (const b of payload.blocks as { text?: { text?: string } }[]) {
+      if (b.text?.text) expect(b.text.text.length).toBeLessThanOrEqual(3000);
+    }
   });
 });

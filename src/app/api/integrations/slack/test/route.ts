@@ -37,5 +37,12 @@ export const POST = withAuth(async (_req, { user }) => {
     res.ok ? undefined : res.error,
   );
 
-  return res.ok ? ok({ ok: true }) : ok({ ok: false, error: res.error });
+  if (!res.ok) {
+    // Slack に拒否された送信を HTTP 200 で返すと、この API を読むもの
+    // （カード以外の呼び出し元、監視、将来のリトライ）は成功と区別できない。
+    // 失敗は失敗のステータスで返し、理由は本文の error に載せる。
+    throw new ApiError(res.error, 502);
+  }
+
+  return ok({ ok: true, sentAt: new Date().toISOString() });
 });

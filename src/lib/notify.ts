@@ -149,12 +149,40 @@ async function deploymentFallbackWebhook(): Promise<string | null> {
 }
 
 /**
+ * このワークスペースに Slack の Integration 行が保存されているか。
+ *
+ * `getSecret` は「未接続」でも「行はあるが復号できない／無効化されている」でも
+ * 同じ null を返す（decryptSecret は throw せず null を返す設計）。null だけを
+ * 手がかりにすると後者がデプロイ共通のWebhookへ流れてしまうので、行の有無は
+ * 別に確かめる。
+ *
+ * 問い合わせに失敗したときは false（＝行なし）として扱うが、これで漏えいには
+ * ならない。フォールバックを使うにはこの直後の `deploymentFallbackWebhook` が
+ * ワークスペース数の問い合わせに成功する必要があり、DBが応答しない状況では
+ * そちらも null を返して送信自体が起きないため。
+ */
+async function hasStoredSlackIntegration(workspaceId: string): Promise<boolean> {
+  try {
+    const row = await db.integration.findFirst({
+      where: { workspaceId, provider: "slack" },
+      select: { id: true },
+    });
+    return row !== null;
+  } catch (err) {
+    console.error("Failed to look up the stored Slack integration", err);
+    return false;
+  }
+}
+
+/**
  * Best-effort Slack delivery for one workspace. Never throws.
  *
  * Order of resolution:
  *  1. The workspace's own incoming webhook (the normal, multi-tenant path).
  *  2. `SLACK_WEBHOOK_URL` — 単一ワークスペースのデプロイでのみ有効
  *     （resolveFallbackWebhook でホストのピン留めとテナント数を検証する）。
+ *
+ * 2 に落ちてよいのは「Slackを一度も接続していない」ワークスペースだけ。
  */
 export async function sendWorkspaceSlack(
   workspaceId: string,
@@ -168,10 +196,20 @@ export async function sendWorkspaceSlack(
   try {
     const connected = await getSecret(workspaceId, "slack");
     if (connected) return await notifyWorkspaceSlack(workspaceId, message);
+
+    // 自分の Slack を接続しているのに使えない場合（AUTH_SECRET の入れ替えで
+    // 復号できない、設定画面で無効化された）。デプロイ共通の宛先へ回すと、
+    // そのワークスペースの通知が本人の知らないチャンネルに出てしまうので、
+    // 送らずに諦める。以前はこの分岐が無く、null を「未接続」と誤読して
+    // フォールバックへ落ちていた。
+    if (await hasStoredSlackIntegration(workspaceId)) {
+      console.error(
+        `Slack is connected for workspace ${workspaceId} but the credential is unusable; not falling back to the deployment webhook`,
+      );
+      return false;
+    }
   } catch (err) {
-    // ここに来るのは「自分の Slack を接続しているのに取り出せなかった」場合
-    // （鍵の入れ替えで復号できない等）。デプロイ共通の宛先へ回すと、その
-    // ワークスペースの通知が別のチャンネルに出てしまうので、送らずに諦める。
+    // 取り出しそのものが失敗した場合も同じ扱い（送らない）。
     console.error("Failed to resolve Slack integration", err);
     return false;
   }

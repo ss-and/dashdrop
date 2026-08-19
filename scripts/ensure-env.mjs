@@ -38,6 +38,11 @@ if (contents === template) {
 // 一時ファイルに書いてから rename する。copy → 書き換え の2段階だと、その間に
 // 中断された場合にプレースホルダのままの .env が残り、以降の実行は「.env が
 // 既にある」と見て何もしないため、弱い鍵が恒久的に居座ってしまう。
+//
+// 一時ファイルの名前は必ず .env. で始めること。SIGKILL のように catch を
+// 通らない止まり方をすると、生の AUTH_SECRET を含むファイルが残る。
+// .gitignore の `.env.*` に入る名前でないと、それが `git add .` で
+// コミットされうる（実際にその穴のある実装を出した）。
 const tmp = `.env.tmp-${process.pid}`;
 try {
   writeFileSync(tmp, contents, { mode: 0o600 });

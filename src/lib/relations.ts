@@ -291,6 +291,15 @@ export async function resolveCollectionRecords(
       take: VLOOKUP_TARGET_ROW_CAP, // capped: see VLOOKUP_TARGET_ROW_CAP
       select: { id: true, data: true },
     });
+    // vlookup も lookup と同じで、引いてきた先が select / multiselect なら
+    // 保存値（"fulltime"）ではなくラベル（「正社員」）を見せる。ここを
+    // lookup だけ直して vlookup を忘れると、同じ症状が別の列で残る。
+    // ただし concat は複数値を1つの文字列に畳んだ後なので対象外。
+    if (isOptionedType(tf.type) && cfg.aggregate !== "concat") {
+      const map = optionLabelMap(tf.options);
+      if (Object.keys(map).length > 0) lookupLabels[vf.key] = map;
+    }
+
     perVlookup.set(
       vf.key,
       resolveVlookupValues(

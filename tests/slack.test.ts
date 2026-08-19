@@ -73,6 +73,34 @@ describe("buildMessage", () => {
     expect(JSON.stringify(msg.blocks)).toContain(url);
   });
 
+  it("labels the link with the destination the caller names", () => {
+    const url = "https://app.example.com/c/abc123";
+    const msg = buildMessage({ title: "T", url, linkLabel: "売上台帳を開く" });
+    const link = JSON.stringify(msg.blocks);
+    expect(link).toContain(`<${url}|売上台帳を開く>`);
+    // 行き先を名乗ったなら、汎用の文言は出さない。
+    expect(link).not.toContain("DashDrop で開く");
+  });
+
+  it("falls back to the generic link label when none is given", () => {
+    const msg = buildMessage({ title: "T", url: "https://app.example.com/c/1" });
+    expect(JSON.stringify(msg.blocks)).toContain("|DashDrop で開く>");
+  });
+
+  it("escapes and clamps a hostile or overlong link label", () => {
+    const msg = buildMessage({
+      title: "T",
+      url: "https://app.example.com/c/1",
+      linkLabel: `<!channel> ${"あ".repeat(5000)}を開く`,
+    });
+    const json = JSON.stringify(msg.blocks);
+    expect(json).not.toContain("<!channel>");
+    expect(json).toContain("&lt;!channel&gt;");
+    for (const b of msg.blocks as { text?: { text?: string } }[]) {
+      if (b.text?.text) expect(b.text.text.length).toBeLessThanOrEqual(3000);
+    }
+  });
+
   it("always appends a DashDrop context line", () => {
     const blocks = buildMessage({ title: "T" }).blocks as { type: string }[];
     expect(blocks[blocks.length - 1].type).toBe("context");

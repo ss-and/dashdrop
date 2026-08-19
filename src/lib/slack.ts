@@ -25,6 +25,9 @@ const EXCERPT_LEN = 160;
 
 const TIMEOUT_MS = 8000;
 
+/** 行き先を呼び出し側が指定しなかったときのリンク文言。 */
+const DEFAULT_LINK_LABEL = "DashDrop で開く";
+
 export interface SlackBlockMessage {
   text: string;
   blocks?: unknown[];
@@ -34,6 +37,11 @@ export interface SlackMessageInput {
   title: string;
   body?: string;
   url?: string;
+  /**
+   * リンクの表示文言。「DashDrop で開く」だけでは、押した先がダッシュボードなのか
+   * 対象のシートなのか分からないため、呼び出し側が行き先を名乗れるようにする。
+   */
+  linkLabel?: string;
   fields?: { label: string; value: string }[];
 }
 
@@ -62,6 +70,8 @@ export function buildMessage(input: SlackMessageInput): SlackBlockMessage {
   // Slack's link syntax breaks past ~3000 chars; a URL that long is malformed
   // anyway, so cap it rather than emit a block Slack will reject.
   const url = clamp(String(input.url ?? "").trim(), 900);
+  const linkLabel =
+    clamp(String(input.linkLabel ?? "").trim(), 120) || DEFAULT_LINK_LABEL;
   const fields = (Array.isArray(input.fields) ? input.fields : [])
     .filter((f) => f && (f.label || f.value))
     .slice(0, MAX_FIELDS);
@@ -95,7 +105,14 @@ export function buildMessage(input: SlackMessageInput): SlackBlockMessage {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `<${escapeMrkdwn(url)}|DashDrop で開く>`,
+        // ラベルもURLと同じくエスケープする。行き先の名前（シート名など）は
+        // 利用者が入力した文字列なので、<!channel> を通してはいけない。
+        // 全体を clamp するのは、`&` だらけのURLがエスケープで膨らんでも
+        // section の 3000 文字制限を超えないようにするため。
+        text: clamp(
+          `<${escapeMrkdwn(url)}|${escapeMrkdwn(linkLabel)}>`,
+          MAX_SECTION_TEXT,
+        ),
       },
     });
   }

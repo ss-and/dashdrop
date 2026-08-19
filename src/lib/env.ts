@@ -79,6 +79,25 @@ const PLACEHOLDER_MARKERS = [
 ];
 
 /**
+ * 文字列の最小周期。`s[i] === s[i + p]` がすべての i で成り立つ最小の p。
+ * 途中で切れた繰り返し（"password1password1password1passw"）も拾える。
+ * 周期が見つからなければ長さそのものを返す。
+ */
+function shortestPeriod(s: string): number {
+  for (let p = 1; p * 3 <= s.length; p++) {
+    let ok = true;
+    for (let i = 0; i + p < s.length; i++) {
+      if (s[i] !== s[i + p]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return p;
+  }
+  return s.length;
+}
+
+/**
  * Whether `secret` is strong enough to serve production traffic with.
  * Pure — exported so the rule can be tested without booting the app.
  */
@@ -97,6 +116,13 @@ export function isStrongSecret(secret: string): boolean {
   if (counts.size < 5) return false;
   const most = Math.max(...counts.values());
   if (most * 2 > secret.length) return false; // 1文字が過半数 → 反復的
+  // 短い文字列の繰り返し（"password1password1…"）を弾く。
+  //
+  // 「使われている文字の種類」で測ると、16進のような文字種の少ない
+  // エンコードを巻き添えにする（openssl rand -hex 16 は32文字で16種類しか
+  // 使わない）。弱い人力の値の実体は「文字種が少ない」ことではなく
+  // 「短い塊の繰り返し」なので、周期そのものを見る。
+  if (shortestPeriod(secret) * 3 <= secret.length) return false;
   return true;
 }
 
@@ -109,6 +135,65 @@ const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build";
 if (env.NODE_ENV === "production" && !isBuildPhase && !isSecureAuthSecret) {
   throw new Error(
     "AUTH_SECRET must be a strong 32+ char secret in production. Generate one with `openssl rand -base64 48`.",
+  );
+}
+
+/** Hosts that only ever resolve back to the machine running the server. */
+function isLoopbackHost(host: string): boolean {
+  // URL.hostname は IPv6 を "[::1]" の形で返すため、角括弧を外してから比べる。
+  const h = host.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  if (!h) return true;
+  // "localhost" とそのサブドメイン（"api.localhost" 等）。
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  // 127.0.0.0/8 は全体がループバック（127.0.0.1 だけではない）。
+  if (/^127\./.test(h)) return true;
+  // 未指定アドレス（0.0.0.0 / ::）と IPv6 ループバック。
+  if (h === "0.0.0.0" || h === "::" || h === "::1") return true;
+  // IPv4射影のループバック。URL の正規化で "::ffff:127.0.0.1" は
+  // "::ffff:7f00:1" という16進表記になるため、両方の書き方を見る。
+  if (h.startsWith("::ffff:127.")) return true;
+  if (/^::ffff:7f[0-9a-f]{0,2}:/.test(h)) return true;
+  return false;
+}
+
+/**
+ * Whether `url` can serve as the public base URL of a production deployment.
+ * Pure — exported so the rule can be tested without booting the app.
+ *
+ * 社内向けの自己ホスト（http://192.168.1.10:3000 など）は正当な運用なので通す。
+ * 弾くのは「サーバ自身からしか開けないと確実に分かるURL」だけ。
+ */
+export function isPublicAppUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  // 通知やSlackから開けるのは http(s) のみ。
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  return !isLoopbackHost(parsed.hostname);
+}
+
+/** True when APP_URL points somewhere a recipient can actually open. */
+export const isPublicAppUrlConfigured = isPublicAppUrl(env.APP_URL);
+
+/*
+ * APP_URL は通知の「開く」リンクや Slack へ送る絶対URLの土台になる
+ * （src/lib/notify.ts の absoluteUrl）。設定を忘れると既定値の
+ * "http://localhost:3000" が黙って使われ、本番では受信者全員にとって死んだ
+ * リンクになる。例外も警告も出ないため、通知が届いた人から「リンクが開けない」
+ * と言われるまで誰も気づけない。AUTH_SECRET と同じく起動時に落として、
+ * デプロイの時点で気づけるようにする。
+ *
+ * 同じくAUTH_SECRETと同じ扱いで、実際に本番トラフィックを捌くときだけ強制し、
+ * `next build`（NEXT_PHASE=phase-production-build）は素通しする。
+ */
+if (env.NODE_ENV === "production" && !isBuildPhase && !isPublicAppUrlConfigured) {
+  throw new Error(
+    `APP_URL must be the public URL of this deployment in production (got "${env.APP_URL}"). ` +
+      `Notification and Slack links are built from it, so a wrong value ships dead links. ` +
+      `Set it in the environment, e.g. APP_URL="https://dashdrop.example.com".`,
   );
 }
 

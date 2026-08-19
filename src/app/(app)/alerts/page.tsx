@@ -15,6 +15,32 @@ import { EvaluateButton } from "@/components/alerts/EvaluateButton";
 import { AlertRuleActions } from "@/components/alerts/AlertRuleActions";
 import { conditionText, type FieldLite } from "@/lib/alert-format";
 import type { AlertMetric } from "@/lib/alerts";
+import { getIntegration } from "@/lib/integrations";
+import { isSingleTenantOptIn, resolveFallbackWebhook } from "@/lib/notify";
+import { env } from "@/lib/env";
+
+/**
+ * Whether a Slack message for this workspace would actually be delivered.
+ *
+ * ワークスペースの接続が本筋だが、自己ホストのデプロイ共通フォールバック
+ * （SLACK_WEBHOOK_URL）が有効な場合も届く。そこを見ないと、正しく動いている
+ * 自己ホスト環境に「接続されていません」と誤って出してしまう。判定は
+ * src/lib/notify.ts の純粋関数をそのまま使い、送信側と食い違わないようにする。
+ */
+async function canDeliverSlack(workspaceId: string): Promise<boolean> {
+  const slack = await getIntegration(workspaceId, "slack");
+  // getSecret と同じ条件（復号できて、かつ有効）でないと送信されない。
+  if (slack?.connected && slack.enabled) return true;
+
+  // 未設定が普通なので、設定されているときだけワークスペース数を数える。
+  if (!env.SLACK_WEBHOOK_URL.trim()) return false;
+  const workspaces = await db.workspace.findMany({ select: { id: true }, take: 2 });
+  return resolveFallbackWebhook(
+    env.SLACK_WEBHOOK_URL,
+    workspaces.length,
+    isSingleTenantOptIn(env.SLACK_WEBHOOK_SINGLE_TENANT),
+  ).use;
+}
 
 export default async function AlertsPage() {
   const user = await getSession();
@@ -41,14 +67,20 @@ export default async function AlertsPage() {
 
   const collectionById = new Map(collections.map((c) => [c.id, c]));
 
+  // 「通知先に Slack を選んだのに何も届かない」を作らないための判定。
+  // 選んだ時点でフォームから知らせるので、保存してから発火するまで気づけない
+  // という状態をなくす（Slack未接続なら sendWorkspaceSlack は黙って false を返す）。
+  const slackDeliverable = await canDeliverSlack(user.workspace.id);
+
   return (
     <>
       <Topbar user={user} title="アラート" />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-3xl space-y-6">
           <p className="text-sm leading-relaxed text-ink-muted">
-            スプレッドシートの数値がしきい値を超えたら、ベルや Slack
-            に通知します。条件を作って「今すぐ評価する」で試せます。
+            スプレッドシートの数値がしきい値を超えたら、アプリ内のベルに通知します
+            （Slack を選ぶと、ベルに加えて Slack にも送信します）。条件を作って
+            「今すぐ評価する」で試せます。
           </p>
 
           {/* Rules list */}
@@ -88,9 +120,17 @@ export default async function AlertsPage() {
                               {r.name}
                             </p>
                             {!r.enabled && <Badge tone="neutral">停止中</Badge>}
-                            {r.channel === "slack" && (
-                              <Badge tone="info">Slack</Badge>
-                            )}
+                            {/*
+                              既に保存済みのルールも、Slackが未接続なら発火時に
+                              何も届かない。作成時だけ警告しても、接続前に作った
+                              ルールは黙ったままになるので、一覧でも状態を出す。
+                            */}
+                            {r.channel === "slack" &&
+                              (slackDeliverable ? (
+                                <Badge tone="info">Slack</Badge>
+                              ) : (
+                                <Badge tone="warning">Slack未接続</Badge>
+                              ))}
                           </div>
                           <p className="text-xs text-ink-muted">
                             {collection?.name ?? "（削除されたシート）"}
@@ -123,7 +163,10 @@ export default async function AlertsPage() {
               <CardTitle>アラートを作成</CardTitle>
             </CardHeader>
             <CardBody>
-              <AlertForm collections={collections as FormCollection[]} />
+              <AlertForm
+                collections={collections as FormCollection[]}
+                slackConnected={slackDeliverable}
+              />
             </CardBody>
           </Card>
         </div>

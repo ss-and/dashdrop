@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { isStrongSecret } from "@/lib/env";
+import { isStrongSecret, isPublicAppUrl } from "@/lib/env";
 
 describe("AUTH_SECRET strength", () => {
   it("弱い値を拒否する", () => {
@@ -62,6 +62,24 @@ describe("AUTH_SECRET strength", () => {
     expect(rejected).toBe(0);
   });
 
+  /**
+   * 回帰テスト: hex32 を通すために条件を緩めたとき、緩めすぎて
+   * "password1password1password1passw" のような値まで通していた。
+   * この述語は本番起動を止める最後の砦で、連携トークンの暗号鍵の
+   * 導出元でもあるので、通してよい値ではない。
+   */
+  it("いかにも人が考えた弱い値を拒否する", () => {
+    for (const weak of [
+      "password1password1password1passw",
+      "hunter2hunter2hunter2hunter2hunt",
+      "secretsecretsecretsecretsecretse",
+      "dashdrop-dashdrop-dashdrop-dashd",
+      "abcdeabcdeabcdeabcdeabcdeabcdeab",
+    ]) {
+      expect(isStrongSecret(weak), weak).toBe(false);
+    }
+  });
+
   it("反復的な値は長さが足りていても拒否する", () => {
     expect(isStrongSecret("abababababababababababababababab")).toBe(false);
     expect(isStrongSecret("abcd".repeat(8))).toBe(false);
@@ -78,5 +96,64 @@ describe("AUTH_SECRET strength", () => {
     expect(line).toBeTruthy();
     const value = line!.replace(/^AUTH_SECRET=/, "").replace(/^"|"$/g, "");
     expect(isStrongSecret(value)).toBe(false);
+  });
+});
+
+/**
+ * APP_URL の妥当性判定。
+ *
+ * APP_URL は通知の「開く」リンクの土台（src/lib/notify.ts の absoluteUrl）で、
+ * 未設定でも既定の "http://localhost:3000" で黙って起動してしまうため、
+ * 設定を忘れたデプロイは通知のリンクが全部死んだまま誰にも気づかれない。
+ * AUTH_SECRET と同じく、本番では起動時に落とすための判定。
+ */
+describe("APP_URL public-URL rule", () => {
+  it("受信者が開けないURLを拒否する", () => {
+    for (const bad of [
+      "",
+      "not-a-url",
+      "localhost:3000", // スキーム無しはURLとして解釈できない
+      "http://localhost:3000", // 既定値そのもの（設定忘れ）
+      "https://localhost",
+      "http://api.localhost:3000",
+      "http://127.0.0.1:3000",
+      "http://127.1.2.3",
+      "http://0.0.0.0:3000",
+      "http://[::1]:3000",
+      "http://[::]:3000",
+      "http://[::ffff:127.0.0.1]:3000",
+      "ftp://dashdrop.example.com", // 通知から開けない
+      "file:///var/www",
+    ]) {
+      expect(isPublicAppUrl(bad), bad).toBe(false);
+    }
+  });
+
+  it("公開されたデプロイのURLを受け入れる", () => {
+    for (const good of [
+      "https://dashdrop.example.com",
+      "https://dashdrop.example.com/",
+      "https://app.dashdrop.example.com:8443",
+      "https://example.co.jp/dashdrop",
+      "http://dashdrop.example.com", // http のみの構成も止めない
+      // 社内向けの自己ホスト。サーバ自身以外からも開けるので通す。
+      "http://192.168.1.10:3000",
+      "http://dashdrop.internal:3000",
+    ]) {
+      expect(isPublicAppUrl(good), good).toBe(true);
+    }
+  });
+
+  /**
+   * 回帰テスト: .env.example をそのままコピーしたデプロイが本番起動できると、
+   * 全ての通知リンクが localhost を指したまま出荷される。
+   */
+  it(".env.example の APP_URL は本番向けとして拒否される", () => {
+    const line = readFileSync(".env.example", "utf8")
+      .split("\n")
+      .find((l) => l.startsWith("APP_URL="));
+    expect(line).toBeTruthy();
+    const value = line!.replace(/^APP_URL=/, "").replace(/^"|"$/g, "");
+    expect(isPublicAppUrl(value)).toBe(false);
   });
 });

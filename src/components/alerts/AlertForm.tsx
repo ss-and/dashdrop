@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Label } from "@/components/ui/Input";
 import { FIELD_TYPE_META, type FieldType } from "@/lib/field-types";
@@ -35,8 +36,19 @@ function isNumeric(type: string): boolean {
 /**
  * Create-alert form. Builds a metric (measure + optional filter) over one
  * spreadsheet, lets the user preview the current value, then saves a rule.
+ *
+ * `slackConnected` は、このワークスペースの Slack 通知が実際に届く状態か
+ * （設定 → 連携 で接続済みか）。届かないのに Slack を選べてしまうと、
+ * 保存も発火も成功したまま Slack にだけ何も出ない状態になり、利用者からは
+ * 「壊れている」ようにしか見えないため、選んだその場で伝える。
  */
-export function AlertForm({ collections }: { collections: FormCollection[] }) {
+export function AlertForm({
+  collections,
+  slackConnected,
+}: {
+  collections: FormCollection[];
+  slackConnected: boolean;
+}) {
   const router = useRouter();
 
   const [collectionId, setCollectionId] = useState(collections[0]?.id ?? "");
@@ -335,15 +347,40 @@ export function AlertForm({ collections }: { collections: FormCollection[] }) {
       </div>
 
       <div>
-        <Label htmlFor="alert-channel">通知先</Label>
+        {/*
+          通知先は排他の選択ではない。発火したルールは channel に関わらず必ず
+          アプリ内の通知（ベル）を作り、Slack はそこに追加で送られるだけなので
+          （src/lib/alerts.ts の evaluateRule）、そのとおりに書く。
+        */}
+        <Label htmlFor="alert-channel">Slack にも送る</Label>
         <Select
           id="alert-channel"
           value={channel}
           onChange={(e) => setChannel(e.target.value as "inapp" | "slack")}
         >
-          <option value="inapp">アプリ内（ベルに通知）</option>
-          <option value="slack">Slack</option>
+          <option value="inapp">送らない（アプリ内のベルのみ）</option>
+          <option value="slack">送る（ベル ＋ Slack）</option>
         </Select>
+        <p className="mt-1 text-2xs text-ink-faint">
+          発火したアラートは、どちらを選んでも必ずアプリ内のベルに通知されます。
+        </p>
+        {channel === "slack" && !slackConnected && (
+          <p
+            className="mt-2 rounded border border-warning/30 bg-warning-soft px-3 py-2 text-xs leading-relaxed text-warning"
+            role="status"
+          >
+            このワークスペースは Slack をまだ接続していません。このまま作成できますが、
+            接続するまで Slack には届きません（アプリ内のベルには通知されます）。
+            <br />
+            <Link
+              href="/settings"
+              className="font-medium underline underline-offset-2"
+            >
+              設定 → 連携
+            </Link>
+            {" "}から Slack の Webhook URL を登録してください。
+          </p>
+        )}
       </div>
 
       {/* Preview */}

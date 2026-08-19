@@ -841,3 +841,106 @@ describe("列を削った本物のマスターシート", () => {
     30_000,
   );
 });
+
+/* --------- 10. 英語名のユーザーシートが CRM の slug に当たっている --------- */
+
+describe("ユーザー自身のリンク列を持つ、slug が衝突したシート", () => {
+  it(
+    "リンク先を書き換えず、409 で止まる",
+    async () => {
+      // 【回帰】衝突判定の「config が空でないこと」が弱すぎたため、
+      // ユーザーが Invoices というシートに「Account」というリンク列を足して
+      // いるだけで「自分のシートだ」と誤認し、そのうえ貼り直しの処理が
+      // リンク先を新しい CRM の顧客シートへ**上書き**していた。保存済みの
+      // id が全部よそのシートのものになり、値が全滅したうえ元に戻せない。
+      // 安全な 409 を、取り返しのつかないデータ破壊に変えてしまっていた。
+      const user = await createUser();
+
+      const ownAccounts = await db.collection.create({
+        data: {
+          workspaceId: user.workspace.id,
+          name: "取引先マスタ",
+          slug: "torihikisaki",
+          fields: {
+            create: [{ key: "name", name: "会社名", type: "text", position: 0 }],
+          },
+        },
+      });
+      const row = await db.record.create({
+        data: {
+          collectionId: ownAccounts.id,
+          createdById: user.id,
+          data: { name: "株式会社サンプル" },
+        },
+      });
+
+      // 取り込んだ「Invoices」シート。ユーザーが自分でリンク列を足している。
+      const invoices = await db.collection.create({
+        data: {
+          workspaceId: user.workspace.id,
+          name: "Invoices",
+          slug: "invoices",
+          fields: {
+            create: [
+              { key: "title", name: "件名", type: "text", position: 0 },
+              {
+                key: "account",
+                name: "Account",
+                type: "relation",
+                position: 1,
+                config: { targetCollectionId: ownAccounts.id },
+              },
+            ],
+          },
+        },
+      });
+      await db.record.create({
+        data: {
+          collectionId: invoices.id,
+          createdById: user.id,
+          data: { title: "7月請求", account: [row.id] },
+        },
+      });
+
+      const err = await installCrm(user).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as InstanceType<typeof ApiError>).status).toBe(409);
+
+      // リンク先が書き換えられていないこと（これが本命）。
+      const after = await collectionBySlug(user, "invoices");
+      const cfg = after.fields.find((f) => f.key === "account")!.config as {
+        targetCollectionId: string;
+      };
+      expect(cfg.targetCollectionId).toBe(ownAccounts.id);
+      expect(after.records[0].data).toEqual({
+        title: "7月請求",
+        account: [row.id],
+      });
+
+      // 他の CRM オブジェクトも作られていないこと。
+      const slugs = await slugsOf(user);
+      expect(slugs.sort()).toEqual(["invoices", "torihikisaki"]);
+    },
+    30_000,
+  );
+
+  it(
+    "本物のインストールは、リンク先がマスターのシートなので通る",
+    async () => {
+      const user = await createUser();
+      await installCrm(user);
+      // 主キーの列を消しても、config がマスターを指しているので自分のものと分かる。
+      const contacts = await collectionBySlug(user, "contacts");
+      const primary = contacts.fields.find((f) => f.key === "name");
+      if (primary) await db.field.delete({ where: { id: primary.id } });
+
+      const result = await installCrm(user);
+      expect(result.created).toEqual([]);
+      expect(result.skipped).toContain("contacts");
+    },
+    30_000,
+  );
+});

@@ -23,9 +23,29 @@ export const PROVIDER_LABEL: Record<Provider, string> = {
   notion: "Notion",
 };
 
+/**
+ * なぜ配信できないのかを一言で表す。「未接続」と「鍵の入れ替えで読めない」を
+ * 画面が区別できないと、利用者には「勝手にSlack通知が止まった」としか見えない。
+ */
+export type IntegrationStatus =
+  /** 復号でき、有効。実際に配信できる唯一の状態。 */
+  | "connected"
+  /** 行はあるが復号できない（AUTH_SECRET の入れ替え、値の破損）。 */
+  | "unreadable"
+  /** 行はあるが無効化されている。getSecret が null を返すので配信されない。 */
+  | "disabled"
+  /** そもそも接続されていない。 */
+  | "disconnected";
+
 /** What a settings screen may safely see. Never includes the secret. */
 export interface IntegrationSummary {
   provider: Provider;
+  /**
+   * 実際に配信できるときだけ true。判定は getSecret と同じ条件
+   * （enabled かつ復号できる）にそろえてある。ここがずれると、カードは
+   * 「接続済み」と出しているのにアラートは黙って送られない、という
+   * いちばん気づけない壊れ方をする。
+   */
   connected: boolean;
   enabled: boolean;
   /** Masked credential, e.g. "http…be12". Null when not connected. */
@@ -33,6 +53,34 @@ export interface IntegrationSummary {
   config: Record<string, unknown>;
   lastOkAt: string | null;
   lastError: string | null;
+  /**
+   * 任意なのは、この型のリテラルを組み立てている既存のルート（Notion 側の
+   * DISCONNECTED など）を壊さないため。summarise は常に埋める。
+   */
+  status?: IntegrationStatus;
+}
+
+/** 通知先チャンネル名の控え（config.channelHint）の上限。 */
+export const CHANNEL_HINT_MAX = 60;
+
+/**
+ * 利用者が入力したチャンネル名の控えを、保存できる形に整える。
+ * これは表示用のメモであって宛先ではない（宛先は Webhook URL 自体が持つ）ので、
+ * 記号の付け方は矯正せず、前後の空白と長さだけを揃える。
+ */
+export function normaliseChannelHint(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const s = value.trim().replace(/\s+/g, " ");
+  if (!s) return null;
+  return s.slice(0, CHANNEL_HINT_MAX);
+}
+
+/** 保存済み config から通知先チャンネルの控えを読む。壊れていれば null。 */
+export function readChannelHint(
+  config: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!config) return null;
+  return normaliseChannelHint(config.channelHint);
 }
 
 /** Shape-check a credential before we bother storing it. */
@@ -93,8 +141,14 @@ export async function saveIntegration(
     },
     update: {
       secret: encryptSecret(clean),
+      // config を渡されたときは丸ごと置き換える。空オブジェクトを渡せば控えを
+      // 消せる、という「入力欄を空にしたら消える」挙動と一致させるため。
       ...(config ? { config: toJson(config) } : {}),
       enabled: true,
+      // 認証情報を入れ替えたら履歴も一緒にリセットする。lastOkAt を残すと、
+      // 別のチャンネルのWebhookに差し替えたのに前のWebhookの成功時刻が
+      // 「最終送信」として残り、新しい宛先に届いた証拠に見えてしまう。
+      lastOkAt: null,
       lastError: null,
     },
   });
@@ -154,6 +208,7 @@ export async function listIntegrations(
         config: {},
         lastOkAt: null,
         lastError: null,
+        status: "disconnected",
       };
     }
     return summarise(row, decryptSecret(row.secret));
@@ -186,15 +241,23 @@ type Row = {
 };
 
 function summarise(row: Row, plain: string | null): IntegrationSummary {
+  // 「配信できる」の定義は getSecret ただ一つ。無効化された行も、鍵の入れ替えで
+  // 復号できなくなった行も、getSecret は null を返す＝送られない。画面の
+  // 「接続済み」も同じ条件で出す。
+  const status: IntegrationStatus = !row.enabled
+    ? "disabled"
+    : plain === null
+      ? "unreadable"
+      : "connected";
+
   return {
     provider: row.provider as Provider,
-    // A row whose secret no longer decrypts (AUTH_SECRET rotated, or the value
-    // was tampered with) is reported as not connected — it cannot be used.
-    connected: plain !== null,
+    connected: status === "connected",
     enabled: row.enabled,
-    masked: plain ? maskSecret(plain) : null,
+    masked: status === "connected" && plain ? maskSecret(plain) : null,
     config: (row.config as Record<string, unknown>) ?? {},
     lastOkAt: row.lastOkAt ? row.lastOkAt.toISOString() : null,
     lastError: row.lastError,
+    status,
   };
 }

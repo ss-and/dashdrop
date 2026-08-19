@@ -117,15 +117,16 @@ function cellDisplayText(
       return ids.map((id) => relLabels?.[id] ?? id).join(" ");
     }
     case "lookup":
+    case "vlookup":
       // 検索は「画面に見えている文字」に一致してほしいので、ここもラベル後の値。
+      // vlookup も lookup と同じく、引いた先が選択肢の列ならラベルで見せる。
       return displayValue(
-        "lookup",
+        field.type,
         labelLookupValue(computed[field.key], lookupValueLabels),
       );
     case "rollup":
       return displayValue("rollup", computed[field.key]);
     case "formula":
-    case "vlookup":
       return displayValue(field.type, computed[field.key]);
     case "select": {
       const v = data[field.key];
@@ -561,7 +562,7 @@ export function DataGrid({
       // ルックアップだけは、保存値ではなく選択肢のラベルを見せる（データは生の
       // ままなので、差し替えるのはこの表示用の値だけ）。
       const shown =
-        field.type === "lookup"
+        field.type === "lookup" || field.type === "vlookup"
           ? labelLookupValue(computed[field.key], lookupLabels[field.key])
           : computed[field.key];
       return (

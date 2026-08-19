@@ -88,28 +88,74 @@ function primaryKeyOf(obj: MasterObject): string {
  * that stranger's rows — the 社員 sheet of the 人事データベース would be
  * somebody's memo table, and every 勤怠 row would link to nothing.
  *
- * There is no marker column to check, so this is a heuristic: the record label
- * must exist, and at least half of the declared columns must be present. A real
- * install matches trivially even after the owner deletes a few columns; an
- * unrelated sheet essentially never does.
+ * 判定は 2 段構え。
+ *
+ *  1. このインストーラが書いたとしか思えない config が残っているか。ここは
+ *     「config が空でない」では**弱すぎる**。`account` `invoices` のような
+ *     ありふれた英単語の列にユーザーがリンク列を足しているだけで一致してしまい、
+ *     しかもその後の貼り直しでユーザーのリンク先を上書きして壊してしまう
+ *     （実際にそういう実装を出した）。宣言どおりの中身か——リンクなら参照先が
+ *     マスターのシートか、lookup/rollup/formula なら定義と同じか——まで見る。
+ *  2. それが無ければ、記録の見出し列があり、宣言した列の半数以上が残っていること。
+ *     本物のインストールは列を少し消されても通り、無関係なシートはまず通らない。
  */
+function configLooksOurs(
+  field: MasterField,
+  stored: unknown,
+  ourCollectionIds: Set<string>,
+): boolean {
+  if (stored === null || stored === undefined || typeof stored !== "object") {
+    return false;
+  }
+  const cfg = stored as Record<string, unknown>;
+  if (field.relation) {
+    // 参照先が「このマスターDBのシート」でなければ、ユーザーが自分で張った
+    // リンク列。ここを証拠として扱うと、他人のリンク先を潰すことになる。
+    const target = cfg.targetCollectionId;
+    return typeof target === "string" && ourCollectionIds.has(target);
+  }
+  if (field.lookup) {
+    return cfg.via === field.lookup.via && cfg.target === field.lookup.target;
+  }
+  if (field.rollup) {
+    return (
+      cfg.via === field.rollup.via &&
+      cfg.target === field.rollup.target &&
+      cfg.op === field.rollup.op
+    );
+  }
+  if (field.formula) {
+    return cfg.expression === field.formula.expression;
+  }
+  return false;
+}
+
 function looksLikeOurObject(
   obj: MasterObject,
   fields: Array<{ key: string; config: unknown }>,
+  ourCollectionIds: Set<string>,
 ): boolean {
-  // 過去にこのインストーラが書いた config が残っていれば、それが動かぬ証拠。
-  // 列を削られていても（勤怠番号や申請番号は「要らない列」に見えるので実際に
-  // 消される）、これで確実に自分のものだと分かる。
-  const ourKeys = new Set(
-    obj.fields.filter((f) => f.relation || f.lookup || f.rollup || f.formula).map((f) => f.key),
-  );
-  if (fields.some((f) => ourKeys.has(f.key) && f.config !== null && f.config !== undefined)) {
-    return true;
+  const declared = new Map(obj.fields.map((f) => [f.key, f]));
+  for (const f of fields) {
+    const spec = declared.get(f.key);
+    if (spec && configLooksOurs(spec, f.config, ourCollectionIds)) return true;
   }
   const fieldKeys = new Set(fields.map((f) => f.key));
   if (!fieldKeys.has(primaryKeyOf(obj))) return false;
   const present = obj.fields.filter((f) => fieldKeys.has(f.key)).length;
   return present * 2 >= obj.fields.length;
+}
+
+/** Whether `collectionId` is still a live collection of this workspace. */
+async function collectionExists(
+  workspaceId: string,
+  collectionId: string,
+): Promise<boolean> {
+  const found = await db.collection.findFirst({
+    where: { id: collectionId, workspaceId },
+    select: { id: true },
+  });
+  return found !== null;
 }
 
 /** Relation samples hold display names; multi-value ones are separated by 、 or ,. */
@@ -139,12 +185,19 @@ export async function installMasterObjects(
   });
   const bySlug = new Map(existing.map((c) => [c.slug, c]));
 
+  // このマスターDBが既に持っているシートの id。config が「自分のもの」かを
+  // 判定するのに使う（他人のリンク先を証拠と取り違えないため）。
+  const ourSlugs = new Set(objects.map((o) => o.slug));
+  const ourCollectionIds = new Set(
+    existing.filter((c) => ourSlugs.has(c.slug)).map((c) => c.id),
+  );
+
   // Refuse to build on top of a stranger's sheet that collided on one of our
   // slugs — wiring relations into it would corrupt both databases.
   for (const obj of objects) {
     const clash = bySlug.get(obj.slug);
     if (!clash) continue;
-    if (!looksLikeOurObject(obj, clash.fields)) {
+    if (!looksLikeOurObject(obj, clash.fields, ourCollectionIds)) {
       throw new ApiError(
         // 名前を変えても slug は変わらない（PATCH は name/description/icon/color
         // のみ）ので、「名前を変えてください」とは言わないこと。
@@ -218,7 +271,13 @@ export async function installMasterObjects(
         });
         if (!current) continue;
         const cfg = (current.config ?? {}) as { targetCollectionId?: string };
-        if (cfg.targetCollectionId && liveIds.has(cfg.targetCollectionId)) continue;
+        const target = cfg.targetCollectionId;
+        // 既にマスターのシートを指しているなら触らない。
+        if (target && liveIds.has(target)) continue;
+        // ユーザーが自分のシートへ張ったリンクは、たとえ列名が一致していても
+        // 絶対に貼り替えない。貼り替えると保存済みの id が全部よそのシートの
+        // ものになり、値が全滅したうえ元に戻せない（実際にそうなる実装を出した）。
+        if (target && (await collectionExists(workspaceId, target))) continue;
         await db.field.update({
           where: { collectionId_key: { collectionId, key: f.key } },
           data: {

@@ -158,7 +158,6 @@ export const POST = withAuth(async (req, { user }) => {
   const takenSlugs = takenSlugsWithReserved(existing);
 
   // --- Prepare + validate every selected sheet BEFORE any write ---
-  assertWithinCollectionLimit(plan, existing, selections.length);
 
   const jobs: PreparedJob[] = [];
   for (const sel of selections) {
@@ -186,6 +185,11 @@ export const POST = withAuth(async (req, { user }) => {
   if (jobs.length === 0) {
     throw new ApiError("取り込めるシートがありませんでした", 422);
   }
+
+  // 上限は「実際に作るシートの数」で判定する。選択された数で数えると、
+  // 空タブを含むファイルで、実際には収まるのに 403 になってしまう。
+  // まだ何も書いていないので、ここで弾いても副作用は無い。
+  assertWithinCollectionLimit(plan, existing, jobs.length);
 
   // --- Group all sheets under one Workbook (the file) ---
   const fileBase = fileName.replace(/\.[^.]+$/, "").trim() || "インポート";
