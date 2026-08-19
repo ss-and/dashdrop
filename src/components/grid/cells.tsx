@@ -87,6 +87,20 @@ export function CellView({
     );
   }
 
+  // Formula / sheet-join columns. Both are computed on read, so `value` is
+  // record.computed[key]; a null means "not calculable" or "no match".
+  if (field.type === "formula" || field.type === "vlookup") {
+    const text = displayValue(field.type, value);
+    const numeric = typeof value === "number";
+    return text ? (
+      <span className={numeric ? "truncate tabular-nums" : "truncate"}>
+        {text}
+      </span>
+    ) : (
+      <span className="text-ink-faint">—</span>
+    );
+  }
+
   if (field.type === "select") {
     if (value === null || value === undefined || value === "") return null;
     const opt = field.options?.find((o) => o.value === value);

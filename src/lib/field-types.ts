@@ -306,6 +306,16 @@ export function displayValue(type: FieldType, value: unknown): string {
     case "multiselect":
     case "lookup":
       return Array.isArray(value) ? value.join(", ") : String(value);
+    case "formula":
+    case "vlookup":
+      // Computed on read; may legitimately be null (no match / not calculable),
+      // which must read as blank rather than the string "null".
+      if (value === null || value === undefined) return "";
+      if (Array.isArray(value)) return value.join(", ");
+      if (typeof value === "boolean") return value ? "true" : "false";
+      return typeof value === "number"
+        ? new Intl.NumberFormat("en-US").format(value)
+        : String(value);
     case "rollup":
       return typeof value === "number"
         ? new Intl.NumberFormat("en-US").format(value)

@@ -26,6 +26,10 @@ import {
 
 export type { VlookupConfig, VlookupAggregate } from "./vlookup";
 export { resolveVlookupValues, normaliseKey, buildKeyIndex } from "./vlookup";
+import { parseFormula, validateFormula, evaluateFormula } from "./formula";
+import { orderFormulaFields, toFormulaRow } from "./formula-fields";
+export type { FormulaConfig } from "./formula-fields";
+export { orderFormulaFields } from "./formula-fields";
 
 export interface RelationConfig {
   targetCollectionId: string;
@@ -210,6 +214,10 @@ export async function resolveCollectionRecords(
     );
   }
 
+  // Formula fields are parsed once for the whole collection and evaluated in
+  // dependency order per record — never re-parsed per row.
+  const preparedFormulas = orderFormulaFields(collection.fields);
+
   // Compute lookup / rollup / vlookup per record.
   const outRecords = records.map((r, rowIndex) => {
     const computed: Record<string, unknown> = {};
@@ -251,6 +259,16 @@ export async function resolveCollectionRecords(
         computed[f.key] = vals ? vals[rowIndex] : cfg.aggregate === "count" ? 0 : null;
       }
     }
+
+    // Formulas last, so they can read lookup/rollup/vlookup results, and in
+    // dependency order so a formula can build on another formula.
+    for (const pf of preparedFormulas) {
+      computed[pf.key] = evaluateFormula(
+        pf.ast,
+        toFormulaRow(r.data, computed),
+      );
+    }
+
     return { id: r.id, data: r.data, computed };
   });
 
@@ -350,8 +368,48 @@ export async function validateFieldConfig(
   config: unknown,
   siblingFields: EngineField[],
   selfCollectionId?: string,
+  /** The key of the field being saved — lets the formula branch reject cycles. */
+  selfFieldKey?: string,
 ): Promise<Record<string, unknown> | undefined> {
   const cfg = (config ?? {}) as Record<string, unknown>;
+
+  if (type === "formula") {
+    const expression = typeof cfg.expression === "string" ? cfg.expression : "";
+    if (!expression.trim()) {
+      throw new ApiError("計算式を入力してください。", 422);
+    }
+    // Every non-formula field is addressable, plus the other formula fields.
+    const available = siblingFields.map((f) => f.key);
+    const res = validateFormula(expression, available);
+    if (!res.ok) {
+      throw new ApiError(res.error, 422);
+    }
+    // A formula must not depend on itself, directly or through another formula.
+    const selfKey = selfFieldKey ?? null;
+    if (selfKey) {
+      const byKey = new Map(siblingFields.map((f) => [f.key, f]));
+      const seen = new Set<string>();
+      const reaches = (key: string): boolean => {
+        if (key === selfKey) return true;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        const f = byKey.get(key);
+        if (!f || f.type !== "formula") return false;
+        const src = ((f.config ?? {}) as { expression?: unknown }).expression;
+        if (typeof src !== "string") return false;
+        const parsed = parseFormula(src);
+        return parsed.ok ? parsed.refs.some(reaches) : false;
+      };
+      if (res.refs.some(reaches)) {
+        throw new ApiError(
+          "計算式が自分自身を参照しています（循環参照）。別の項目を参照してください。",
+          422,
+        );
+      }
+    }
+    return { expression };
+  }
+
   if (type === "relation") {
     const targetCollectionId = String(cfg.targetCollectionId ?? "");
     if (!targetCollectionId) {

@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import {
   FIELD_TYPE_META,
   displayValue,
+  isComputedField,
   type SelectOption,
 } from "@/lib/field-types";
 import { CellView, CellEditor, type GridField } from "./cells";
@@ -92,6 +93,9 @@ function cellDisplayText(
       return displayValue("lookup", computed[field.key]);
     case "rollup":
       return displayValue("rollup", computed[field.key]);
+    case "formula":
+    case "vlookup":
+      return displayValue(field.type, computed[field.key]);
     case "select": {
       const v = data[field.key];
       if (v === null || v === undefined || v === "") return "";
@@ -137,6 +141,14 @@ function cellSortValue(
   if (field.type === "rollup") {
     const raw = computed[field.key];
     return typeof raw === "number" ? raw : null;
+  }
+  if (field.type === "formula" || field.type === "vlookup") {
+    // Sort numerically when the computed value is a number, otherwise fall
+    // through to its text so a text-valued join still orders sensibly.
+    const raw = computed[field.key];
+    if (typeof raw === "number") return raw;
+    if (raw === null || raw === undefined || raw === "") return null;
+    return String(raw);
   }
   if (field.type === "date") {
     const raw = data[field.key];
@@ -463,7 +475,9 @@ export function DataGrid({
     computed: Record<string, unknown>,
   ) {
     const relLabels = relationLabels[field.key];
-    const isComputed = field.type === "lookup" || field.type === "rollup";
+    // Use the shared predicate — a hardcoded pair silently left new computed
+    // types (formula / vlookup) reading from `data`, where they never exist.
+    const isComputed = isComputedField(field.type);
 
     if (isEditing(rowId, field.key)) {
       return (
@@ -478,7 +492,7 @@ export function DataGrid({
       );
     }
 
-    // Lookup / rollup are read-only: render a non-interactive cell.
+    // Computed columns are read-only: render a non-interactive cell.
     if (isComputed) {
       return (
         <div className="flex h-full min-h-[38px] w-full items-center px-2.5 py-1 text-left text-sm text-ink-muted">

@@ -26,6 +26,7 @@ export const POST = withAuth(async (req, { user, params }) => {
     input.config,
     collection.fields as unknown as EngineField[],
     collection.id,
+    key,
   );
 
   // Next position = max existing + 1.

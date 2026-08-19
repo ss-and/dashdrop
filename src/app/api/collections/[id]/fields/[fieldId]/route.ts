@@ -35,6 +35,7 @@ export const PATCH = withAuth(async (req, { user, params }) => {
       input.config ?? field.config,
       collection.fields as unknown as EngineField[],
       collection.id,
+      field.key,
     );
     data.config = cfg ? toJson(cfg) : undefined;
   }

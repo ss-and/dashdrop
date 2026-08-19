@@ -6,6 +6,8 @@ import {
   isFieldType,
   FIELD_TYPES,
   type SelectOption,
+  isComputedField,
+  COMPUTED_FIELD_TYPES,
 } from "@/lib/field-types";
 
 describe("coerceValue", () => {
@@ -237,5 +239,45 @@ describe("isFieldType", () => {
     expect(isFieldType(42)).toBe(false);
     expect(isFieldType(null)).toBe(false);
     expect(isFieldType(undefined)).toBe(false);
+  });
+});
+
+describe("computed field display", () => {
+  // Regression: `displayValue` had no case for formula/vlookup, so it fell to
+  // the default `String(value)` and printed the literal "null" in cells; and
+  // the grid decided read-only-ness with a hardcoded lookup/rollup pair, so the
+  // new computed types read from `data` (where they never exist) and rendered
+  // blank even though the API returned correct values.
+  it("treats all four derived types as computed", () => {
+    for (const t of ["lookup", "rollup", "formula", "vlookup"]) {
+      expect(isComputedField(t), t).toBe(true);
+    }
+    for (const t of ["text", "number", "currency", "date", "relation"]) {
+      expect(isComputedField(t), t).toBe(false);
+    }
+    expect([...COMPUTED_FIELD_TYPES].sort()).toEqual(
+      ["formula", "lookup", "rollup", "vlookup"].sort(),
+    );
+  });
+
+  it("renders a null computed value as blank, never the string 'null'", () => {
+    for (const t of ["formula", "vlookup"] as const) {
+      expect(displayValue(t, null)).toBe("");
+      expect(displayValue(t, undefined)).toBe("");
+    }
+  });
+
+  it("formats computed numbers and keeps zero visible", () => {
+    expect(displayValue("formula", 600)).toBe("600");
+    expect(displayValue("formula", 1234567)).toBe("1,234,567");
+    // 0 is a real answer — it must not be swallowed as "empty".
+    expect(displayValue("formula", 0)).toBe("0");
+    expect(displayValue("vlookup", 0)).toBe("0");
+  });
+
+  it("passes computed text and lists through", () => {
+    expect(displayValue("vlookup", "製造")).toBe("製造");
+    expect(displayValue("vlookup", ["製造", "卸売"])).toBe("製造, 卸売");
+    expect(displayValue("formula", true)).toBe("true");
   });
 });

@@ -21,6 +21,7 @@ import {
   VLOOKUP_AGGREGATE_LABELS,
   type VlookupAggregate,
 } from "@/lib/vlookup";
+import { validateFormula, FORMULA_FUNCTIONS } from "@/lib/formula";
 import type { GridField } from "./cells";
 import type { WorkspaceCollection } from "./DataGrid";
 
@@ -35,9 +36,11 @@ const ROLLUP_OPS: Array<{ value: string; label: string }> = [
 /** Japanese labels for types whose registry label is still English. */
 const TYPE_LABEL_JA: Partial<Record<FieldType, string>> = {
   vlookup: "別シートから引く（VLOOKUP）",
+  formula: "計算式",
 };
 const TYPE_DESCRIPTION_JA: Partial<Record<FieldType, string>> = {
   vlookup: "別シートを共通の列で突き合わせて、値を引いてきます（自動計算）",
+  formula: "他の項目から計算します（粗利＝売上−原価 など）",
 };
 function typeLabel(t: FieldType): string {
   return TYPE_LABEL_JA[t] ?? FIELD_TYPE_META[t].label;
@@ -102,6 +105,23 @@ export function FieldEditor({
   const [via, setVia] = useState<string>(String(cfg.via ?? ""));
   const [targetKey, setTargetKey] = useState<string>(String(cfg.target ?? ""));
   const [op, setOp] = useState<string>(String(cfg.op ?? "sum"));
+
+  // formula (計算式) config
+  const [expression, setExpression] = useState<string>(
+    () => ((field?.config ?? {}) as { expression?: string }).expression ?? "",
+  );
+
+  // Live formula validation against this sheet's other (non-computed) keys.
+  const insertableKeys = collectionFields.filter(
+    (f) => f.key !== field?.key && !isComputedField(f.type),
+  );
+  const formulaCheck =
+    type === "formula" && expression.trim() !== ""
+      ? validateFormula(
+          expression,
+          collectionFields.filter((f) => f.key !== field?.key).map((f) => f.key),
+        )
+      : null;
 
   // vlookup (シート結合) config — target sheet reuses `targetCollectionId`.
   const [localKey, setLocalKey] = useState<string>(String(cfg.localKey ?? ""));
@@ -196,6 +216,8 @@ export function FieldEditor({
       config = { via, target: targetKey };
     } else if (type === "rollup") {
       config = { via, target: targetKey, op };
+    } else if (type === "formula") {
+      config = { expression };
     } else if (type === "vlookup") {
       config = {
         targetCollectionId,
@@ -396,6 +418,85 @@ export function FieldEditor({
                   </Select>
                 </div>
               )}
+            </div>
+          )}
+
+          {type === "formula" && (
+            <div className="space-y-2 rounded-sm border border-ink-line bg-paper-sunken/40 p-3">
+              <p className="text-xs text-ink-muted">
+                他の項目を <code className="rounded bg-paper px-1">{"{項目キー}"}</code>{" "}
+                で参照します。例：
+                <code className="ml-1 rounded bg-paper px-1">
+                  {"{sales} - {cost}"}
+                </code>
+              </p>
+
+              <div>
+                <Label htmlFor="fe-expression">計算式</Label>
+                <textarea
+                  id="fe-expression"
+                  value={expression}
+                  onChange={(e) => setExpression(e.target.value)}
+                  rows={3}
+                  spellCheck={false}
+                  className="input-base py-2 font-mono text-xs"
+                  placeholder="{sales} - {cost}"
+                />
+              </div>
+
+              {/* Live validation: a bad formula should never reach the server. */}
+              {expression.trim() !== "" && formulaCheck && !formulaCheck.ok && (
+                <p className="text-xs text-danger" role="alert">
+                  {formulaCheck.error}
+                </p>
+              )}
+              {expression.trim() !== "" && formulaCheck?.ok && (
+                <p className="text-xs text-success">
+                  式は正しく解釈できます
+                  {formulaCheck.refs.length > 0 &&
+                    `（参照: ${formulaCheck.refs.join(", ")}）`}
+                </p>
+              )}
+
+              {/* Click a field to insert its key — beats memorising them. */}
+              {insertableKeys.length > 0 && (
+                <div>
+                  <p className="mb-1 text-2xs font-semibold uppercase tracking-wider text-ink-faint">
+                    項目を挿入
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {insertableKeys.map((f) => (
+                      <button
+                        key={f.key}
+                        type="button"
+                        onClick={() =>
+                          setExpression((v) => `${v}${v && !v.endsWith(" ") ? " " : ""}{${f.key}}`)
+                        }
+                        className="rounded border border-ink-line bg-paper-raised px-2 py-1 text-2xs text-ink-soft transition-colors hover:bg-paper-sunken"
+                        title={f.key}
+                      >
+                        {f.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <details className="text-xs">
+                <summary className="cursor-pointer text-khaki-700">
+                  使える関数（{FORMULA_FUNCTIONS.length}）
+                </summary>
+                <ul className="mt-1.5 max-h-40 space-y-0.5 overflow-y-auto">
+                  {FORMULA_FUNCTIONS.map((fn) => (
+                    <li key={fn.name} className="text-ink-muted">
+                      <code className="text-ink-soft">
+                        {fn.name}({fn.args})
+                      </code>{" "}
+                      — {fn.description}
+                    </li>
+                  ))}
+                </ul>
+              </details>
             </div>
           )}
 

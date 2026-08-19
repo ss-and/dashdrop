@@ -17,6 +17,8 @@ const config = [
       "prisma/generated/**",
       "next-env.d.ts",
       "**/*.db",
+      // Throwaway E2E / probe scripts run against a live dev server.
+      "_*.mjs",
     ],
   },
   ...compat.extends("next/core-web-vitals", "next/typescript"),
