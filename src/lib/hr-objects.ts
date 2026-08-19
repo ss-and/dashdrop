@@ -235,7 +235,13 @@ const ATTENDANCE: HrObject = {
       name: "残業時間",
       type: "formula",
       // 所定労働 8 時間を超えた分。負にならないよう MAX で丸める。
-      formula: { expression: "ROUND(MAX({workHours} - 8, 0), 2)" },
+      // MAX は空欄を読み飛ばすため、素直に MAX({workHours} - 8, 0) と書くと
+      // 勤務時間が未入力の日（有給・欠勤）まで残業 0 時間として表示される。
+      // 未入力は「0」ではなく空欄で見せたいので、先に ISBLANK で分ける。
+      formula: {
+        expression:
+          'IF(ISBLANK({workHours}), "", ROUND(MAX({workHours} - 8, 0), 2))',
+      },
     },
     { key: "category", name: "区分", type: "select", options: ATTENDANCE_CATEGORY },
     {
@@ -361,8 +367,11 @@ const REVIEWS: HrObject = {
       name: "達成度区分",
       type: "formula",
       formula: {
+        // 目標達成率が未入力のとき、比較はすべて null（=偽）になるので、
+        // ガードなしだと最後の "未達" に落ちる。評価前の行が「未達」と
+        // 表示されるのは本人にとって事実誤認なので、空欄は空欄のまま返す。
         expression:
-          'IF({achievement} >= 120, "大幅達成", IF({achievement} >= 100, "達成", IF({achievement} >= 80, "一部未達", "未達")))',
+          'IF(ISBLANK({achievement}), "", IF({achievement} >= 120, "大幅達成", IF({achievement} >= 100, "達成", IF({achievement} >= 80, "一部未達", "未達"))))',
       },
     },
     {

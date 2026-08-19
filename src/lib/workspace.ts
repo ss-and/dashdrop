@@ -8,6 +8,7 @@
 import { db, toJson } from "./db";
 import { ApiError } from "./errors";
 import { getPlan } from "./plans";
+import { MASTER_SLUGS } from "./master-objects";
 import type { CurrentUser } from "./auth";
 import type { Collection, Field } from "@prisma/client";
 
@@ -36,8 +37,9 @@ export async function getRecordForUser(user: CurrentUser, recordId: string) {
 
 export async function assertCanCreateCollection(user: CurrentUser): Promise<void> {
   const plan = getPlan(user.workspace.plan);
+  // 組み込みのマスターDB（顧客・人事）は枠を消費しない — src/lib/master-objects.ts
   const count = await db.collection.count({
-    where: { workspaceId: user.workspace.id },
+    where: { workspaceId: user.workspace.id, slug: { notIn: MASTER_SLUGS } },
   });
   if (count >= plan.limits.collections) {
     throw new ApiError(

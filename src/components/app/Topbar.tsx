@@ -11,17 +11,22 @@ import { getPlanBadge } from "./plan-badge";
 import { GlobalSearch } from "@/components/search/GlobalSearch";
 import type { CurrentUser } from "@/lib/auth";
 
-/** How many extra (non-CRM) sheets appear as object tabs. */
-/** マスター（顧客+人事）でタブ列を埋め尽くさないための上限。 */
-const MAX_MASTER_TABS = 6;
+/**
+ * 人事データベースからタブに出す代表オブジェクト。
+ *
+ * 顧客5 + 人事5 を全部並べるとタブ列が 15 個になって、まさに「多くて迷子」の
+ * 状態になる。人事は 社員 が他3つ（勤怠・休暇申請・評価）の親なので、ここは
+ * 社員だけを出し、残りはランチャーとサイドバーから辿ってもらう。
+ */
+const HR_PRIMARY_SLUG = "hr-employees";
 /** マスターの後ろに並べる、取り込んだシートの上限。 */
 const EXTRA_TABS = 4;
 
 /**
- * Builds the object tab strip: ホーム + マスター（顧客→人事）+ a few more sheets.
+ * Builds the object tab strip: ホーム + 顧客5 + 社員 + 取り込んだシート最大4件。
  *
- * タブが多いと迷子になる、という指摘を受けて上限を設けている。全部を見るのは
- * ランチャー（ワッフル）と左のサイドバーの役目なので、ここは増やしすぎないこと。
+ * タブが多いと迷子になる、という指摘を受けて 11 個で頭打ちにしている。全部を
+ * 見るのはランチャー（ワッフル）と左のサイドバーの役目なので、ここは増やさない。
  *
  * アラート and レポート are intentionally NOT emitted here — they were dropped
  * from the navigation on purpose, so do not add tabs for them back.
@@ -30,11 +35,11 @@ function buildNavItems(data: NavData | null): ObjectNavItem[] {
   const items: ObjectNavItem[] = [{ href: "/home", label: "ホーム" }];
   if (!data) return items;
 
-  // 顧客 → 人事 の順。合計 MAX_MASTER_TABS 件まで。
-  const masters = [...(data.crm ?? []), ...(data.hr ?? [])].slice(
-    0,
-    MAX_MASTER_TABS,
-  );
+  // 顧客はすべて、人事は代表（社員）だけ。
+  const masters = [
+    ...(data.crm ?? []),
+    ...(data.hr ?? []).filter((c) => c.slug === HR_PRIMARY_SLUG),
+  ];
   for (const c of masters) {
     items.push({ href: `/c/${c.id}`, label: c.name });
   }

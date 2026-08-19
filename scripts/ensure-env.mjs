@@ -5,8 +5,13 @@
  * with "Environment variable not found: DATABASE_URL". This copies
  * `.env.example` → `.env` on first run (cross-platform, no shell `cp`/`copy`
  * differences). Runs automatically via the `presetup` / `predev` npm hooks.
+ *
+ * AUTH_SECRET は、コピーの時点でランダムな値に置き換える。プレースホルダのまま
+ * 公開されると、JWT の署名鍵も、連携トークンの暗号鍵（scrypt(AUTH_SECRET)）も
+ * 公開リポジトリから丸わかりになるため。ここで必ず一意の値にしておく。
  */
-import { existsSync, copyFileSync } from "node:fs";
+import { existsSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 
 if (existsSync(".env")) {
   process.exit(0);
@@ -18,5 +23,24 @@ if (!existsSync(".env.example")) {
 }
 
 copyFileSync(".env.example", ".env");
+
+// base64 は `"` を含まないので、そのまま二重引用符で囲んで安全。
+const secret = randomBytes(48).toString("base64");
+const contents = readFileSync(".env", "utf8");
+const replaced = contents.replace(
+  /^AUTH_SECRET=.*$/m,
+  `AUTH_SECRET="${secret}"`,
+);
+
+if (replaced === contents) {
+  // AUTH_SECRET 行が無い（.env.example が変わった）場合は追記する。
+  writeFileSync(
+    ".env",
+    `${contents.replace(/\n*$/, "\n")}AUTH_SECRET="${secret}"\n`,
+  );
+} else {
+  writeFileSync(".env", replaced);
+}
+
 console.log("✅ .env を作成しました（.env.example からコピー）。");
-console.log("   本番公開時は AUTH_SECRET を強い値に変更してください: openssl rand -base64 48");
+console.log("   AUTH_SECRET はこの環境専用のランダムな値を生成しました。");

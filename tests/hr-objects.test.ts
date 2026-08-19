@@ -9,7 +9,8 @@ import {
 import { CRM_SLUGS } from "@/lib/crm-objects";
 import { SAMPLE_SHEETS } from "@/lib/sample-sheets";
 import { FIELD_TYPES, isComputedField } from "@/lib/field-types";
-import { parseFormula } from "@/lib/formula";
+import { parseFormula, evaluateFormula } from "@/lib/formula";
+import type { FormulaValue } from "@/lib/formula";
 
 const bySlug = new Map(HR_OBJECTS.map((o) => [o.slug, o]));
 
@@ -320,5 +321,91 @@ describe("HR definitions never carry 特定個人情報 / 要配慮個人情報"
         expect(bannedKeys, `${o.slug}.${f.key}`).not.toContain(f.key);
       }
     }
+  });
+});
+
+describe("HR の計算列 — 空欄の扱い", () => {
+  /** 定義から式を取り出して、その場で評価する。 */
+  function evalField(
+    slug: string,
+    key: string,
+    row: Record<string, FormulaValue>,
+  ) {
+    const obj = HR_OBJECTS.find((o) => o.slug === slug);
+    if (!obj) throw new Error(`no object ${slug}`);
+    const field = obj.fields.find((f) => f.key === key);
+    if (!field?.formula) throw new Error(`no formula on ${slug}.${key}`);
+    const parsed = parseFormula(field.formula.expression);
+    if (!parsed.ok) throw new Error(`parse failed: ${field.formula.expression}`);
+    return evaluateFormula(parsed.ast, row);
+  }
+
+  describe("勤怠 — 残業時間", () => {
+    /**
+     * 回帰テスト: MAX は空欄を読み飛ばすので、MAX({workHours} - 8, 0) だと
+     * 勤務時間が未入力の日（有給・欠勤）まで「0」と表示されていた。
+     * 働いていない日と、ちょうど8時間働いた日が同じ見た目になるのは誤り。
+     */
+    it("勤務時間が未入力なら空欄", () => {
+      expect(evalField("hr-attendance", "overtimeHours", {})).toBe("");
+      expect(
+        evalField("hr-attendance", "overtimeHours", { workHours: null }),
+      ).toBe("");
+      expect(
+        evalField("hr-attendance", "overtimeHours", { workHours: "" }),
+      ).toBe("");
+    });
+
+    it("8時間以下なら 0、超えた分だけ残業になる", () => {
+      expect(evalField("hr-attendance", "overtimeHours", { workHours: 8 })).toBe(0);
+      expect(evalField("hr-attendance", "overtimeHours", { workHours: 6 })).toBe(0);
+      expect(
+        evalField("hr-attendance", "overtimeHours", { workHours: 10.5 }),
+      ).toBe(2.5);
+    });
+  });
+
+  describe("評価 — 達成度区分", () => {
+    /**
+     * 回帰テスト: 比較の片側が null だと結果も null（偽）になるため、
+     * 未入力の行がすべて「未達」と表示されていた。まだ評価していない行を
+     * 本人に「未達」と見せてしまうのは事実誤認。
+     */
+    it("目標達成率が未入力なら空欄（「未達」にしない）", () => {
+      expect(evalField("hr-reviews", "achievementBand", {})).toBe("");
+      expect(
+        evalField("hr-reviews", "achievementBand", { achievement: null }),
+      ).toBe("");
+    });
+
+    it("境界値がそれぞれ正しい区分になる", () => {
+      const band = (achievement: number) =>
+        evalField("hr-reviews", "achievementBand", { achievement });
+      expect(band(0)).toBe("未達");
+      expect(band(79.9)).toBe("未達");
+      expect(band(80)).toBe("一部未達");
+      expect(band(99.9)).toBe("一部未達");
+      expect(band(100)).toBe("達成");
+      expect(band(119.9)).toBe("達成");
+      expect(band(120)).toBe("大幅達成");
+      expect(band(300)).toBe("大幅達成");
+    });
+  });
+
+  describe("休暇申請 — 日数", () => {
+    it("同日なら 1 日、3日間なら 3 日", () => {
+      expect(
+        evalField("hr-leave-requests", "days", {
+          startDate: "2026-07-13",
+          endDate: "2026-07-13",
+        }),
+      ).toBe(1);
+      expect(
+        evalField("hr-leave-requests", "days", {
+          startDate: "2026-07-13",
+          endDate: "2026-07-15",
+        }),
+      ).toBe(3);
+    });
   });
 });

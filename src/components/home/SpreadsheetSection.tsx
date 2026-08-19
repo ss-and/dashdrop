@@ -26,7 +26,14 @@ export interface SheetGroup {
   entries: SheetEntry[];
 }
 
-export function SpreadsheetSection({ groups }: { groups: SheetGroup[] }) {
+export function SpreadsheetSection({
+  groups,
+  children,
+}: {
+  groups: SheetGroup[];
+  /** 未作成のマスターDBを作る導線など、一覧の下に差し込む内容。 */
+  children?: React.ReactNode;
+}) {
   const filled = groups.filter((g) => g.entries.length > 0);
 
   return (
@@ -58,6 +65,8 @@ export function SpreadsheetSection({ groups }: { groups: SheetGroup[] }) {
           まだスプレッドシートがありません。
         </p>
       )}
+
+      {children}
 
       <div className="flex flex-wrap items-center gap-4">
         <Link

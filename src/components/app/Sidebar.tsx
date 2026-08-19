@@ -203,12 +203,25 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
         Master databases — pinned to the bottom of the rail (Salesforce keeps its
         objects at a fixed spot rather than scrolling with the file tree).
         Clicking an object name opens that database.
+
+        両方入れると 10 行になり、その分だけ上のファイルツリーが潰れる。
+        「左のタブが多いと迷子になる」という指摘があったので、各グループは
+        折りたたみ式にして、既定では顧客データベースだけを開いておく。
       */}
-      <div className="max-h-72 shrink-0 space-y-2 overflow-y-auto border-t border-ink-line px-2 py-2">
-        <MasterGroup label="顧客データベース" sheets={crmSheets}>
+      <div className="max-h-[45vh] shrink-0 space-y-1 overflow-y-auto border-t border-ink-line px-2 py-2">
+        <MasterGroup
+          label="顧客データベース"
+          groupName="master-crm"
+          sheets={crmSheets}
+          defaultOpen
+        >
           <CreateCrmButton />
         </MasterGroup>
-        <MasterGroup label="人事データベース" sheets={hrSheets}>
+        <MasterGroup
+          label="人事データベース"
+          groupName="master-hr"
+          sheets={hrSheets}
+        >
           <CreateHrButton />
         </MasterGroup>
       </div>
@@ -227,37 +240,73 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
  */
 function MasterGroup({
   label,
+  groupName,
   sheets,
+  defaultOpen,
   children,
 }: {
   label: string;
+  /** Tailwind group name — must be unique per group on the page. */
+  groupName: "master-crm" | "master-hr";
   sheets: { id: string; icon: string; name: string; _count: { records: number } }[];
+  /** Open on first paint. Only one group is open by default, to keep the rail short. */
+  defaultOpen?: boolean;
   /** The "create this database" action, shown only when it's missing. */
   children: React.ReactNode;
 }) {
+  const chevron =
+    groupName === "master-crm"
+      ? "group-open/master-crm:rotate-90"
+      : "group-open/master-hr:rotate-90";
+  const listId = `${groupName}-list`;
+
+  // 未作成のときは折りたためない（中身が「作成する」ボタンだけなので、
+  // 折りたたむと作成手段が消えてしまう）。
+  if (sheets.length === 0) {
+    return (
+      <div>
+        <div className="flex items-center px-3 pb-1.5 pt-1">
+          <span className="text-2xs font-semibold uppercase tracking-wider text-ink-muted">
+            {label}
+          </span>
+        </div>
+        <div className="px-1 pb-1">{children}</div>
+      </div>
+    );
+  }
+
   return (
-    <div>
-      <div className="flex items-center px-3 pb-1.5">
-        <span className="text-2xs font-semibold uppercase tracking-wider text-ink-muted">
+    <details
+      open={defaultOpen}
+      className={groupName === "master-crm" ? "group/master-crm" : "group/master-hr"}
+    >
+      <summary className="flex list-none items-center gap-1 rounded px-3 pb-1.5 pt-1">
+        <span
+          id={listId}
+          className="text-2xs font-semibold uppercase tracking-wider text-ink-muted"
+        >
           {label}
         </span>
-      </div>
-      {sheets.length > 0 ? (
-        <ul className="space-y-0.5">
-          {sheets.map((c) => (
-            <SheetLink
-              key={c.id}
-              id={c.id}
-              icon={c.icon}
-              name={c.name}
-              count={c._count.records}
-            />
-          ))}
-        </ul>
-      ) : (
-        <div className="px-1 pb-1">{children}</div>
-      )}
-    </div>
+        <NavIcon
+          name="chevron"
+          className={`h-3 w-3 shrink-0 text-ink-faint transition-transform ${chevron}`}
+        />
+        <span className="ml-auto text-2xs tabular-nums text-ink-faint">
+          {sheets.length}
+        </span>
+      </summary>
+      <ul className="space-y-0.5" aria-labelledby={listId}>
+        {sheets.map((c) => (
+          <SheetLink
+            key={c.id}
+            id={c.id}
+            icon={c.icon}
+            name={c.name}
+            count={c._count.records}
+          />
+        ))}
+      </ul>
+    </details>
   );
 }
 

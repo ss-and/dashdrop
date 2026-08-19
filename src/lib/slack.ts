@@ -105,10 +105,14 @@ export function buildMessage(input: SlackMessageInput): SlackBlockMessage {
     elements: [{ type: "mrkdwn", text: "DashDrop からの通知" }],
   });
 
-  const fallbackParts = [title];
-  if (body) fallbackParts.push(body);
-  for (const f of fields) fallbackParts.push(`${f.label}: ${f.value}`);
-  if (url) fallbackParts.push(url);
+  // フォールバックの text にもブロックと同じエスケープをかける。ここを素通しに
+  // すると、シート名やアラート名に <!channel> と書くだけで、通知先チャンネル
+  // 全員をメンションできてしまう（ブロック側は既に無害化済み）。
+  const fallbackParts = [escapeMrkdwn(title)];
+  if (body) fallbackParts.push(escapeMrkdwn(body));
+  for (const f of fields)
+    fallbackParts.push(`${escapeMrkdwn(f.label)}: ${escapeMrkdwn(f.value)}`);
+  if (url) fallbackParts.push(escapeMrkdwn(url));
 
   return {
     text: clamp(fallbackParts.join(" / ").trim() || "DashDrop", MAX_FALLBACK_TEXT),

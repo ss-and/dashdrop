@@ -47,11 +47,45 @@ if (!parsed.success) {
 
 export const env = parsed.data;
 
+/**
+ * Placeholder secrets that must never reach production.
+ *
+ * 長さだけを見ていると `.env.example` の
+ * "change-me-to-a-long-random-string-min-32-chars"（46文字）を「強い」と
+ * 判定してしまい、公開リポジトリの値のまま本番が起動してしまう。AUTH_SECRET は
+ * セッション JWT の署名鍵であると同時に、連携トークンの暗号鍵の導出元
+ * （src/lib/crypto.ts）でもあるため、漏れると全テナントが破られる。
+ * 値そのものではなく「いかにも仮の値」という特徴で弾く。
+ */
+const PLACEHOLDER_MARKERS = [
+  "change-me",
+  "change_me",
+  "changeme",
+  "your-secret",
+  "your_secret",
+  "replace-me",
+  "placeholder",
+  "example",
+  "insecure",
+  "dev-only-secret",
+  "min-32-chars",
+];
+
+/**
+ * Whether `secret` is strong enough to serve production traffic with.
+ * Pure — exported so the rule can be tested without booting the app.
+ */
+export function isStrongSecret(secret: string): boolean {
+  if (secret.length < 32) return false;
+  const lower = secret.toLowerCase();
+  if (PLACEHOLDER_MARKERS.some((m) => lower.includes(m))) return false;
+  // 同じ文字の繰り返し（"aaaa…"）のような、長さだけ足りている値も弾く。
+  if (new Set(secret).size < 12) return false;
+  return true;
+}
+
 /** True when a real AUTH_SECRET has been configured (blocks unsafe prod boot). */
-export const isSecureAuthSecret =
-  env.AUTH_SECRET.length >= 32 &&
-  env.AUTH_SECRET !== "dev-insecure-secret-change-me" &&
-  !env.AUTH_SECRET.startsWith("dev-only-secret");
+export const isSecureAuthSecret = isStrongSecret(env.AUTH_SECRET);
 
 // Enforce a strong secret when actually serving in production — but not during
 // `next build` (NEXT_PHASE=phase-production-build), where secrets may be absent.

@@ -11,8 +11,9 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { CRM_OBJECTS, CRM_SLUGS } from "@/lib/crm-objects";
-import { HR_OBJECTS, HR_SLUGS } from "@/lib/hr-objects";
+import { CRM_OBJECTS } from "@/lib/crm-objects";
+import { HR_OBJECTS } from "@/lib/hr-objects";
+import { MASTER_SLUGS } from "@/lib/master-objects";
 import type { SelectOption } from "@/lib/field-types";
 import { Topbar } from "@/components/app/Topbar";
 import { GettingStarted } from "@/components/help/GettingStarted";
@@ -28,6 +29,7 @@ import {
   type SheetGroup,
 } from "@/components/home/SpreadsheetSection";
 import { DashboardSection } from "@/components/home/DashboardSection";
+import { SetupMasterButton } from "@/components/home/SetupMasterButton";
 import { SetupCrmButton } from "@/components/home/SetupCrmButton";
 
 function toNumber(v: unknown): number {
@@ -48,9 +50,6 @@ export default async function HomePage() {
   if (!user) redirect("/login");
 
   const workspaceId = user.workspace.id;
-
-  /** 顧客データベース + 人事データベース — ホームでは「マスター」として一括で扱う。 */
-  const MASTER_SLUGS: string[] = [...CRM_SLUGS, ...HR_SLUGS];
 
   /* ------------------------------ base loading ----------------------------- */
 
@@ -296,6 +295,20 @@ export default async function HomePage() {
       href: `/c/${c.id}`,
     }));
 
+  /**
+   * まだ入れていないマスターDB。「はじめかた」は本当に空のワークスペースにしか
+   * 出ないので、片方だけ入れた状態でもう片方を作る導線がここに要る（人事だけ
+   * 入れた瞬間に顧客DBの作成手段が画面から消えていた）。
+   */
+  const missingMasters = [
+    crmEntries.length === 0
+      ? { kind: "crm" as const, label: "顧客データベース", note: "顧客・担当者・商談・請求書・活動" }
+      : null,
+    hrEntries.length === 0
+      ? { kind: "hr" as const, label: "人事データベース", note: "部署・社員・勤怠・休暇申請・評価" }
+      : null,
+  ].filter((m): m is NonNullable<typeof m> => m !== null);
+
   const groups: SheetGroup[] = [
     { key: "crm", label: "顧客データベース", entries: crmEntries },
     { key: "hr", label: "人事データベース", entries: hrEntries },
@@ -342,7 +355,24 @@ export default async function HomePage() {
           )}
 
           {/* B) スプレッドシート */}
-          <SpreadsheetSection groups={groups} />
+          <SpreadsheetSection groups={groups}>
+            {missingMasters.length > 0 && !isNewWorkspace && (
+              <div className="flex flex-wrap items-start gap-6 rounded-md border border-ink-line bg-paper-sunken px-4 py-3">
+                {missingMasters.map((m) => (
+                  <div key={m.kind} className="space-y-1.5">
+                    <p className="text-sm font-medium text-ink">{m.label}</p>
+                    <p className="text-xs text-ink-muted">{m.note}</p>
+                    <SetupMasterButton
+                      kind={m.kind}
+                      label={`${m.label}を作成`}
+                      variant="secondary"
+                      size="sm"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </SpreadsheetSection>
 
           {/* C) ダッシュボード */}
           <DashboardSection dashboards={dashboards} />

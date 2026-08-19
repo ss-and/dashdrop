@@ -277,3 +277,33 @@ describe("postToSlack", () => {
     }
   });
 });
+
+describe("buildMessage — フォールバック text のエスケープ", () => {
+  /**
+   * 回帰テスト: blocks 側だけエスケープしていたため、シート名やアラート名に
+   * `<!channel>` と入れると text 経由でチャンネル全員をメンションできた。
+   */
+  it("<!channel> をタイトル・本文・フィールド・URL のどこに入れても素通ししない", () => {
+    const msg = buildMessage({
+      title: "<!channel> 緊急",
+      body: "<!here> 至急確認",
+      fields: [{ label: "<!everyone>", value: "<!channel>" }],
+      url: "https://example.com/?x=<!channel>",
+    });
+    expect(msg.text).not.toContain("<!channel>");
+    expect(msg.text).not.toContain("<!here>");
+    expect(msg.text).not.toContain("<!everyone>");
+    expect(msg.text).toContain("&lt;!channel&gt;");
+    expect(JSON.stringify(msg.blocks)).not.toContain("<!channel>");
+  });
+
+  it("普通の日本語はそのまま読める", () => {
+    const msg = buildMessage({
+      title: "売上アラート",
+      body: "今月の売上が目標を下回っています",
+      fields: [{ label: "現在", value: "¥1,200,000" }],
+    });
+    expect(msg.text).toContain("売上アラート");
+    expect(msg.text).toContain("¥1,200,000");
+  });
+});

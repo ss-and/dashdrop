@@ -89,6 +89,31 @@ function HomeIcon({ className }: { className?: string }) {
   );
 }
 
+/**
+ * 未作成のマスターDBの案内。ホームの「スプレッドシート」の下に実際の作成
+ * ボタンが出ているので、そこへ送る（以前はボタンの無いページへ送っていた）。
+ */
+function MissingMaster({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <div className="mt-3 rounded border border-ink-line bg-paper-sunken px-3 py-2.5">
+      <p className="text-xs text-ink-soft">{label}がまだありません</p>
+      <Link
+        href="/home"
+        onClick={onClick}
+        className="mt-1 inline-block text-xs font-medium text-khaki-600 hover:text-khaki-700"
+      >
+        ホームで作成する
+      </Link>
+    </div>
+  );
+}
+
 function matches(name: string, query: string): boolean {
   if (!query) return true;
   return name.toLowerCase().includes(query.toLowerCase());
@@ -263,19 +288,9 @@ export function AppLauncher({
                   </>
                 )}
 
-                {data && data.crm.length === 0 && !query.trim() && (
-                  <div className="mt-3 rounded border border-ink-line bg-paper-sunken px-3 py-2.5">
-                    <p className="text-xs text-ink-soft">
-                      顧客データベースがまだありません
-                    </p>
-                    <Link
-                      href="/home"
-                      onClick={close}
-                      className="mt-1 inline-block text-xs font-medium text-khaki-600 hover:text-khaki-700"
-                    >
-                      ホームで設定する
-                    </Link>
-                  </div>
+                {/* 未作成のマスターDB — ホームに作成ボタンが出ている。 */}
+                {data && !query.trim() && (data.crm ?? []).length === 0 && (
+                  <MissingMaster label="顧客データベース" onClick={close} />
                 )}
 
                 {/* 人事データベース（HRコア） */}
@@ -295,6 +310,10 @@ export function AppLauncher({
                       ))}
                     </div>
                   </>
+                )}
+
+                {data && !query.trim() && (data.hr ?? []).length === 0 && (
+                  <MissingMaster label="人事データベース" onClick={close} />
                 )}
 
                 {/* 取り込んだファイル（ワークブック単位） */}
