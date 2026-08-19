@@ -2,9 +2,10 @@
  * Formula tokenizer.
  *
  * Turns formula source text into a flat token list. Pure string scanning —
- * there is deliberately no `eval`, no `new Function`, no `RegExp` built from
- * user input, and no dynamic import anywhere in this engine: formulas are
- * untrusted, tenant-supplied text that we evaluate server-side.
+ * there is deliberately no dynamic code construction anywhere in this engine:
+ * no `eval`, no Function constructor, no dynamic import, and no `RegExp` built
+ * from user input. Formulas are untrusted, tenant-supplied text that we
+ * evaluate server-side.
  *
  * All errors are thrown as {@link FormulaSyntaxError} with a Japanese message
  * and a character offset; `parseFormula` catches them and converts them into a

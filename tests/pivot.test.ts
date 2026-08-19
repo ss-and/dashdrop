@@ -390,3 +390,108 @@ describe("computePivot — missing collection", () => {
     expect(d.showTotals).toBe(false);
   });
 });
+
+describe("computePivot — measure semantics must match every other widget", () => {
+  // Regression: min/max fell through to the sum branch (10 and 30 printed 40),
+  // and avg counted records whose measure value wasn't numeric (dragging the
+  // average below the equivalent KPI tile).
+  const col = {
+    slug: "deals",
+    name: "商談",
+    fields: [
+      { key: "region", name: "地域", type: "text", options: null },
+      { key: "stage", name: "状況", type: "text", options: null },
+      { key: "amount", name: "金額", type: "currency", options: null },
+    ],
+    records: [
+      { id: "1", data: { region: "東京", stage: "受注", amount: 10 }, createdAt: new Date("2026-01-01"), isSampleData: false },
+      { id: "2", data: { region: "東京", stage: "受注", amount: 30 }, createdAt: new Date("2026-01-02"), isSampleData: false },
+      // Non-numeric: every other widget drops this record entirely.
+      { id: "3", data: { region: "東京", stage: "受注", amount: "—" }, createdAt: new Date("2026-01-03"), isSampleData: false },
+    ],
+  };
+  const map = new Map([["deals", col as never]]);
+
+  function pivotWith(kind: "sum" | "avg" | "min" | "max") {
+    return computeWidget(
+      {
+        id: "p",
+        type: "pivot",
+        title: "t",
+        collection: "deals",
+        rowField: "region",
+        colField: "stage",
+        measure: { kind, field: "amount" },
+        rowLimit: 12,
+        colLimit: 8,
+        showTotals: true,
+      } as never,
+      map as never,
+    ) as { cells: (number | null)[][]; rowTotals: number[]; grandTotal: number };
+  }
+
+  function kpiWith(kind: "sum" | "avg" | "min" | "max") {
+    return (
+      computeWidget(
+        {
+          id: "k",
+          type: "kpi",
+          title: "t",
+          collection: "deals",
+          measure: { kind, field: "amount" },
+        } as never,
+        map as never,
+      ) as { value: number }
+    ).value;
+  }
+
+  it("min reports the smallest value, not the sum", () => {
+    expect(pivotWith("min").cells[0][0]).toBe(10);
+  });
+
+  it("max reports the largest value, not the sum", () => {
+    expect(pivotWith("max").cells[0][0]).toBe(30);
+  });
+
+  it("avg ignores non-numeric records, like every other widget", () => {
+    // (10 + 30) / 2 = 20 — not 40/3 = 13.33
+    expect(pivotWith("avg").cells[0][0]).toBe(20);
+  });
+
+  it("agrees with the equivalent KPI tile for every measure", () => {
+    for (const kind of ["sum", "avg", "min", "max"] as const) {
+      expect(pivotWith(kind).cells[0][0], kind).toBe(
+        Math.round(kpiWith(kind) * 100) / 100,
+      );
+    }
+  });
+
+  it("totals are computed from the values, not from the cells", () => {
+    // A total of minimums must be the overall minimum, never a sum of them.
+    const withTwoCols = {
+      ...col,
+      records: [
+        ...col.records,
+        { id: "4", data: { region: "東京", stage: "商談中", amount: 5 }, createdAt: new Date("2026-01-04"), isSampleData: false },
+      ],
+    };
+    const m = new Map([["deals", withTwoCols as never]]);
+    const data = computeWidget(
+      {
+        id: "p2",
+        type: "pivot",
+        title: "t",
+        collection: "deals",
+        rowField: "region",
+        colField: "stage",
+        measure: { kind: "min", field: "amount" },
+        rowLimit: 12,
+        colLimit: 8,
+        showTotals: true,
+      } as never,
+      m as never,
+    ) as { rowTotals: number[]; grandTotal: number };
+    expect(data.rowTotals[0]).toBe(5);
+    expect(data.grandTotal).toBe(5);
+  });
+});

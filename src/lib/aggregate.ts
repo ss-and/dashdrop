@@ -392,8 +392,29 @@ function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
   const labelOf = (f: typeof rowField, key: string) =>
     (f?.options ?? []).find((o) => o.value === key)?.label ?? key;
 
-  /** One bucket per (row, col) pair: the running sum and the record count. */
-  const cells = new Map<string, { sum: number; count: number }>();
+  /**
+   * One bucket per (row, col) pair.
+   *
+   * `count` only counts records that actually contributed a value, and min/max
+   * are tracked separately — matching computeMeasure, which drops records whose
+   * measure field isn't numeric. Accumulating only a sum made 最小/最大 print the
+   * sum, and made 平均 disagree with the identical KPI tile.
+   */
+  interface Bucket {
+    sum: number;
+    count: number;
+    min: number | null;
+    max: number | null;
+  }
+  const add = (b: Bucket, v: number): void => {
+    b.sum += v;
+    b.count += 1;
+    b.min = b.min === null || v < b.min ? v : b.min;
+    b.max = b.max === null || v > b.max ? v : b.max;
+  };
+  const emptyBucket = (): Bucket => ({ sum: 0, count: 0, min: null, max: null });
+
+  const cells = new Map<string, Bucket>();
   const rowWeight = new Map<string, number>();
   const colWeight = new Map<string, number>();
 
@@ -405,17 +426,25 @@ function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
   };
 
   for (const r of filtered) {
-    const contribution =
-      w.measure.kind === "count" ? 1 : (toNumber(r.data[w.measure.field]) ?? 0);
+    // A record with a non-numeric measure value contributes nothing at all —
+    // not a zero, which would drag averages down and fake a min of 0.
+    let contribution: number | null;
+    if (w.measure.kind === "count") {
+      contribution = 1;
+    } else {
+      contribution = toNumber(r.data[w.measure.field]);
+      if (contribution === null) continue;
+    }
     for (const rk of bucketKeys(r.data[w.rowField])) {
       for (const ck of bucketKeys(r.data[w.colField])) {
         const k = `${rk}\u0000${ck}`;
-        const cur = cells.get(k) ?? { sum: 0, count: 0 };
-        cur.sum += contribution;
-        cur.count += 1;
+        const cur = cells.get(k) ?? emptyBucket();
+        add(cur, contribution);
         cells.set(k, cur);
-        rowWeight.set(rk, (rowWeight.get(rk) ?? 0) + contribution);
-        colWeight.set(ck, (colWeight.get(ck) ?? 0) + contribution);
+        // Axis weight ranks which rows/columns survive the limit. Absolute
+        // value, so a column of large negatives isn't ranked as the smallest.
+        rowWeight.set(rk, (rowWeight.get(rk) ?? 0) + Math.abs(contribution));
+        colWeight.set(ck, (colWeight.get(ck) ?? 0) + Math.abs(contribution));
       }
     }
   }
@@ -436,37 +465,41 @@ function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
     keep.has(key) ? key : OTHER;
 
   // Re-bin into the trimmed axes, folding the tail into 「その他」.
-  const grid = new Map<string, { sum: number; count: number }>();
+  const grid = new Map<string, Bucket>();
   for (const [k, v] of cells) {
     const [rk, ck] = k.split("\u0000");
     const gk = `${bucketOf(rk, rowSet)}\u0000${bucketOf(ck, colSet)}`;
-    const cur = grid.get(gk) ?? { sum: 0, count: 0 };
-    cur.sum += v.sum;
-    cur.count += v.count;
-    grid.set(gk, cur);
+    grid.set(gk, mergeBuckets([grid.get(gk), v]) ?? emptyBucket());
   }
 
-  const value = (b: { sum: number; count: number } | undefined) => {
+  const value = (b: Bucket | undefined): number | null => {
     if (!b || b.count === 0) return null;
-    const v = w.measure.kind === "avg" ? b.sum / b.count : b.sum;
+    let v: number;
+    switch (w.measure.kind) {
+      case "avg":
+        v = b.sum / b.count;
+        break;
+      case "min":
+        v = b.min ?? 0;
+        break;
+      case "max":
+        v = b.max ?? 0;
+        break;
+      default: // count / sum
+        v = b.sum;
+    }
     return Math.round(v * 100) / 100;
   };
 
   const matrix = rowKeys.map((rk) =>
     colKeys.map((ck) => value(grid.get(`${rk}\u0000${ck}`))),
   );
-  const rowTotals = rowKeys.map((rk) => {
-    const parts = colKeys
-      .map((ck) => grid.get(`${rk}\u0000${ck}`))
-      .filter((b): b is { sum: number; count: number } => Boolean(b));
-    return value(mergeBuckets(parts)) ?? 0;
-  });
-  const colTotals = colKeys.map((ck) => {
-    const parts = rowKeys
-      .map((rk) => grid.get(`${rk}\u0000${ck}`))
-      .filter((b): b is { sum: number; count: number } => Boolean(b));
-    return value(mergeBuckets(parts)) ?? 0;
-  });
+  const rowTotals = rowKeys.map(
+    (rk) => value(mergeBuckets(colKeys.map((ck) => grid.get(`${rk}\u0000${ck}`)))) ?? 0,
+  );
+  const colTotals = colKeys.map(
+    (ck) => value(mergeBuckets(rowKeys.map((rk) => grid.get(`${rk}\u0000${ck}`)))) ?? 0,
+  );
   const grandTotal = value(mergeBuckets(Array.from(grid.values()))) ?? 0;
 
   return {
@@ -484,18 +517,34 @@ function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
   };
 }
 
-const OTHER = "その他";
-
-/** Sum a set of buckets so totals use the same avg/sum rule as the cells. */
+/**
+ * Combine buckets so a total is computed from the underlying values, not from
+ * the already-aggregated cells (a total of averages is not an average, and a
+ * total of minimums is not the minimum).
+ */
 function mergeBuckets(
-  parts: Array<{ sum: number; count: number }>,
-): { sum: number; count: number } | undefined {
-  if (parts.length === 0) return undefined;
-  return parts.reduce(
-    (a, b) => ({ sum: a.sum + b.sum, count: a.count + b.count }),
-    { sum: 0, count: 0 },
+  parts: Array<{ sum: number; count: number; min: number | null; max: number | null } | undefined>,
+): { sum: number; count: number; min: number | null; max: number | null } | undefined {
+  const present = parts.filter(
+    (b): b is { sum: number; count: number; min: number | null; max: number | null } =>
+      Boolean(b),
+  );
+  if (present.length === 0) return undefined;
+  return present.reduce(
+    (a, b) => ({
+      sum: a.sum + b.sum,
+      count: a.count + b.count,
+      min:
+        a.min === null ? b.min : b.min === null ? a.min : Math.min(a.min, b.min),
+      max:
+        a.max === null ? b.max : b.max === null ? a.max : Math.max(a.max, b.max),
+    }),
+    { sum: 0, count: 0, min: null as number | null, max: null as number | null },
   );
 }
+
+const OTHER = "その他";
+
 
 export function computeWidget(
   widget: WidgetSpec,

@@ -2,8 +2,9 @@
  * Safe spreadsheet formula engine.
  *
  * Tokenizer → parser → AST → iterative evaluator, all hand-written: there is
- * no `eval`, no `new Function`, no dynamic import and no user-built RegExp
- * anywhere in this directory. Formulas are untrusted, tenant-supplied text
+ * no dynamic code construction of any kind in this directory — no `eval`, no
+ * Function constructor, no dynamic import, no user-built RegExp.
+ * Formulas are untrusted, tenant-supplied text
  * that we evaluate server-side, so the engine is bounded on every axis
  * (2,000 source characters, 32 nesting levels, 256 arguments per call) and
  * neither `parseFormula` nor `evaluateFormula` ever throws.

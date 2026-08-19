@@ -472,7 +472,7 @@ const DEFS: FunctionDef[] = [
 const REGISTRY: Map<string, FunctionDef> = new Map(DEFS.map((d) => [d.name, d]));
 
 /** Case-insensitive function lookup. Returns undefined for unknown names. */
-export function getFunction(name: string): FunctionDef | undefined {
+export function findFn(name: string): FunctionDef | undefined {
   if (typeof name !== "string") return undefined;
   return REGISTRY.get(name.toUpperCase());
 }

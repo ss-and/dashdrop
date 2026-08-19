@@ -25,7 +25,7 @@ import {
   MAX_SOURCE_LENGTH,
   type Token,
 } from "./tokenizer";
-import { getFunction, type FormulaValue } from "./functions";
+import { findFn, type FormulaValue } from "./functions";
 
 export type BinaryOp =
   | "+"
@@ -243,6 +243,9 @@ class Parser {
 
   private parsePrimary(): AstNode {
     const t = this.next();
+    if (t.type === "eof") {
+      this.fail("数式が途中で終わっています", t);
+    }
 
     switch (t.type) {
       case "num":
@@ -298,7 +301,7 @@ class Parser {
 
   private parseCall(nameTok: Token): AstNode {
     const upper = nameTok.value.toUpperCase();
-    const def = getFunction(upper);
+    const def = findFn(upper);
     if (!def) {
       this.fail(`関数 ${upper} は使用できません`, nameTok);
     }

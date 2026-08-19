@@ -11,7 +11,7 @@
  * `null`. See the coercion rules at the top of ./functions.ts.
  */
 import {
-  getFunction,
+  findFn,
   isBlank,
   sanitize,
   toBool,
@@ -246,7 +246,7 @@ export function evaluateFormula(
           const argc = Math.max(0, Math.min(MAX_ARGS, instr.argc));
           const args: FormulaValue[] = new Array(argc);
           for (let i = argc - 1; i >= 0; i--) args[i] = values.pop() ?? null;
-          const def = getFunction(instr.name);
+          const def = findFn(instr.name);
           if (!def || argc < def.minArgs || argc > def.maxArgs) {
             values.push(null);
             break;
