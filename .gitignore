@@ -48,3 +48,9 @@ tests/_*.test.tsx
 
 # throwaway E2E scripts
 _*.mjs
+
+# 使い捨ての検証用テスト。実装を実際に動かして仮説を確かめるために置くもので、
+# 成果物ではないのでコミットしない。残す価値のある検証は、ちゃんとした名前の
+# テストとして書き直すこと。
+tests/zzprobe*
+tests/*.scratch.test.ts
