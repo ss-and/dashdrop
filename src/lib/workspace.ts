@@ -21,7 +21,7 @@ export async function getCollectionForUser(
     where: { id: collectionId, workspaceId: user.workspace.id },
     include: { fields: { orderBy: { position: "asc" } } },
   });
-  if (!collection) throw new ApiError("Collection not found", 404);
+  if (!collection) throw new ApiError("スプレッドシートが見つかりません（削除された、または権限がありません）。", 404);
   return collection;
 }
 
@@ -31,7 +31,7 @@ export async function getRecordForUser(user: CurrentUser, recordId: string) {
     where: { id: recordId, collection: { workspaceId: user.workspace.id } },
     include: { collection: { include: { fields: true } } },
   });
-  if (!record) throw new ApiError("Record not found", 404);
+  if (!record) throw new ApiError("レコードが見つかりません（削除された、または権限がありません）。", 404);
   return record;
 }
 

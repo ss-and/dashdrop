@@ -87,7 +87,7 @@ export const POST = withAuth(async (req, { user }) => {
   try {
     form = await req.formData();
   } catch {
-    throw new ApiError("multipart/form-data の解析に失敗しました", 400);
+    throw new ApiError("ファイルを読み取れませんでした。もう一度アップロードしてください。", 400);
   }
 
   const file = form.get("file");
@@ -120,7 +120,7 @@ export const POST = withAuth(async (req, { user }) => {
           }));
       }
     } catch {
-      throw new ApiError("sheets の形式が正しくありません", 400);
+      throw new ApiError("取り込むシートの指定が正しくありません。画面をもう一度読み込んでお試しください。", 400);
     }
   }
 

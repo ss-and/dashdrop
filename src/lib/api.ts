@@ -5,6 +5,11 @@
  */
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
+import { installJapaneseZodMessages, fieldLabelForPath } from "./zod-ja";
+
+// すべてのAPIルートがこのモジュールを通るので、ここで一度だけ差し替えれば
+// アプリ全体の入力エラーが日本語になる。
+installJapaneseZodMessages();
 import { getSession, type CurrentUser } from "./auth";
 import { ApiError } from "./errors";
 
@@ -43,9 +48,9 @@ export function withAuth(handler: Handler) {
     try {
       user = await getSession();
     } catch {
-      return fail("Authentication failed", 401);
+      return fail("ログインの確認に失敗しました。もう一度ログインしてください。", 401);
     }
-    if (!user) return fail("Not authenticated", 401);
+    if (!user) return fail("ログインが必要です。もう一度ログインしてください。", 401);
 
     const params = context?.params ? await context.params : {};
 
@@ -56,9 +61,11 @@ export function withAuth(handler: Handler) {
       if (err instanceof ZodError) {
         // Surface the first concrete reason so the user knows what to fix.
         const first = err.issues[0];
-        const path = first?.path?.filter((p) => p !== "data").join(".");
         const reason = first?.message ?? "入力内容が正しくありません";
-        return fail(path ? `${path}: ${reason}` : reason, 422, {
+        // 見出しは日本語に訳せるものだけ付ける。内部キー（`collectionId` など）を
+        // そのまま出すと、日本語の文面の中でそこだけ英語になってしまう。
+        const label = first ? fieldLabelForPath(first.path) : null;
+        return fail(label ? `${label}: ${reason}` : reason, 422, {
           issues: err.flatten().fieldErrors,
         });
       }
@@ -80,7 +87,10 @@ export async function readJson<T>(
   try {
     body = await req.json();
   } catch {
-    throw new ApiError("Invalid JSON body", 400);
+    throw new ApiError(
+      "送信内容を読み取れませんでした。入力をご確認のうえ、もう一度お試しください。",
+      400,
+    );
   }
   return schema.parse(body);
 }

@@ -17,7 +17,7 @@ export const POST = withAuth(async (req) => {
   try {
     form = await req.formData();
   } catch {
-    throw new ApiError("multipart/form-data の解析に失敗しました", 400);
+    throw new ApiError("ファイルを読み取れませんでした。もう一度アップロードしてください。", 400);
   }
 
   const file = form.get("file");

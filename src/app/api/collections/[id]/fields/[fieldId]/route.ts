@@ -51,7 +51,7 @@ export const PATCH = withAuth(async (req, { user, params }) => {
 export const DELETE = withAuth(async (_req, { user, params }) => {
   const collection = await getCollectionForUser(user, params.id);
   const field = collection.fields.find((f) => f.id === params.fieldId);
-  if (!field) throw new ApiError("Field not found", 404);
+  if (!field) throw new ApiError("項目が見つかりません（削除された可能性があります）。", 404);
 
   await db.field.delete({ where: { id: field.id } });
   return ok({ id: field.id });
