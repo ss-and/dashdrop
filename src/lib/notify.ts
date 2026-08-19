@@ -26,11 +26,14 @@ export interface NotifyInput {
   meta?: Record<string, unknown>;
 }
 
-/** Create an in-app notification for a workspace. Never throws. */
+/**
+ * Create an in-app notification for a workspace. Never throws.
+ * @returns whether the notification was actually stored.
+ */
 export async function createNotification(
   workspaceId: string,
   input: NotifyInput,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await db.notification.create({
       data: {
@@ -42,8 +45,13 @@ export async function createNotification(
         meta: input.meta ? toJson(input.meta) : undefined,
       },
     });
+    return true;
   } catch (err) {
+    // 呼び出し元が「結局どこにも届かなかった」ことを判断できるよう、成否を返す。
+    // ここを void にしていたため、通知が1件も作れていないのに「発火しました」と
+    // 報告し、しかも次回の発火条件（エッジ）まで消費してしまっていた。
     console.error("Failed to create notification", err);
+    return false;
   }
 }
 
@@ -156,10 +164,9 @@ async function deploymentFallbackWebhook(): Promise<string | null> {
  * 手がかりにすると後者がデプロイ共通のWebhookへ流れてしまうので、行の有無は
  * 別に確かめる。
  *
- * 問い合わせに失敗したときは false（＝行なし）として扱うが、これで漏えいには
- * ならない。フォールバックを使うにはこの直後の `deploymentFallbackWebhook` が
- * ワークスペース数の問い合わせに成功する必要があり、DBが応答しない状況では
- * そちらも null を返して送信自体が起きないため。
+ * 問い合わせに失敗したときは true（＝行あり）として扱い、フォールバックへ
+ * 落とさない。分からないまま共有チャンネルへ流すより、届かない方がましで、
+ * 届かなかったことは呼び出し元がエラーとして扱う。
  */
 async function hasStoredSlackIntegration(workspaceId: string): Promise<boolean> {
   try {
@@ -169,8 +176,12 @@ async function hasStoredSlackIntegration(workspaceId: string): Promise<boolean> 
     });
     return row !== null;
   } catch (err) {
+    // 分からないときは「行がある」とみなす。ここで false に倒すと、自分の
+    // Slack を接続しているワークスペースの通知が、問い合わせが一度失敗した
+    // だけでデプロイ共通のチャンネルへ出てしまう。届かない方がまだましで、
+    // 届かなかったことは呼び出し元が発火の取り消しとして扱う。
     console.error("Failed to look up the stored Slack integration", err);
-    return false;
+    return true;
   }
 }
 

@@ -138,10 +138,21 @@ export function SlackCard({ initial }: { initial: IntegrationSummary | null }) {
         data?: { sentAt?: string };
       } | null;
       if (!res.ok || !json?.ok) {
-        const message = json?.error ?? "テスト送信に失敗しました。";
+        // Slack が受け取りを断った場合だけ、サーバも同じ理由を記録している。
+        // 認証切れ(401)やこちら側の不具合(400/500)まで「前回のエラー」として
+        // 画面に書き込むと、サーバが記録していない文言（"Not authenticated"）を
+        // 連携のエラーとして見せることになり、再読み込みで消える幽霊になる。
+        const rejectedBySlack = res.status === 502;
+        const message =
+          rejectedBySlack && json?.error
+            ? json.error
+            : res.status === 401
+              ? "ログインの有効期限が切れています。画面を再読み込みしてください。"
+              : (json?.error ?? "テスト送信に失敗しました。");
         setError(message);
-        // サーバ側も同じ理由を記録している。画面の表示を合わせておく。
-        setSummary((s) => (s ? { ...s, lastError: message } : s));
+        if (rejectedBySlack) {
+          setSummary((s) => (s ? { ...s, lastError: message } : s));
+        }
         return;
       }
       const sentAt = json.data?.sentAt ?? new Date().toISOString();
@@ -291,9 +302,19 @@ export function SlackCard({ initial }: { initial: IntegrationSummary | null }) {
         )}
 
         {!connected && BLOCKED_REASON[status] && (
-          <p className="rounded border border-warning/30 bg-warning-soft px-3 py-2 text-sm text-warning">
-            {BLOCKED_REASON[status]}
-          </p>
+          <div className="space-y-2 rounded border border-warning/30 bg-warning-soft px-3 py-2">
+            <p className="text-sm text-warning">{BLOCKED_REASON[status]}</p>
+            {/* 使えない行を消す唯一の出口。これが無いと詰む。 */}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void disconnect()}
+              disabled={busy}
+              className="text-danger hover:bg-danger-soft"
+            >
+              {pending === "remove" ? "解除中…" : "この接続を削除する"}
+            </Button>
+          </div>
         )}
 
         {showForm && (

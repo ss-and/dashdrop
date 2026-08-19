@@ -32,6 +32,13 @@ async function canDeliverSlack(workspaceId: string): Promise<boolean> {
   // getSecret と同じ条件（復号できて、かつ有効）でないと送信されない。
   if (slack?.connected && slack.enabled) return true;
 
+  // 行が「ある」なら、送信側はデプロイ共通のフォールバックを使わない
+  // （notify.ts の hasStoredSlackIntegration と同じ判断）。ここを揃えないと、
+  // 鍵の入れ替えで復号できなくなったワークスペースに対して、この画面だけが
+  // 「Slackに届く」と言い続ける。設定画面は「未接続」と言い、実際にも届かない。
+  // 画面と実挙動が食い違うのは、まさにこの一連の修正で潰してきた不具合そのもの。
+  if (slack) return false;
+
   // 未設定が普通なので、設定されているときだけワークスペース数を数える。
   if (!env.SLACK_WEBHOOK_URL.trim()) return false;
   const workspaces = await db.workspace.findMany({ select: { id: true }, take: 2 });

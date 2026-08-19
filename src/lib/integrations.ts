@@ -70,9 +70,15 @@ export const CHANNEL_HINT_MAX = 60;
  */
 export function normaliseChannelHint(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const s = value.trim().replace(/\s+/g, " ");
+  // 見えない文字を落とす。ゼロ幅スペースだけの控えは「入力済みだが空白に見える」
+  // という分かりにくい状態になり、書字方向の上書き（U+202E など）は行全体の
+  // 並びを壊す。\s ではどちらも消えないので、明示的に取り除く。
+  const cleaned = value.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "");
+  const s = cleaned.trim().replace(/\s+/g, " ");
   if (!s) return null;
-  return s.slice(0, CHANNEL_HINT_MAX);
+  // コードポイント単位で切る。slice だとサロゲートペアを割ってしまい、
+  // 単独サロゲートが JSON 列に入って PostgreSQL 側で弾かれる。
+  return [...s].slice(0, CHANNEL_HINT_MAX).join("");
 }
 
 /** 保存済み config から通知先チャンネルの控えを読む。壊れていれば null。 */

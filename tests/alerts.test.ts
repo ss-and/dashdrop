@@ -17,6 +17,8 @@ import type { AlertMessage, AlertMessageInput } from "@/lib/alerts";
 // vi.mock の factory から参照するため、巻き上げに合わせて hoisted で用意する。
 const state = vi.hoisted(() => ({
   workspaces: [{ id: "ws_1" }] as { id: string }[],
+  /** Integration テーブルに Slack の行があるか（null = 未接続）。 */
+  slackRow: null as { id: string } | null,
 }));
 
 // relations.ts は `server-only` を import しており vitest では解決できない。
@@ -29,6 +31,10 @@ vi.mock("@/lib/relations", () => ({
 vi.mock("@/lib/db", () => ({
   db: {
     workspace: { findMany: vi.fn(async () => state.workspaces) },
+    // このワークスペースは Slack の行を持っていない、という状況。
+    // ここを用意しないと hasStoredSlackIntegration が例外になり、
+    // 「分からないときは送らない」側に倒れてフォールバックが試されない。
+    integration: { findFirst: vi.fn(async () => state.slackRow) },
   },
   toJson: (value: unknown) => value,
 }));
@@ -67,6 +73,7 @@ const rules: Rule[] = [
 
 beforeEach(() => {
   state.workspaces = [{ id: "ws_1" }];
+  state.slackRow = null;
   postToSlack.mockClear();
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -507,5 +514,36 @@ describe("アラート通知の実際のペイロード（Slack / アプリ内�
     for (const b of payload.blocks as { text?: { text?: string } }[]) {
       if (b.text?.text) expect(b.text.text.length).toBeLessThanOrEqual(3000);
     }
+  });
+});
+
+describe("sendWorkspaceSlack — 自分の Slack を持つワークスペースは共有先へ落とさない", () => {
+  /**
+   * 回帰テスト: 行があるのに使えない（AUTH_SECRET の入れ替えで復号できない）
+   * ワークスペースがデプロイ共通のチャンネルへ流れると、そのお客さまの
+   * 通知が本人の知らない場所に出る。届かない方がまだまし。
+   */
+  it("行が残っているなら、単一ワークスペースでもフォールバックしない", async () => {
+    state.workspaces = [{ id: "ws_1" }];
+    state.slackRow = { id: "int_1" }; // 行はある（＝一度接続している）
+    const sent = await sendWorkspaceSlack("ws_1", { title: "テスト" });
+    expect(sent).toBe(false);
+    expect(postToSlack).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 行の有無を確かめる問い合わせ自体が失敗したときも、送らない側に倒す。
+   * 以前は「行なし」とみなしてフォールバックへ落としていた。
+   */
+  it("行の有無が確認できないときも、フォールバックしない", async () => {
+    state.workspaces = [{ id: "ws_1" }];
+    const { db } = await import("@/lib/db");
+    const findFirst = db.integration.findFirst as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    findFirst.mockRejectedValueOnce(new Error("db down"));
+    const sent = await sendWorkspaceSlack("ws_1", { title: "テスト" });
+    expect(sent).toBe(false);
+    expect(postToSlack).not.toHaveBeenCalled();
   });
 });

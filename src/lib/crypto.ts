@@ -15,13 +15,7 @@
  * Format: v1.<iv-b64>.<tag-b64>.<ciphertext-b64> — versioned so the scheme can
  * change later without guessing at what old rows contain.
  */
-import {
-  createCipheriv,
-  createDecipheriv,
-  randomBytes,
-  scryptSync,
-  timingSafeEqual,
-} from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 const VERSION = "v1";
 const ALGO = "aes-256-gcm";
@@ -91,8 +85,10 @@ export function maskSecret(plain: string): string {
 
 /** Constant-time compare, for verifying webhook signatures later. */
 export function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) return false;
+  // 長さが違う時点で false を返すと、比較にかかる時間から秘密の長さが漏れる。
+  // 先に固定長のダイジェストへ落としてから比べれば、入力の長さに関わらず
+  // 比較は常に32バイト同士になる。
+  const ab = createHash("sha256").update(a, "utf8").digest();
+  const bb = createHash("sha256").update(b, "utf8").digest();
   return timingSafeEqual(ab, bb);
 }

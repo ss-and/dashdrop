@@ -375,6 +375,11 @@ async function evaluateRule(
   // Edge trigger: fire only when the condition newly becomes true.
   const fired = nowSatisfied && !prevSatisfied;
   if (fired) {
+    // 通知を送る前に発火の権利を取る。取れなかったら、同時に走っている別の
+    // 評価が既に送っているので、ここでは何もしない（通知の二重送信を防ぐ）。
+    const claimed = await claimFiring(rule.id, rule.lastValue ?? null, value);
+    if (!claimed) return false;
+
     // Slack もアプリ内も同じ文面にする（片方だけ読んだ人が別の話に見えないように）。
     const message = buildAlertMessage({
       ruleName: rule.name,
@@ -388,7 +393,7 @@ async function evaluateRule(
       lastValue: rule.lastValue ?? null,
     });
 
-    await createNotification(workspaceId, {
+    const inApp = await createNotification(workspaceId, {
       type: "alert",
       title: message.title,
       body: message.body,
@@ -396,10 +401,11 @@ async function evaluateRule(
       meta: { ruleId: rule.id, value, previousValue: rule.lastValue ?? null },
     });
 
+    let slackOk = true;
     if (rule.channel === "slack") {
       // Goes to the channel this workspace connected in 設定 → 連携.
       // 現在値としきい値は本文に1回ずつ入っているので fields は付けない。
-      await sendWorkspaceSlack(workspaceId, {
+      slackOk = await sendWorkspaceSlack(workspaceId, {
         title: message.title,
         body: message.body,
         url: message.url,
@@ -408,14 +414,67 @@ async function evaluateRule(
     }
     // email channel: delivered in-app for now; real SMTP send when configured.
     void emailConfigured;
+
+    // どこにも届かなかったのに「発火した」ことにすると、二重に損をする。
+    // 報告が緑になるうえ、lastValue を書いてしまうと次のエッジまで二度と
+    // 鳴らない（＝そのアラートは永久に失われる）。届いていないなら、
+    // 状態を進めずに次回もう一度試す。
+    if (!inApp && !slackOk) {
+      // 権利を取ったときに進めた状態を戻し、次の実行でもう一度試せるようにする。
+      await db.alertRule
+        .update({
+          where: { id: rule.id },
+          data: { lastValue: rule.lastValue ?? null },
+        })
+        .catch(() => {});
+      throw new ApiError(
+        "通知をどこにも届けられませんでした（アプリ内・Slack のいずれも失敗）。",
+        502,
+      );
+    }
+    // ベルには出たが Slack に出なかった場合は、届いてはいるので状態は進める。
+    // ただし黙って成功扱いにはせず、連携の「直近のエラー」に残す
+    // （notifyWorkspaceSlack が recordResult で記録している）。
+    if (!slackOk && rule.channel === "slack") {
+      console.error(
+        `Alert ${rule.id} fired but Slack delivery failed for workspace ${workspaceId}`,
+      );
+    }
   }
 
-  await db.alertRule.update({
-    where: { id: rule.id },
-    data: { lastValue: value, ...(fired ? { lastTriggeredAt: new Date() } : {}) },
-  });
+  // 発火した場合は claimFiring が既に書いているので、ここで書くのは
+  // 「発火しなかったが現在値は変わった」場合だけ。
+  if (!fired) {
+    await db.alertRule.update({
+      where: { id: rule.id },
+      data: { lastValue: value },
+    });
+  }
 
   return fired;
+}
+
+/**
+ * 「まだ誰も発火させていない」ことを確かめてから、このルールを発火中にする。
+ *
+ * 定期実行と「今すぐ評価する」は同時に走りうる（どちらにも排他が無い）。
+ * 両方が同じ古い lastValue を読むと、1回のしきい値超えで通知が2通出て、
+ * さらに書き込み順によっては lastValue が古い値で上書きされ、毎回鳴り続けるか
+ * 二度と鳴らないかのどちらかになる。読んだときの値を条件に入れて更新し、
+ * 更新できた1人だけが通知を送る（compare-and-swap）。
+ *
+ * @returns 自分が発火の権利を取れたら true。
+ */
+async function claimFiring(
+  ruleId: string,
+  previous: number | null,
+  value: number,
+): Promise<boolean> {
+  const res = await db.alertRule.updateMany({
+    where: { id: ruleId, lastValue: previous },
+    data: { lastValue: value, lastTriggeredAt: new Date() },
+  });
+  return res.count === 1;
 }
 
 /** Evaluate all enabled rules for a workspace; notify on newly-crossed rules. */
@@ -424,6 +483,10 @@ export async function evaluateWorkspaceAlerts(
 ): Promise<EvaluateResult> {
   const rules = await db.alertRule.findMany({
     where: { workspaceId, enabled: true },
+    // 並びを固定する。予算切れで途中までしか評価できなかったとき、DB任せの
+    // 順序だと「どのルールが評価されるか」が実行ごとに変わり、いつまでも
+    // 評価されないルールが出る。
+    orderBy: { createdAt: "asc" },
   });
 
   // 壊れたルール（コレクション削除、ウィジェット設定の不正、評価中の行削除）が

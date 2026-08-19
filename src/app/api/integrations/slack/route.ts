@@ -40,6 +40,14 @@ function notConnected(): IntegrationSummary {
   };
 }
 
+/**
+ * 接続時に本物の Slack へ1件投げて疎通を確かめるため、プラットフォーム既定の
+ * 10 秒では足りないことがある（postToSlack 自体は8秒で打ち切る）。途中で
+ * 関数を殺されると、Slack には「接続しました」が届いたのに保存されていない、
+ * という食い違いが起きるので、余裕を持たせる。
+ */
+export const maxDuration = 30;
+
 export const GET = withAuth(async (_req, { user }) => {
   const summary = await getIntegration(user.workspace.id, "slack");
   return ok(summary ?? notConnected());
@@ -77,13 +85,24 @@ export const POST = withAuth(async (req, { user }) => {
     );
   }
 
-  // 控えは「空欄なら消える」ようにしたいので、null でも常に config を渡す。
-  await saveIntegration(user.workspace.id, "slack", webhookUrl, {
-    channelHint: channelHint ?? "",
-  });
-  // saveIntegration は履歴を白紙に戻す。いま通ったテスト送信が、この Webhook に
-  // とっての最初の「最終送信」になる。
-  await recordResult(user.workspace.id, "slack", true);
+  // ここから先で失敗すると、Slack には「接続しました」が届いているのに保存は
+  // されていない、という食い違いが残る。黙って汎用の500を返すと、利用者は
+  // 「Slackには届いたのに画面は失敗と言う」意味が分からないので、そう伝える。
+  try {
+    // 控えは「空欄なら消える」ようにしたいので、null でも常に config を渡す。
+    await saveIntegration(user.workspace.id, "slack", webhookUrl, {
+      channelHint: channelHint ?? "",
+    });
+    // saveIntegration は履歴を白紙に戻す。いま通ったテスト送信が、この Webhook
+    // にとっての最初の「最終送信」になる。
+    await recordResult(user.workspace.id, "slack", true);
+  } catch (err) {
+    console.error("Slack webhook probe succeeded but saving failed", err);
+    throw new ApiError(
+      "Slackへの送信は成功しましたが、設定の保存に失敗しました。Slackに届いた接続確認のメッセージは無視して、もう一度お試しください。",
+      500,
+    );
+  }
 
   const summary = await getIntegration(user.workspace.id, "slack");
   return ok(summary ?? notConnected());

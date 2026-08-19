@@ -125,6 +125,9 @@ export const DEFAULT_MIN_START_MS = 2_000;
 /** 1回の実行で取り出す最大件数（応答サイズとDB負荷の上限）。 */
 export const DEFAULT_MAX_WORKSPACES = 200;
 
+/** 1ワークスペースあたり、応答に載せる失敗理由の上限。 */
+const MAX_RULE_ERRORS_PER_WORKSPACE = 10;
+
 // ───────────────────── 一巡（sweep）の型 ─────────────────────
 
 /** 評価対象のワークスペース1件。 */
@@ -146,6 +149,12 @@ export interface SweepOutcome {
   triggered: number;
   /** 評価に失敗したルール数（`EvaluateResult.failed`）。 */
   failedRules: number;
+  /**
+   * 失敗したルールの理由（件数が多いときは先頭のみ）。件数だけ返すと、
+   * 運用者はサーバログを掘るしかない。文言は describeRuleError が
+   * 利用者に見せてよい日本語に落としてある。
+   */
+  ruleErrors?: Array<{ ruleId: string; ruleName: string; message: string }>;
   durationMs: number;
   /** 失敗・打ち切りの理由（日本語）。成功時は undefined。 */
   message?: string;
@@ -320,6 +329,9 @@ export async function runAlertSweep(
           evaluated: result.evaluated,
           triggered: result.triggered,
           failedRules: result.failed,
+          // 理由まで返す。件数だけだと、運用者はサーバログを掘るしかない。
+          // describeRuleError が利用者に見せてよい日本語に落としてある。
+          ruleErrors: result.errors.slice(0, MAX_RULE_ERRORS_PER_WORKSPACE),
           durationMs: deps.now() - startedWorkspaceAt,
         });
       }
