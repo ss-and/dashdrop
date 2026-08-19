@@ -17,6 +17,9 @@ const config = [
       "prisma/generated/**",
       "next-env.d.ts",
       "**/*.db",
+      // 使い捨ての検証用テスト（tests/_… ）。
+      "tests/_*.test.ts",
+      "tests/_*.test.tsx",
       // Throwaway E2E / probe scripts run against a live dev server.
       "_*.mjs",
     ],

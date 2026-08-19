@@ -38,7 +38,8 @@ yarn-error.log*
 *.tsbuildinfo
 
 # scratch test probes
-tests/__probe*.test.ts
+tests/_*.test.ts
+tests/_*.test.tsx
 
 # throwaway E2E scripts
 _*.mjs
