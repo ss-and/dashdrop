@@ -11,6 +11,7 @@
  */
 import "server-only";
 import { db } from "./db";
+import { ApiError } from "./errors";
 import { computeWidget, type AggCollection } from "./aggregate";
 import {
   resolveCollectionRecords,
@@ -117,9 +118,6 @@ export interface EvaluateResult {
   errors: AlertRuleFailure[];
 }
 
-/** 運用者に見せる理由の長さ上限。Prismaの例外本文はスタック混じりで長くなる。 */
-const MAX_REASON_LEN = 200;
-
 /**
  * Prismaのエラーコード（P2025 など）を取り出す。`@prisma/client` の例外クラスに
  * instanceof で依存すると、生成物の有無でテストが動かなくなるため形だけで判定する。
@@ -131,27 +129,44 @@ function errorCode(err: unknown): string | null {
 }
 
 /**
+ * 既知のエラーコード → 利用者に見せる日本語。
+ *
+ * ここに無いものは一律で汎用メッセージに落とす（許可リスト方式）。例外の本文を
+ * そのまま出すと、Prisma の既定フォーマットが
+ * 「Invalid `prisma.alertRule.update()` invocation in /home/…/src/lib/alerts.ts:245:26」
+ * のようにサーバのファイルパスと行番号を、接続失敗時は DB のホスト名とポートを
+ * 含めてくるため、ワークスペースの誰でも押せる「今すぐ評価する」から
+ * サーバ内部が読めてしまう。原因の特定はサーバログ（console.error）で行う。
+ */
+const RULE_ERROR_BY_CODE: Record<string, string> = {
+  // findMany と update の間に行が消えたケース（ルール削除、または同時に走った
+  // 評価との競合）。次回以降は対象から外れるので運用者の対処は不要。
+  P2025: "ルールが見つかりませんでした（評価中に削除された可能性があります）。",
+  P2002: "同じ内容のルールが既に登録されています。",
+  P2003: "参照先のスプレッドシートが見つかりません（削除された可能性があります）。",
+  P1001: "データベースに接続できませんでした。しばらくして再度お試しください。",
+  P1002: "データベースへの接続がタイムアウトしました。しばらくして再度お試しください。",
+  P1008: "処理に時間がかかりすぎたため中断しました。対象の行数を減らしてお試しください。",
+};
+
+/** 対象シートや設定が壊れている、というアプリ側の既知エラー。 */
+const GENERIC_RULE_ERROR = "評価に失敗しました。ルールの設定と対象シートをご確認ください。";
+
+/**
  * 失敗理由をAPIレスポンスにそのまま載せられる日本語へ落とす。
+ *
+ * 例外の本文は載せない（上の RULE_ERROR_BY_CODE のコメント参照）。ただし
+ * ApiError は元々利用者向けに書かれた日本語なので、それだけは通す。
  * DBに触れない純粋関数なので、DBフィクスチャなしで単体テストできる。
  */
 export function describeRuleError(err: unknown): string {
-  // findMany と update の間に行が消えたケース（ルール削除、または同時に走った
-  // 評価との競合）。次回以降は対象から外れるので運用者の対処は不要。
-  if (errorCode(err) === "P2025") {
-    return "ルールが見つかりませんでした（評価中に削除された可能性があります）。";
+  const mapped = RULE_ERROR_BY_CODE[errorCode(err) ?? ""];
+  if (mapped) return mapped;
+  // ApiError は「顧客に見せる文言」として書かれているので、そのまま出してよい。
+  if (err instanceof ApiError && err.message.trim()) {
+    return err.message.trim();
   }
-  const detail =
-    err instanceof Error
-      ? err.message.trim()
-      : typeof err === "string"
-        ? err.trim()
-        : "";
-  if (!detail) return "評価に失敗しました（原因不明のエラー）。";
-  const clamped =
-    detail.length > MAX_REASON_LEN
-      ? `${detail.slice(0, MAX_REASON_LEN - 1)}…`
-      : detail;
-  return `評価に失敗しました: ${clamped}`;
+  return GENERIC_RULE_ERROR;
 }
 
 /**

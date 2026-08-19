@@ -28,6 +28,13 @@ const schema = z.object({
   GOOGLE_SHEETS_CLIENT_SECRET: z.string().optional().default(""),
 
   SLACK_WEBHOOK_URL: z.string().optional().default(""),
+  /**
+   * SLACK_WEBHOOK_URL を使うことの明示的な同意。「ワークスペースが1つだけ」を
+   * 自己ホストの証拠として扱うと、ホスティング版でも最初の1社が登録した直後や、
+   * 整理して1社になった瞬間に、そのお客さまの通知が運営のチャンネルへ流れる。
+   * 意図は自動で推測せず、運用者に宣言してもらう。
+   */
+  SLACK_WEBHOOK_SINGLE_TENANT: z.string().optional().default(""),
   SMTP_HOST: z.string().optional().default(""),
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_USER: z.string().optional().default(""),

@@ -59,18 +59,28 @@ function absoluteUrl(url?: string): string | undefined {
  */
 export type FallbackDecision =
   | { use: true; url: string }
-  | { use: false; reason: "unset" | "invalid" | "multi-tenant" };
+  | { use: false; reason: "unset" | "not-opted-in" | "invalid" | "multi-tenant" };
+
+/** `SLACK_WEBHOOK_SINGLE_TENANT` の真偽解釈。既定は「同意していない」。 */
+export function isSingleTenantOptIn(raw: string | undefined): boolean {
+  const v = (raw ?? "").trim().toLowerCase();
+  return v === "true" || v === "1" || v === "yes" || v === "on";
+}
 
 /**
  * `SLACK_WEBHOOK_URL` を使ってよいかを決める。DBに触れない純粋関数なので、
  * 「複数テナントでは絶対に使わない」という判断だけをDBなしでテストできる。
  *
- * 方針: フォールバックは残すが、**1ワークスペースしか存在しないデプロイ**
- * （自己ホストの単一テナント。env を書くほうが設定画面より楽、という本来の用途）
- * に限定する。削除ではなく限定にしたのは、.env.example に載っている既存の
- * 自己ホスト環境の通知を黙って止めないため。ワークスペースが2つ以上ある
- * デプロイでは、Slack未接続のテナントの通知が運営のチャンネルに流れ込む
- * テナント間の情報漏えいそのものなので、無条件に使わない。
+ * 方針: フォールバックは残すが、次の2つが**両方**成り立つときだけ使う。
+ *   1. 運用者が `SLACK_WEBHOOK_SINGLE_TENANT=true` と明示的に宣言している
+ *   2. 実際にワークスペースが1つしかない
+ *
+ * 1 が要るのは、「今ワークスペースが1つ」を自己ホストの証拠として扱うと、
+ * ホスティング版でも最初の1社が登録した直後や、整理して1社になった瞬間に
+ * フォールバックが復活し、そのお客さまの通知（ルール名・数値・レコードへの
+ * リンク）が運営のチャンネルへ流れてしまうため。2 が要るのは、宣言したまま
+ * テナントが増えた場合の保険。削除ではなく限定にしたのは、.env.example に
+ * 載っている既存の自己ホスト環境の通知を黙って止めないため。
  *
  * URL自体もユーザー入力のWebhookと同じ `validateSecret` に通す。env 経由なら
  * 安全という前提は成り立たない（タイプミスや、サーバーに任意の宛先へ
@@ -79,9 +89,11 @@ export type FallbackDecision =
 export function resolveFallbackWebhook(
   raw: string | undefined,
   workspaceCount: number,
+  optIn: boolean,
 ): FallbackDecision {
   const url = (raw ?? "").trim();
   if (!url) return { use: false, reason: "unset" };
+  if (!optIn) return { use: false, reason: "not-opted-in" };
   if (workspaceCount > 1) return { use: false, reason: "multi-tenant" };
   try {
     return { use: true, url: validateSecret("slack", url) };
@@ -90,7 +102,12 @@ export function resolveFallbackWebhook(
   }
 }
 
-const FALLBACK_WARNING: Record<"invalid" | "multi-tenant", string> = {
+const FALLBACK_WARNING: Record<
+  "not-opted-in" | "invalid" | "multi-tenant",
+  string
+> = {
+  "not-opted-in":
+    "SLACK_WEBHOOK_URL は設定されていますが、SLACK_WEBHOOK_SINGLE_TENANT=true が無いため無視しました（単一テナントのデプロイでのみ使用できます）。",
   invalid:
     "SLACK_WEBHOOK_URL は https://hooks.slack.com/... である必要があります。無視しました。",
   "multi-tenant":
@@ -117,6 +134,7 @@ async function deploymentFallbackWebhook(): Promise<string | null> {
     const decision = resolveFallbackWebhook(
       env.SLACK_WEBHOOK_URL,
       workspaces.length,
+      isSingleTenantOptIn(env.SLACK_WEBHOOK_SINGLE_TENANT),
     );
     if (decision.use) return decision.url;
     if (decision.reason !== "unset" && !warned.has(decision.reason)) {
@@ -151,7 +169,11 @@ export async function sendWorkspaceSlack(
     const connected = await getSecret(workspaceId, "slack");
     if (connected) return await notifyWorkspaceSlack(workspaceId, message);
   } catch (err) {
+    // ここに来るのは「自分の Slack を接続しているのに取り出せなかった」場合
+    // （鍵の入れ替えで復号できない等）。デプロイ共通の宛先へ回すと、その
+    // ワークスペースの通知が別のチャンネルに出てしまうので、送らずに諦める。
     console.error("Failed to resolve Slack integration", err);
+    return false;
   }
 
   const fallback = await deploymentFallbackWebhook();

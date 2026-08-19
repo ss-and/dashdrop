@@ -10,6 +10,7 @@
  *    通知が運営のチャンネルへ送られていた（テナント間の情報漏えい）。
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { ApiError } from "@/lib/errors";
 
 // vi.mock の factory から参照するため、巻き上げに合わせて hoisted で用意する。
 const state = vi.hoisted(() => ({
@@ -47,11 +48,11 @@ vi.mock("@/lib/integrations", async (importActual) => {
 
 const FALLBACK = "https://hooks.slack.com/services/T000/B000/abcdefg";
 process.env.SLACK_WEBHOOK_URL = FALLBACK;
+process.env.SLACK_WEBHOOK_SINGLE_TENANT = "true";
 
 const { runEachIsolated, describeRuleError } = await import("@/lib/alerts");
-const { resolveFallbackWebhook, sendWorkspaceSlack } = await import(
-  "@/lib/notify"
-);
+const { resolveFallbackWebhook, sendWorkspaceSlack, isSingleTenantOptIn } =
+  await import("@/lib/notify");
 
 type Rule = { id: string; name: string };
 
@@ -85,14 +86,16 @@ describe("runEachIsolated（F3: ルール単位のエラー隔離）", () => {
     expect(result.failures[0].ruleName).toBe("壊れたルール");
   });
 
-  it("失敗を握りつぶさず、日本語の理由を添えて返す", async () => {
+  it("失敗を握りつぶさず、日本語の理由を添えて返す（内部の文言は載せない）", async () => {
     const result = await runEachIsolated(rules, async (rule) => {
       if (rule.id === "r2") throw new Error("Invalid widget config");
       return false;
     });
 
     expect(result.failures[0].message).toContain("評価に失敗しました");
-    expect(result.failures[0].message).toContain("Invalid widget config");
+    // 例外の本文は利用者に出さない（サーバ内部が漏れるため）。原因の特定は
+    // サーバログ側で行う。詳細は describeRuleError のコメント参照。
+    expect(result.failures[0].message).not.toContain("Invalid widget config");
   });
 
   it("Prisma P2025（評価中にルール行が消えた）も1件の失敗として隔離する", async () => {
@@ -146,37 +149,68 @@ describe("describeRuleError（失敗理由の日本語化）", () => {
     expect(msg).toContain("ルールが見つかりませんでした");
   });
 
-  it("Error のメッセージを引き継ぐ", () => {
-    expect(describeRuleError(new Error("boom"))).toContain("boom");
+  it("既知のPrismaコードはそれぞれの日本語になる", () => {
+    expect(describeRuleError({ code: "P2003" })).toContain("参照先のスプレッドシート");
+    expect(describeRuleError({ code: "P1001" })).toContain("データベースに接続できません");
   });
 
-  it("文字列や不明な値でも日本語の理由になる", () => {
-    expect(describeRuleError("壊れています")).toContain("壊れています");
-    expect(describeRuleError(undefined)).toContain("原因不明");
-    expect(describeRuleError(new Error("   "))).toContain("原因不明");
+  /**
+   * 回帰テスト: 以前は例外の本文をそのまま利用者に返していたため、Prisma の
+   * 既定フォーマットに含まれるサーバのファイルパス・行番号や、接続失敗時の
+   * DBホスト名・ポートが、ワークスペースの誰でも押せる「今すぐ評価する」から
+   * 読めてしまっていた。
+   */
+  it("例外の本文はそのまま出さない（サーバ内部が漏れないこと）", () => {
+    const prismaLike = new Error(
+      "Invalid `prisma.alertRule.update()` invocation in\n/home/user/dashdrop/src/lib/alerts.ts:245:26",
+    );
+    const msg = describeRuleError(prismaLike);
+    expect(msg).not.toContain("/home/user");
+    expect(msg).not.toContain("alerts.ts");
+    expect(msg).not.toContain("prisma");
+    expect(msg).toBe(
+      "評価に失敗しました。ルールの設定と対象シートをご確認ください。",
+    );
+
+    const connLike = Object.assign(
+      new Error("Can't reach database server at `db.internal.example`:`5432`"),
+      { code: "P1013" },
+    );
+    const connMsg = describeRuleError(connLike);
+    expect(connMsg).not.toContain("db.internal.example");
+    expect(connMsg).not.toContain("5432");
   });
 
-  it("長すぎる理由は切り詰める", () => {
-    const msg = describeRuleError(new Error("x".repeat(5000)));
-    expect(msg.length).toBeLessThan(300);
-    expect(msg.endsWith("…")).toBe(true);
+  it("ApiError だけは利用者向けの文言として通す", () => {
+    expect(describeRuleError(new ApiError("対象のスプレッドシートがありません", 404))).toBe(
+      "対象のスプレッドシートがありません",
+    );
+  });
+
+  it("文字列・undefined・空メッセージでも日本語の理由になる", () => {
+    for (const v of ["壊れています", undefined, null, 42, new Error("   ")]) {
+      const msg = describeRuleError(v);
+      expect(msg).toBe(
+        "評価に失敗しました。ルールの設定と対象シートをご確認ください。",
+      );
+    }
   });
 });
 
 describe("resolveFallbackWebhook（F8: env フォールバックの限定）", () => {
   it("未設定なら使わない", () => {
-    expect(resolveFallbackWebhook(undefined, 1)).toEqual({
+    expect(resolveFallbackWebhook(undefined, 1, true)).toEqual({
       use: false,
       reason: "unset",
     });
-    expect(resolveFallbackWebhook("   ", 1)).toEqual({
+    expect(resolveFallbackWebhook("   ", 1, true)).toEqual({
       use: false,
       reason: "unset",
     });
   });
 
   it("ワークスペースが複数あるデプロイでは、正しいURLでも使わない", () => {
-    expect(resolveFallbackWebhook(FALLBACK, 2)).toEqual({
+    expect(resolveFallbackWebhook(FALLBACK, 2, true)).toEqual({
       use: false,
       reason: "multi-tenant",
     });
@@ -190,19 +224,40 @@ describe("resolveFallbackWebhook（F8: env フォールバックの限定）", (
       "http://127.0.0.1:8080/internal",
       "not a url",
     ]) {
-      expect(resolveFallbackWebhook(bad, 1)).toEqual({
+      expect(resolveFallbackWebhook(bad, 1, true)).toEqual({
         use: false,
         reason: "invalid",
       });
     }
   });
 
-  it("単一ワークスペース＋正しいURLのときだけ使う", () => {
-    expect(resolveFallbackWebhook(`  ${FALLBACK}  `, 1)).toEqual({
+  /**
+   * 回帰テスト: 「今ワークスペースが1つ」を自己ホストの証拠として扱っていたため、
+   * ホスティング版でも最初の1社が登録した直後や、整理して1社になった瞬間に
+   * フォールバックが復活し、そのお客さまの通知が運営のチャンネルへ流れていた。
+   */
+  it("SLACK_WEBHOOK_SINGLE_TENANT の宣言が無ければ、単一ワークスペースでも使わない", () => {
+    expect(resolveFallbackWebhook(FALLBACK, 1, false)).toEqual({
+      use: false,
+      reason: "not-opted-in",
+    });
+  });
+
+  it("宣言の真偽解釈", () => {
+    for (const yes of ["true", "TRUE", " 1 ", "yes", "on"]) {
+      expect(isSingleTenantOptIn(yes), yes).toBe(true);
+    }
+    for (const no of ["", "  ", "false", "0", "no", "maybe", undefined]) {
+      expect(isSingleTenantOptIn(no), String(no)).toBe(false);
+    }
+  });
+
+  it("宣言済み＋単一ワークスペース＋正しいURLのときだけ使う", () => {
+    expect(resolveFallbackWebhook(`  ${FALLBACK}  `, 1, true)).toEqual({
       use: true,
       url: FALLBACK,
     });
-    expect(resolveFallbackWebhook(FALLBACK, 0)).toEqual({
+    expect(resolveFallbackWebhook(FALLBACK, 0, true)).toEqual({
       use: true,
       url: FALLBACK,
     });
