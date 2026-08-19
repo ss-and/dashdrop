@@ -6,19 +6,21 @@ import { NavIcon } from "./icons";
 import { NotificationBell } from "./NotificationBell";
 import { HelpButton } from "./HelpButton";
 import { AppLauncher, type NavData } from "./AppLauncher";
-import { ObjectNav, type ObjectNavItem } from "./ObjectNav";
 import { getPlanBadge } from "./plan-badge";
 import { GlobalSearch } from "@/components/search/GlobalSearch";
 import type { CurrentUser } from "@/lib/auth";
 
 /**
- * 人事データベースからタブに出す代表オブジェクト。
+ * 上部のオブジェクトタブ帯は廃止した。
  *
- * 顧客5 + 人事5 を全部並べるとタブ列が 15 個になって、まさに「多くて迷子」の
- * 状態になる。人事は 社員 が他3つ（勤怠・休暇申請・評価）の親なので、ここは
- * 社員だけを出し、残りはランチャーとサイドバーから辿ってもらう。
+ * 利用者の指摘:「文字や見る機能が多すぎて、わかりづらくなっている気がする」
+ * 原因は機能の数ではなく、同じものが二重に見えていたこと。この帯に並ぶ
+ * 顧客・担当者・商談・請求書・活動・取り込んだシートは、左のサイドバーに
+ * ある項目とまったく同じで、7〜11 個が常に画面上部に重複していた。
+ * 登録直後は、その全部が 0 件のシートへのリンクだった。
+ *
+ * シートへの移動はサイドバーとランチャー（ワッフル）が担う。ここには戻さない。
  */
-const HR_PRIMARY_SLUG = "hr-employees";
 
 /**
  * アカウントメニュー内でフォーカスを回せる要素。メニューを開いている間は
@@ -26,46 +28,6 @@ const HR_PRIMARY_SLUG = "hr-employees";
  */
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-/** マスターの後ろに並べる、取り込んだシートの上限。 */
-const EXTRA_TABS = 4;
-
-/**
- * Builds the object tab strip: ホーム + 顧客5 + 社員 + 取り込んだシート最大4件。
- *
- * タブが多いと迷子になる、という指摘を受けて 11 個で頭打ちにしている。全部を
- * 見るのはランチャー（ワッフル）と左のサイドバーの役目なので、ここは増やさない。
- *
- * アラート and レポート are intentionally NOT emitted here — they were dropped
- * from the navigation on purpose, so do not add tabs for them back.
- */
-function buildNavItems(data: NavData | null): ObjectNavItem[] {
-  const items: ObjectNavItem[] = [{ href: "/home", label: "ホーム" }];
-  if (!data) return items;
-
-  // 顧客はすべて、人事は代表（社員）だけ。
-  const masters = [
-    ...(data.crm ?? []),
-    ...(data.hr ?? []).filter((c) => c.slug === HR_PRIMARY_SLUG),
-  ];
-  for (const c of masters) {
-    items.push({ href: `/c/${c.id}`, label: c.name });
-  }
-
-  const masterIds = new Set(masters.map((c) => c.id));
-
-  const extras = [
-    ...data.workbooks.flatMap((w) => w.sheets),
-    ...data.looseSheets,
-  ]
-    .filter((s) => !masterIds.has(s.id))
-    .slice(0, EXTRA_TABS);
-  for (const s of extras) {
-    items.push({ href: `/c/${s.id}`, label: s.name });
-  }
-
-  return items;
-}
 
 /**
  * Top bar: app launcher + page title on the left, workspace/plan/account on the
@@ -108,7 +70,6 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
     };
   }, []);
 
-  const navItems = buildNavItems(nav);
 
   /*
    * アカウントメニューのキーボード操作。以前は Escape ハンドラが無く、閉じる
@@ -260,7 +221,6 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
         </div>
       </div>
 
-      <ObjectNav items={navItems} />
     </header>
   );
 }

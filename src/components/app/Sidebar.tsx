@@ -70,8 +70,23 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
     .filter((c) => hrOrder.has(c.slug))
     .sort((a, b) => (hrOrder.get(a.slug) ?? 0) - (hrOrder.get(b.slug) ?? 0));
 
+  /**
+   * 中身のあるシートだけを鞄に出す。
+   *
+   * 利用者の指摘:「文字や見る機能が多すぎて、わかりづらくなっている気がする」。
+   * 登録直後は 顧客/担当者/商談/請求書/活動 と 顧客問い合わせ/タスク が
+   * すべて 0 件のまま並び、「0」が7行、鞄の大半を占めていた。実際に持っている
+   * ものは何も無いのに、製品が大きく複雑に見える原因になっていた。
+   *
+   * 空のシートも「追加」から作れば増えるし、ランチャーの検索と /samples からは
+   * 今までどおり全部辿れる。ここは「今あるもの」を出す場所に徹する。
+   */
+  const hasRows = (c: { _count: { records: number } }) => c._count.records > 0;
+  const usedCrmSheets = crmSheets.filter(hasRows);
+  const usedHrSheets = hrSheets.filter(hasRows);
+
   const masterIds = new Set([...crmSheets, ...hrSheets].map((c) => c.id));
-  const rest = collections.filter((c) => !masterIds.has(c.id));
+  const rest = collections.filter((c) => !masterIds.has(c.id) && hasRows(c));
 
   // Group sheets under their workbook (file); loose sheets have no workbook.
   const byWorkbook = new Map<string, typeof collections>();
@@ -89,7 +104,7 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
     .map((w) => ({ ...w, sheets: byWorkbook.get(w.id) ?? [] }))
     .filter((w) => w.sheets.length > 0);
 
-  const hasMaster = crmSheets.length > 0 || hrSheets.length > 0;
+  const hasMaster = usedCrmSheets.length > 0 || usedHrSheets.length > 0;
 
   return (
     /* Panel white against the grey canvas, so the nav reads as a fixed chrome
@@ -192,21 +207,21 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
       */}
       {hasMaster && (
         <div className="max-h-[45vh] shrink-0 space-y-1 overflow-y-auto border-t border-ink-line px-2 py-2">
-          {crmSheets.length > 0 && (
+          {usedCrmSheets.length > 0 && (
             <MasterGroup
               label="顧客データベース"
               groupName="master-crm"
-              sheets={crmSheets}
+              sheets={usedCrmSheets}
               defaultOpen
             />
           )}
-          {hrSheets.length > 0 && (
+          {usedHrSheets.length > 0 && (
             <MasterGroup
               label="人事データベース"
               groupName="master-hr"
-              sheets={hrSheets}
+              sheets={usedHrSheets}
               /* 顧客データベースが無いときは、これが唯一のマスターなので開く。 */
-              defaultOpen={crmSheets.length === 0}
+              defaultOpen={usedCrmSheets.length === 0}
             />
           )}
         </div>
