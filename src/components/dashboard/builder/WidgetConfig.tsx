@@ -411,6 +411,175 @@ export function WidgetConfig({ widget, sheets, onChange }: Props) {
         </>
       )}
 
+      {widget.type === "pivot" && (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor={`${idp}-prow`}>行（縦）</Label>
+              <Select
+                id={`${idp}-prow`}
+                className="h-9"
+                value={widget.rowField}
+                onChange={(e) =>
+                  onChange({ ...widget, rowField: e.target.value })
+                }
+              >
+                {groups.length === 0 && (
+                  <option value="">分類できる項目なし</option>
+                )}
+                {groups.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor={`${idp}-pcol`}>列（横）</Label>
+              <Select
+                id={`${idp}-pcol`}
+                className="h-9"
+                value={widget.colField}
+                onChange={(e) =>
+                  onChange({ ...widget, colField: e.target.value })
+                }
+              >
+                {groups.length === 0 && (
+                  <option value="">分類できる項目なし</option>
+                )}
+                {groups.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
+          {/* Same field on both axes is valid but useless — warn, never block. */}
+          {widget.rowField !== "" && widget.rowField === widget.colField && (
+            <p className="text-2xs text-ink-muted">
+              行と列に同じ項目が選ばれています
+            </p>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor={`${idp}-pagg`}>集計</Label>
+              <Select
+                id={`${idp}-pagg`}
+                className="h-9"
+                value={widget.measure.kind}
+                onChange={(e) =>
+                  onChange({
+                    ...widget,
+                    measure: buildMeasure(
+                      e.target.value as Measure["kind"],
+                      fieldOf(widget.measure) ?? nums[0]?.key,
+                    ),
+                  })
+                }
+              >
+                {MEASURE_KINDS.map((k) => (
+                  <option key={k.value} value={k.value}>
+                    {k.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            {widget.measure.kind !== "count" && (
+              <div>
+                <Label htmlFor={`${idp}-pfield`}>対象項目</Label>
+                <Select
+                  id={`${idp}-pfield`}
+                  className="h-9"
+                  value={fieldOf(widget.measure) ?? ""}
+                  onChange={(e) =>
+                    onChange({
+                      ...widget,
+                      measure: buildMeasure(widget.measure.kind, e.target.value),
+                    })
+                  }
+                >
+                  {nums.length === 0 && <option value="">数値項目なし</option>}
+                  {nums.map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
+            <div>
+              <Label htmlFor={`${idp}-punit`}>単位</Label>
+              <Select
+                id={`${idp}-punit`}
+                className="h-9"
+                value={widget.unit ?? "number"}
+                onChange={(e) =>
+                  onChange({ ...widget, unit: e.target.value as Unit })
+                }
+              >
+                {UNITS.map((u) => (
+                  <option key={u.value} value={u.value}>
+                    {u.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor={`${idp}-prlimit`}>行の上限</Label>
+              <Input
+                id={`${idp}-prlimit`}
+                type="number"
+                min={2}
+                max={50}
+                className="h-9"
+                value={widget.rowLimit}
+                onChange={(e) => {
+                  const n = Math.round(Number(e.target.value));
+                  if (!Number.isFinite(n)) return;
+                  onChange({ ...widget, rowLimit: Math.min(50, Math.max(2, n)) });
+                }}
+              />
+            </div>
+            <div>
+              <Label htmlFor={`${idp}-pclimit`}>列の上限</Label>
+              <Input
+                id={`${idp}-pclimit`}
+                type="number"
+                min={2}
+                max={20}
+                className="h-9"
+                value={widget.colLimit}
+                onChange={(e) => {
+                  const n = Math.round(Number(e.target.value));
+                  if (!Number.isFinite(n)) return;
+                  onChange({ ...widget, colLimit: Math.min(20, Math.max(2, n)) });
+                }}
+              />
+            </div>
+          </div>
+          <p className="text-2xs text-ink-muted">
+            上限を超えた分は「その他」にまとめられます
+          </p>
+
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-soft">
+            <input
+              type="checkbox"
+              checked={widget.showTotals}
+              onChange={(e) =>
+                onChange({ ...widget, showTotals: e.target.checked })
+              }
+              className="h-4 w-4 accent-khaki-500"
+            />
+            合計を表示
+          </label>
+        </>
+      )}
+
       {widget.type === "table" && (
         <>
           <div>

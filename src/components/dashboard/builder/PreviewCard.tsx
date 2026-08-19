@@ -5,6 +5,7 @@ import { KpiTile } from "@/components/dashboard/widgets/KpiTile";
 import { SeriesChart } from "@/components/dashboard/widgets/SeriesChart";
 import { BreakdownChart } from "@/components/dashboard/widgets/BreakdownChart";
 import { DataTable } from "@/components/dashboard/widgets/DataTable";
+import { PivotTable } from "@/components/dashboard/widgets/PivotTable";
 
 /**
  * Live preview area for one builder widget. Mirrors DashboardGrid's dispatch
@@ -35,6 +36,8 @@ function Body({ data }: { data: WidgetData }) {
       return <BreakdownChart data={data} />;
     case "table":
       return <DataTable data={data} />;
+    case "pivot":
+      return <PivotTable data={data} />;
     default:
       return <Note>データなし</Note>;
   }

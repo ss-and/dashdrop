@@ -7,7 +7,11 @@ import type { KpiData } from "@/lib/widgets";
  * low-radius, in keeping with the earthy design system.
  */
 
-function formatValue(value: number, unit: KpiData["unit"]): string {
+/**
+ * Format a measure value by unit. Exported so every numeric widget (KPI tile,
+ * pivot cross-tab) prints the same number the same way.
+ */
+export function formatValue(value: number, unit: KpiData["unit"]): string {
   switch (unit) {
     case "currency":
       return `¥${formatNumber(Math.round(value))}`;

@@ -5,6 +5,9 @@
  *   - relation : stores linked target-record id(s) (writable)
  *   - lookup   : shows a field from the linked records (computed, read-only)
  *   - rollup   : aggregates a field across the linked records (computed)
+ *   - vlookup  : joins another spreadsheet on a KEY COLUMN rather than on
+ *                stored link ids — Excel's VLOOKUP / SUMIF (computed).
+ *                Pure core lives in src/lib/vlookup.ts.
  *
  * This module resolves those computed values on read, provides link-picker
  * options, and validates relation writes — always scoped to the caller's
@@ -13,7 +16,16 @@
 import "server-only";
 import { db } from "./db";
 import { ApiError } from "./errors";
-import { displayValue, type FieldType } from "./field-types";
+import { displayValue, isComputedField, isFieldType, type FieldType } from "./field-types";
+import {
+  VLOOKUP_TARGET_ROW_CAP,
+  resolveVlookupValues,
+  validateVlookupConfig,
+  type VlookupConfig,
+} from "./vlookup";
+
+export type { VlookupConfig, VlookupAggregate } from "./vlookup";
+export { resolveVlookupValues, normaliseKey, buildKeyIndex } from "./vlookup";
 
 export interface RelationConfig {
   targetCollectionId: string;
@@ -66,9 +78,7 @@ function toNum(v: unknown): number | null {
 
 /** Pick the best field to label a record in a link picker. */
 export function pickDisplayField(fields: EngineField[]): EngineField | null {
-  const writable = fields.filter(
-    (f) => f.type !== "lookup" && f.type !== "rollup",
-  );
+  const writable = fields.filter((f) => !isComputedField(f.type));
   return (
     writable.find((f) => f.type === "text") ??
     writable.find((f) => ["email", "phone", "url", "longtext"].includes(f.type)) ??
@@ -151,8 +161,57 @@ export async function resolveCollectionRecords(
     relationLabels[rf.key] = Object.fromEntries(idToLabel);
   }
 
-  // Compute lookup / rollup per record.
-  const outRecords = records.map((r) => {
+  // ---- vlookup (sheet join on a key column) -------------------------------
+  // One query + one index per vlookup field, then a single pass over the local
+  // rows: O(n+m), never a nested scan. Only the target's STORED values are
+  // read, so this can never trigger the target sheet's own computed fields
+  // (that is what makes an A -> B -> A cycle impossible).
+  const perVlookup = new Map<string, unknown[]>();
+  for (const vf of collection.fields.filter((f) => f.type === "vlookup")) {
+    const cfg = (vf.config ?? {}) as VlookupConfig;
+    const blank = cfg.aggregate === "count" ? 0 : null;
+    const allBlank = () => records.map(() => blank);
+
+    if (!cfg.targetCollectionId || !cfg.localKey || !cfg.targetKey || !cfg.targetField) {
+      perVlookup.set(vf.key, allBlank());
+      continue;
+    }
+    // Workspace-scoped: a target in another workspace simply resolves to
+    // blanks — never a leak, never a throw.
+    const target = await db.collection.findFirst({
+      where: { id: cfg.targetCollectionId, workspaceId },
+      include: { fields: { orderBy: { position: "asc" } } },
+    });
+    if (!target) {
+      perVlookup.set(vf.key, allBlank());
+      continue;
+    }
+    const tf = target.fields.find((f) => f.key === cfg.targetField);
+    // A vlookup cannot pull another computed column (cycle safety); validation
+    // rejects it up front, but stale configs resolve to blanks here too.
+    if (!tf || isComputedField(tf.type)) {
+      perVlookup.set(vf.key, allBlank());
+      continue;
+    }
+    const targetRows = await db.record.findMany({
+      where: { collectionId: target.id },
+      orderBy: { createdAt: "asc" }, // the target sheet's own order ("first")
+      take: VLOOKUP_TARGET_ROW_CAP, // capped: see VLOOKUP_TARGET_ROW_CAP
+      select: { id: true, data: true },
+    });
+    perVlookup.set(
+      vf.key,
+      resolveVlookupValues(
+        cfg,
+        records.map((r) => ({ data: r.data })),
+        targetRows.map((t) => ({ data: (t.data as Record<string, unknown>) ?? {} })),
+        isFieldType(tf.type) ? tf.type : "text",
+      ),
+    );
+  }
+
+  // Compute lookup / rollup / vlookup per record.
+  const outRecords = records.map((r, rowIndex) => {
     const computed: Record<string, unknown> = {};
     for (const f of collection.fields) {
       if (f.type === "lookup") {
@@ -186,6 +245,10 @@ export async function resolveCollectionRecords(
           computed[f.key] = Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 100) / 100;
         else if (cfg.op === "min") computed[f.key] = Math.min(...nums);
         else if (cfg.op === "max") computed[f.key] = Math.max(...nums);
+      } else if (f.type === "vlookup") {
+        const vals = perVlookup.get(f.key);
+        const cfg = (f.config ?? {}) as VlookupConfig;
+        computed[f.key] = vals ? vals[rowIndex] : cfg.aggregate === "count" ? 0 : null;
       }
     }
     return { id: r.id, data: r.data, computed };
@@ -274,15 +337,19 @@ export async function validateRelationWrites(
 }
 
 /**
- * Validate a relation/lookup/rollup field's config at creation/update time.
- * Ensures targets exist in the workspace and `via` points at a real relation
- * field — with actionable error messages.
+ * Validate a relation/lookup/rollup/vlookup field's config at creation/update
+ * time. Ensures targets exist in the workspace and `via` points at a real
+ * relation field — with actionable error messages.
+ *
+ * `selfCollectionId` is the collection the field lives on; it is what lets the
+ * vlookup branch reject a self-join (which would risk a cycle).
  */
 export async function validateFieldConfig(
   workspaceId: string,
   type: string,
   config: unknown,
   siblingFields: EngineField[],
+  selfCollectionId?: string,
 ): Promise<Record<string, unknown> | undefined> {
   const cfg = (config ?? {}) as Record<string, unknown>;
   if (type === "relation") {
@@ -337,5 +404,30 @@ export async function validateFieldConfig(
     }
     return { via, target: targetKey };
   }
+
+  if (type === "vlookup") {
+    const targetCollectionId = String(cfg.targetCollectionId ?? "").trim();
+    // Only hit the DB once we know the id is present and is not a self-join;
+    // validateVlookupConfig raises the right Japanese error for both cases.
+    const target =
+      targetCollectionId && targetCollectionId !== selfCollectionId
+        ? await db.collection.findFirst({
+            where: { id: targetCollectionId, workspaceId },
+            include: { fields: { orderBy: { position: "asc" } } },
+          })
+        : null;
+    return validateVlookupConfig(cfg, {
+      selfCollectionId,
+      localFields: siblingFields.map((f) => ({ key: f.key, name: f.name, type: f.type })),
+      target: target
+        ? {
+            id: target.id,
+            name: target.name,
+            fields: target.fields.map((f) => ({ key: f.key, name: f.name, type: f.type })),
+          }
+        : null,
+    }) as unknown as Record<string, unknown>;
+  }
+
   return config as Record<string, unknown> | undefined;
 }

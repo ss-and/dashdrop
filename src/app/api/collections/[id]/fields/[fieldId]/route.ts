@@ -26,13 +26,15 @@ export const PATCH = withAuth(async (req, { user, params }) => {
   if (input.required !== undefined) data.required = input.required;
   if (input.options !== undefined) data.options = toJson(input.options);
   if (input.config !== undefined || input.type !== undefined) {
-    // Re-validate relation/lookup/rollup config against the effective type.
+    // Re-validate relation/lookup/rollup/vlookup config against the effective
+    // type. The collection id lets the vlookup branch reject self-joins.
     const effectiveType = input.type ?? field.type;
     const cfg = await validateFieldConfig(
       user.workspace.id,
       effectiveType,
       input.config ?? field.config,
       collection.fields as unknown as EngineField[],
+      collection.id,
     );
     data.config = cfg ? toJson(cfg) : undefined;
   }

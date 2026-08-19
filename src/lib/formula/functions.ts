@@ -1,0 +1,485 @@
+/**
+ * Formula value model, coercion rules and the built-in function library.
+ *
+ * ────────────────────────────── COERCION RULES ──────────────────────────────
+ * These are the contract the whole engine is built on; every rule below has a
+ * test in tests/formula.test.ts.
+ *
+ * 1. Values are only `number | string | boolean | null`. Anything else that
+ *    reaches the evaluator from a row (object, array, undefined, NaN,
+ *    Infinity, Date, function) is read as `null` — never coerced, never thrown.
+ *
+ * 2. NUMERIC COERCION (`toNumber`) mirrors `toNumber` in src/lib/aggregate.ts:
+ *      - number   → itself when finite, else null
+ *      - boolean  → 1 / 0
+ *      - string   → strip `, whitespace ¥ $ € £` then Number(); a
+ *                   whitespace-only / empty string is null (NOT 0)
+ *      - null / anything else → null
+ *    So "1,200" → 1200 and "¥500" → 500, but "abc" → null.
+ *
+ * 3. A failed numeric coercion POISONS the expression: any arithmetic on a
+ *    value that will not parse yields `null` for the whole expression — never
+ *    NaN, never 0. A wrong number is worse than no number.
+ *    `null` arithmetic is likewise `null` (blank in ⇒ blank out).
+ *
+ * 4. Division and modulo by zero yield `null`, never Infinity/NaN.
+ *
+ * 5. TEXT COERCION (`toText`): null → "", true/false → "true"/"false",
+ *    numbers via String(). Used by `&`, CONCAT and the string functions.
+ *
+ * 6. TRUTHINESS (`toBool`): null → false; boolean → itself; number → n !== 0
+ *    (non-finite → false); string → false when it trims to "", "false" or "0"
+ *    (case-insensitive), true otherwise. Spreadsheet imports store "0"/"false"
+ *    as text, so treating them as falsy matches what users see in the cell.
+ *
+ * 7. EQUALITY (`=` `==` `!=` `<>`): numeric when BOTH sides parse as numbers,
+ *    otherwise stringwise (i.e. as soon as either side is a non-numeric
+ *    string). null equals only null; null vs. anything else is false.
+ *    Ordering comparisons (`<` `<=` `>` `>=`) use the same numeric-or-string
+ *    choice, but any null operand yields `null` (blank has no position in an
+ *    ordering).
+ *
+ * 8. BLANK (`ISBLANK`, `COALESCE`): null or a whitespace-only string.
+ *
+ * 9. DATES are `"YYYY-MM-DD"` strings (a longer ISO string is accepted and
+ *    truncated to its date part) and are parsed as UTC midnight, so DATEDIFF
+ *    is DST-free integer arithmetic. `TODAY()` returns today's UTC date as a
+ *    "YYYY-MM-DD" string. A non-date input yields null.
+ *
+ * 10. AGGREGATE functions (SUM/AVERAGE/MIN/MAX) SKIP blanks rather than
+ *     poisoning — a blank cell is "not a data point". A present-but-
+ *     unparseable value still poisons (rule 3). SUM of nothing is 0;
+ *     AVERAGE/MIN/MAX of nothing is null.
+ *
+ * 11. String functions (LEFT/RIGHT/TRIM/UPPER/LOWER) propagate null, and count
+ *     in Unicode code points (so emoji are not cut in half). LEN(null) is 0.
+ */
+import { MAX_ARGS } from "./tokenizer";
+
+export type FormulaValue = number | string | boolean | null;
+
+/* ----------------------------- coercion ---------------------------------- */
+
+/** Narrow an arbitrary runtime value to a FormulaValue; anything else → null. */
+export function sanitize(v: unknown): FormulaValue {
+  if (v === null) return null;
+  const t = typeof v;
+  if (t === "string") return v as string;
+  if (t === "boolean") return v as boolean;
+  if (t === "number") return Number.isFinite(v as number) ? (v as number) : null;
+  return null;
+}
+
+/** Rule 2/3. */
+export function toNumber(v: FormulaValue): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (typeof v === "string") {
+    const stripped = v.replace(/[,\s¥$€£　]/g, "");
+    if (stripped === "") return null;
+    const n = Number(stripped);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** Rule 5. */
+export function toText(v: FormulaValue): string {
+  if (v === null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "boolean") return v ? "true" : "false";
+  return String(v);
+}
+
+/** Rule 6. */
+export function toBool(v: FormulaValue): boolean {
+  if (v === null) return false;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return Number.isFinite(v) && v !== 0;
+  const s = v.trim().toLowerCase();
+  return s !== "" && s !== "false" && s !== "0";
+}
+
+/** Rule 8. */
+export function isBlank(v: FormulaValue): boolean {
+  return v === null || (typeof v === "string" && v.trim() === "");
+}
+
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})/;
+
+/** Rule 9. Returns a UTC-midnight timestamp in ms, or null. */
+export function toDateMs(v: FormulaValue): number | null {
+  if (typeof v !== "string") return null;
+  const m = DATE_RE.exec(v.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const ms = Date.UTC(y, mo - 1, d);
+  if (!Number.isFinite(ms)) return null;
+  const back = new Date(ms);
+  // Reject impossible days like 2026-02-30 (Date.UTC would roll them over).
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d) {
+    return null;
+  }
+  return ms;
+}
+
+/** Format a UTC timestamp as "YYYY-MM-DD". */
+export function formatDate(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${p(d.getUTCFullYear(), 4)}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
+}
+
+const DAY_MS = 86400000;
+
+/** Excel-style half-away-from-zero rounding, tolerant of float representation. */
+function roundHalfAway(x: number, digits: number): number | null {
+  if (!Number.isFinite(x)) return null;
+  const d = Math.max(-10, Math.min(10, Math.trunc(digits)));
+  const f = Math.pow(10, d);
+  const y = x * f;
+  if (!Number.isFinite(y)) return null;
+  const eps = Math.abs(y) * Number.EPSILON * 4;
+  const r = y >= 0 ? Math.floor(y + 0.5 + eps) : Math.ceil(y - 0.5 - eps);
+  const out = r / f;
+  return Number.isFinite(out) ? out : null;
+}
+
+/** Code-point-safe character array (keeps emoji and surrogate pairs whole). */
+function chars(s: string): string[] {
+  return Array.from(s);
+}
+
+/* -------------------------- function registry ---------------------------- */
+
+export interface FunctionDef {
+  /** Canonical, upper-case name. */
+  name: string;
+  /** Human-readable signature, e.g. "(cond, a, b)". */
+  args: string;
+  description: string;
+  minArgs: number;
+  maxArgs: number;
+  /** IF is evaluated lazily by the evaluator; this impl is the eager fallback. */
+  lazy?: boolean;
+  call: (args: FormulaValue[]) => FormulaValue;
+}
+
+/** Coerce arguments to numbers, skipping blanks (rule 10). */
+function numsSkipBlank(args: FormulaValue[]): number[] | null {
+  const out: number[] = [];
+  for (const a of args) {
+    if (isBlank(a)) continue;
+    const n = toNumber(a);
+    if (n === null) return null;
+    out.push(n);
+  }
+  return out;
+}
+
+function unaryNum(fn: (n: number) => number) {
+  return (args: FormulaValue[]): FormulaValue => {
+    const n = toNumber(args[0] ?? null);
+    if (n === null) return null;
+    const r = fn(n);
+    return Number.isFinite(r) ? r : null;
+  };
+}
+
+function unaryStr(fn: (s: string) => FormulaValue) {
+  return (args: FormulaValue[]): FormulaValue => {
+    const v = args[0] ?? null;
+    if (v === null) return null;
+    return fn(toText(v));
+  };
+}
+
+function datePart(pick: (d: Date) => number) {
+  return (args: FormulaValue[]): FormulaValue => {
+    const ms = toDateMs(args[0] ?? null);
+    if (ms === null) return null;
+    return pick(new Date(ms));
+  };
+}
+
+function sideOf(side: "left" | "right") {
+  return (args: FormulaValue[]): FormulaValue => {
+    const v = args[0] ?? null;
+    if (v === null) return null;
+    const n = toNumber(args[1] ?? null);
+    if (n === null) return null;
+    const cs = chars(toText(v));
+    const k = Math.max(0, Math.min(cs.length, Math.trunc(n)));
+    return side === "left" ? cs.slice(0, k).join("") : cs.slice(cs.length - k).join("");
+  };
+}
+
+const DEFS: FunctionDef[] = [
+  {
+    name: "IF",
+    args: "(条件, 真のとき, 偽のとき)",
+    description: "条件が真なら2番目、偽なら3番目の値を返す",
+    minArgs: 3,
+    maxArgs: 3,
+    lazy: true,
+    call: (a) => (toBool(a[0] ?? null) ? (a[1] ?? null) : (a[2] ?? null)),
+  },
+  {
+    name: "AND",
+    args: "(値1, 値2, ...)",
+    description: "すべて真なら true",
+    minArgs: 1,
+    maxArgs: MAX_ARGS,
+    call: (a) => a.every((v) => toBool(v)),
+  },
+  {
+    name: "OR",
+    args: "(値1, 値2, ...)",
+    description: "いずれかが真なら true",
+    minArgs: 1,
+    maxArgs: MAX_ARGS,
+    call: (a) => a.some((v) => toBool(v)),
+  },
+  {
+    name: "NOT",
+    args: "(値)",
+    description: "真偽を反転する",
+    minArgs: 1,
+    maxArgs: 1,
+    call: (a) => !toBool(a[0] ?? null),
+  },
+  {
+    name: "ROUND",
+    args: "(数値, 桁数?)",
+    description: "四捨五入（桁数の既定は0）",
+    minArgs: 1,
+    maxArgs: 2,
+    call: (a) => {
+      const x = toNumber(a[0] ?? null);
+      if (x === null) return null;
+      let d = 0;
+      if (a.length > 1) {
+        const dd = toNumber(a[1] ?? null);
+        if (dd === null) return null;
+        d = dd;
+      }
+      return roundHalfAway(x, d);
+    },
+  },
+  {
+    name: "FLOOR",
+    args: "(数値)",
+    description: "小数点以下を切り捨て（負の無限大方向）",
+    minArgs: 1,
+    maxArgs: 1,
+    call: unaryNum(Math.floor),
+  },
+  {
+    name: "CEILING",
+    args: "(数値)",
+    description: "小数点以下を切り上げ（正の無限大方向）",
+    minArgs: 1,
+    maxArgs: 1,
+    call: unaryNum(Math.ceil),
+  },
+  {
+    name: "ABS",
+    args: "(数値)",
+    description: "絶対値",
+    minArgs: 1,
+    maxArgs: 1,
+    call: unaryNum(Math.abs),
+  },
+  {
+    name: "MIN",
+    args: "(数値1, 数値2, ...)",
+    description: "最小値（空欄は無視）",
+    minArgs: 1,
+    maxArgs: MAX_ARGS,
+    call: (a) => {
+      const ns = numsSkipBlank(a);
+      if (ns === null || ns.length === 0) return null;
+      return Math.min(...ns);
+    },
+  },
+  {
+    name: "MAX",
+    args: "(数値1, 数値2, ...)",
+    description: "最大値（空欄は無視）",
+    minArgs: 1,
+    maxArgs: MAX_ARGS,
+    call: (a) => {
+      const ns = numsSkipBlank(a);
+      if (ns === null || ns.length === 0) return null;
+      return Math.max(...ns);
+    },
+  },
+  {
+    name: "SUM",
+    args: "(数値1, 数値2, ...)",
+    description: "合計（空欄は無視）",
+    minArgs: 1,
+    maxArgs: MAX_ARGS,
+    call: (a) => {
+      const ns = numsSkipBlank(a);
+      if (ns === null) return null;
+      let total = 0;
+      for (const n of ns) total += n;
+      return Number.isFinite(total) ? total : null;
+    },
+  },
+  {
+    name: "AVERAGE",
+    args: "(数値1, 数値2, ...)",
+    description: "平均（空欄は無視）",
+    minArgs: 1,
+    maxArgs: MAX_ARGS,
+    call: (a) => {
+      const ns = numsSkipBlank(a);
+      if (ns === null || ns.length === 0) return null;
+      let total = 0;
+      for (const n of ns) total += n;
+      const avg = total / ns.length;
+      return Number.isFinite(avg) ? avg : null;
+    },
+  },
+  {
+    name: "CONCAT",
+    args: "(値1, 値2, ...)",
+    description: "文字列を連結（空欄は空文字）",
+    minArgs: 1,
+    maxArgs: MAX_ARGS,
+    call: (a) => a.map((v) => toText(v)).join(""),
+  },
+  {
+    name: "LEFT",
+    args: "(文字列, 文字数)",
+    description: "先頭から指定文字数を取り出す",
+    minArgs: 2,
+    maxArgs: 2,
+    call: sideOf("left"),
+  },
+  {
+    name: "RIGHT",
+    args: "(文字列, 文字数)",
+    description: "末尾から指定文字数を取り出す",
+    minArgs: 2,
+    maxArgs: 2,
+    call: sideOf("right"),
+  },
+  {
+    name: "LEN",
+    args: "(文字列)",
+    description: "文字数（空欄は0）",
+    minArgs: 1,
+    maxArgs: 1,
+    call: (a) => chars(toText(a[0] ?? null)).length,
+  },
+  {
+    name: "TRIM",
+    args: "(文字列)",
+    description: "前後の空白を削除",
+    minArgs: 1,
+    maxArgs: 1,
+    call: unaryStr((s) => s.trim()),
+  },
+  {
+    name: "UPPER",
+    args: "(文字列)",
+    description: "大文字に変換",
+    minArgs: 1,
+    maxArgs: 1,
+    call: unaryStr((s) => s.toUpperCase()),
+  },
+  {
+    name: "LOWER",
+    args: "(文字列)",
+    description: "小文字に変換",
+    minArgs: 1,
+    maxArgs: 1,
+    call: unaryStr((s) => s.toLowerCase()),
+  },
+  {
+    name: "COALESCE",
+    args: "(値1, 値2, ...)",
+    description: "最初の空でない値を返す",
+    minArgs: 1,
+    maxArgs: MAX_ARGS,
+    call: (a) => {
+      for (const v of a) if (!isBlank(v)) return v;
+      return null;
+    },
+  },
+  {
+    name: "ISBLANK",
+    args: "(値)",
+    description: "空欄（null または空白のみ）なら true",
+    minArgs: 1,
+    maxArgs: 1,
+    call: (a) => isBlank(a[0] ?? null),
+  },
+  {
+    name: "DATEDIFF",
+    args: "(開始日, 終了日)",
+    description: "2つの日付の日数差（終了日 − 開始日）",
+    minArgs: 2,
+    maxArgs: 2,
+    call: (a) => {
+      const from = toDateMs(a[0] ?? null);
+      const to = toDateMs(a[1] ?? null);
+      if (from === null || to === null) return null;
+      return Math.round((to - from) / DAY_MS);
+    },
+  },
+  {
+    name: "TODAY",
+    args: "()",
+    description: "今日の日付（UTC、YYYY-MM-DD）",
+    minArgs: 0,
+    maxArgs: 0,
+    call: () => formatDate(Date.now()),
+  },
+  {
+    name: "YEAR",
+    args: "(日付)",
+    description: "日付の年",
+    minArgs: 1,
+    maxArgs: 1,
+    call: datePart((d) => d.getUTCFullYear()),
+  },
+  {
+    name: "MONTH",
+    args: "(日付)",
+    description: "日付の月（1〜12）",
+    minArgs: 1,
+    maxArgs: 1,
+    call: datePart((d) => d.getUTCMonth() + 1),
+  },
+  {
+    name: "DAY",
+    args: "(日付)",
+    description: "日付の日（1〜31）",
+    minArgs: 1,
+    maxArgs: 1,
+    call: datePart((d) => d.getUTCDate()),
+  },
+];
+
+/** Lookup table keyed by canonical upper-case name. Uses a Map, never an object. */
+const REGISTRY: Map<string, FunctionDef> = new Map(DEFS.map((d) => [d.name, d]));
+
+/** Case-insensitive function lookup. Returns undefined for unknown names. */
+export function getFunction(name: string): FunctionDef | undefined {
+  if (typeof name !== "string") return undefined;
+  return REGISTRY.get(name.toUpperCase());
+}
+
+/** Names/arity of every supported function, for help text and pickers. */
+export const FORMULA_FUNCTIONS: {
+  name: string;
+  args: string;
+  description: string;
+}[] = DEFS.map((d) => ({ name: d.name, args: d.args, description: d.description }));

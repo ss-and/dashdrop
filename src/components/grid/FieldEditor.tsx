@@ -12,9 +12,15 @@ import { cn, toFieldKey } from "@/lib/utils";
 import {
   FIELD_TYPE_META,
   FIELD_TYPES,
+  isComputedField,
   type FieldType,
   type SelectOption,
 } from "@/lib/field-types";
+import {
+  VLOOKUP_AGGREGATES,
+  VLOOKUP_AGGREGATE_LABELS,
+  type VlookupAggregate,
+} from "@/lib/vlookup";
 import type { GridField } from "./cells";
 import type { WorkspaceCollection } from "./DataGrid";
 
@@ -25,6 +31,20 @@ const ROLLUP_OPS: Array<{ value: string; label: string }> = [
   { value: "min", label: "最小" },
   { value: "max", label: "最大" },
 ];
+
+/** Japanese labels for types whose registry label is still English. */
+const TYPE_LABEL_JA: Partial<Record<FieldType, string>> = {
+  vlookup: "別シートから引く（VLOOKUP）",
+};
+const TYPE_DESCRIPTION_JA: Partial<Record<FieldType, string>> = {
+  vlookup: "別シートを共通の列で突き合わせて、値を引いてきます（自動計算）",
+};
+function typeLabel(t: FieldType): string {
+  return TYPE_LABEL_JA[t] ?? FIELD_TYPE_META[t].label;
+}
+function typeDescription(t: FieldType): string {
+  return TYPE_DESCRIPTION_JA[t] ?? FIELD_TYPE_META[t].description;
+}
 
 const OPTION_TONES = ["khaki", "success", "warning", "danger", "info"] as const;
 
@@ -83,6 +103,18 @@ export function FieldEditor({
   const [targetKey, setTargetKey] = useState<string>(String(cfg.target ?? ""));
   const [op, setOp] = useState<string>(String(cfg.op ?? "sum"));
 
+  // vlookup (シート結合) config — target sheet reuses `targetCollectionId`.
+  const [localKey, setLocalKey] = useState<string>(String(cfg.localKey ?? ""));
+  const [vTargetKey, setVTargetKey] = useState<string>(String(cfg.targetKey ?? ""));
+  const [vTargetField, setVTargetField] = useState<string>(
+    String(cfg.targetField ?? ""),
+  );
+  const [aggregate, setAggregate] = useState<VlookupAggregate>(
+    (VLOOKUP_AGGREGATES as readonly string[]).includes(String(cfg.aggregate))
+      ? (cfg.aggregate as VlookupAggregate)
+      : "first",
+  );
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,6 +143,15 @@ export function FieldEditor({
   );
   const viaTargetFieldOptions = (viaTarget?.fields ?? []).filter(
     (f) => f.type !== "lookup" && f.type !== "rollup",
+  );
+
+  // vlookup: key/value columns must hold real data — a computed column can be
+  // neither the key nor the pulled value (the server rejects it too).
+  const localKeyOptions = collectionFields.filter(
+    (f) => !isComputedField(f.type) && f.key !== field?.key,
+  );
+  const vlookupTargetFieldOptions = (relationTarget?.fields ?? []).filter(
+    (f) => !isComputedField(f.type),
   );
 
   function addOption() {
@@ -155,6 +196,14 @@ export function FieldEditor({
       config = { via, target: targetKey };
     } else if (type === "rollup") {
       config = { via, target: targetKey, op };
+    } else if (type === "vlookup") {
+      config = {
+        targetCollectionId,
+        localKey,
+        targetKey: vTargetKey,
+        targetField: vTargetField,
+        aggregate,
+      };
     }
 
     const body = {
@@ -224,12 +273,12 @@ export function FieldEditor({
             >
               {FIELD_TYPES.map((t) => (
                 <option key={t} value={t}>
-                  {FIELD_TYPE_META[t].label}
+                  {typeLabel(t)}
                 </option>
               ))}
             </Select>
             <p className="mt-1 text-xs text-ink-faint">
-              {FIELD_TYPE_META[type].description}
+              {typeDescription(type)}
             </p>
           </div>
 
@@ -347,6 +396,105 @@ export function FieldEditor({
                   </Select>
                 </div>
               )}
+            </div>
+          )}
+
+          {type === "vlookup" && (
+            <div className="space-y-3 rounded-sm border border-ink-line bg-paper-sunken/40 p-3">
+              <div>
+                <Label htmlFor="vl-target">参照するシート</Label>
+                <Select
+                  id="vl-target"
+                  value={targetCollectionId}
+                  onChange={(e) => {
+                    setTargetCollectionId(e.target.value);
+                    setVTargetKey("");
+                    setVTargetField("");
+                  }}
+                >
+                  <option value="">選択してください</option>
+                  {linkableCollections.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </Select>
+                {linkableCollections.length === 0 && (
+                  <p className="mt-1 text-xs text-warning">
+                    突き合わせできる他のシートがまだありません。先にもう1つシートを取り込んでください。
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <Label htmlFor="vl-local-key">このシートのキー項目</Label>
+                <Select
+                  id="vl-local-key"
+                  value={localKey}
+                  onChange={(e) => setLocalKey(e.target.value)}
+                >
+                  <option value="">選択してください</option>
+                  {localKeyOptions.map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+
+              <div>
+                <Label htmlFor="vl-target-key">参照先のキー項目</Label>
+                <Select
+                  id="vl-target-key"
+                  value={vTargetKey}
+                  onChange={(e) => setVTargetKey(e.target.value)}
+                  disabled={!targetCollectionId}
+                >
+                  <option value="">選択してください</option>
+                  {vlookupTargetFieldOptions.map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+
+              <div>
+                <Label htmlFor="vl-target-field">取得する項目</Label>
+                <Select
+                  id="vl-target-field"
+                  value={vTargetField}
+                  onChange={(e) => setVTargetField(e.target.value)}
+                  disabled={!targetCollectionId}
+                >
+                  <option value="">選択してください</option>
+                  {vlookupTargetFieldOptions.map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+
+              <div>
+                <Label htmlFor="vl-aggregate">複数一致したとき</Label>
+                <Select
+                  id="vl-aggregate"
+                  value={aggregate}
+                  onChange={(e) => setAggregate(e.target.value as VlookupAggregate)}
+                  disabled={!targetCollectionId}
+                >
+                  {VLOOKUP_AGGREGATES.map((a) => (
+                    <option key={a} value={a}>
+                      {VLOOKUP_AGGREGATE_LABELS[a]}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+
+              <p className="text-xs text-ink-faint">
+                別のシートを、共通する列で突き合わせて値を引きます（ExcelのVLOOKUP）。
+              </p>
             </div>
           )}
 

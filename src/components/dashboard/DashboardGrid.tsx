@@ -4,6 +4,7 @@ import { KpiTile } from "./widgets/KpiTile";
 import { SeriesChart } from "./widgets/SeriesChart";
 import { BreakdownChart } from "./widgets/BreakdownChart";
 import { DataTable } from "./widgets/DataTable";
+import { PivotTable } from "./widgets/PivotTable";
 
 /**
  * Renders a computed dashboard layout on a 4-column responsive grid. Each
@@ -37,6 +38,8 @@ function WidgetBody({ data }: { data: WidgetData }) {
       return <BreakdownChart data={data} />;
     case "table":
       return <DataTable data={data} />;
+    case "pivot":
+      return <PivotTable data={data} />;
     default:
       return (
         <div className="flex h-24 items-center justify-center text-sm text-ink-faint">

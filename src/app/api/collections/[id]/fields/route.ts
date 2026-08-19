@@ -18,12 +18,14 @@ export const POST = withAuth(async (req, { user, params }) => {
   const rawKey = input.key?.trim() || toFieldKey(input.name);
   const key = uniqueName(rawKey, takenKeys);
 
-  // Validate/normalise config for relation/lookup/rollup (clear errors on bad setup).
+  // Validate/normalise config for relation/lookup/rollup/vlookup (clear errors
+  // on bad setup). The collection id lets the vlookup branch reject self-joins.
   const config = await validateFieldConfig(
     user.workspace.id,
     input.type,
     input.config,
     collection.fields as unknown as EngineField[],
+    collection.id,
   );
 
   // Next position = max existing + 1.
