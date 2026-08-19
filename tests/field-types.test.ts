@@ -8,6 +8,7 @@ import {
   type SelectOption,
   isComputedField,
   COMPUTED_FIELD_TYPES,
+  parseJapaneseNumber,
 } from "@/lib/field-types";
 
 describe("coerceValue", () => {
@@ -279,5 +280,100 @@ describe("computed field display", () => {
     expect(displayValue("vlookup", "製造")).toBe("製造");
     expect(displayValue("vlookup", ["製造", "卸売"])).toBe("製造, 卸売");
     expect(displayValue("formula", true)).toBe("true");
+  });
+});
+
+describe("日本のビジネス文書の数の読み方", () => {
+  /**
+   * 回帰テスト: 取り込んだ列の型を「数値」に直すと、`1,234円` `▲500` `１２３`
+   * `￥88,000` がすべて弾かれて空欄になっていた。利用者から見ると
+   * 「正しい型を選んだのに中身が消えた」という最悪の挙動で、文字列のまま
+   * 諦めるしか無かった。
+   */
+  it("会計・和文の表記を読む", () => {
+    const cases: Array<[string, number | null]> = [
+      ["1,234", 1234],
+      ["￥1,234", 1234],
+      ["¥1,234", 1234],
+      ["1,234円", 1234],
+      ["▲500", -500],
+      ["△500", -500],
+      ["(500)", -500],
+      ["－500", -500],
+      ["１２３", 123],
+      ["１，２３４円", 1234],
+      ["15%", 0.15],
+      ["１５％", 0.15],
+      ["1,234万", 12_340_000],
+      ["5億", 500_000_000],
+      ["-12.5", -12.5],
+      ["0", 0],
+      ["0.5", 0.5],
+      ["abc", null],
+      ["", null],
+      ["   ", null],
+      ["2026/04/01", null],
+    ];
+    for (const [input, expected] of cases) {
+      expect(parseJapaneseNumber(input), input).toBe(expected);
+    }
+  });
+
+  it("数値型はその読み方で受け入れる", () => {
+    expect(coerceValue("currency", "▲500")).toEqual({ ok: true, value: -500 });
+    expect(coerceValue("number", "１２３")).toEqual({ ok: true, value: 123 });
+    expect(coerceValue("currency", "1,234円")).toEqual({ ok: true, value: 1234 });
+    expect(coerceValue("number", "abc").ok).toBe(false);
+  });
+});
+
+describe("列の型の推定 — 壊してはいけないもの", () => {
+  /**
+   * 回帰テスト: 郵便番号 0600001、社員番号 0012、商品コード 007 が
+   * 数値と判定され、先頭のゼロが落ちて別物になっていた。
+   */
+  it("先頭ゼロのコードは数値にしない", () => {
+    expect(inferFieldType(["0600001", "1500001", "0012345"])).not.toBe("number");
+    expect(inferFieldType(["0012", "0013", "0014"])).not.toBe("number");
+    expect(inferFieldType(["007", "008"])).not.toBe("number");
+    expect(inferFieldType(["0312345678", "0454321000"])).not.toBe("number");
+    // 1件でも先頭ゼロがあれば、その列はコードとして扱う。
+    expect(inferFieldType(["100", "200", "0300"])).not.toBe("number");
+  });
+
+  it("本物の数は数値のまま", () => {
+    expect(inferFieldType(["100", "200", "300"])).toBe("number");
+    expect(inferFieldType(["0", "5", "10"])).toBe("number");
+    expect(inferFieldType(["0.5", "1.5"])).toBe("number");
+    expect(inferFieldType(["-3", "0", "3"])).toBe("number");
+  });
+
+  /**
+   * 回帰テスト: 0/1 を真偽値と見なしていたため、`1,0,1` という数量列が
+   * チェックボックスになり true/false として保存されていた。
+   */
+  it("0/1 の数量列をチェックボックスにしない", () => {
+    expect(inferFieldType(["1", "0", "1"])).toBe("number");
+    expect(inferFieldType(["1", "1", "1"])).toBe("number");
+    expect(inferFieldType([1, 0, 1])).toBe("number");
+  });
+
+  it("真偽値と分かる語はチェックボックス", () => {
+    expect(inferFieldType(["true", "false"])).toBe("checkbox");
+    expect(inferFieldType(["はい", "いいえ"])).toBe("checkbox");
+    expect(inferFieldType(["有", "無"])).toBe("checkbox");
+    expect(inferFieldType([true, false])).toBe("checkbox");
+  });
+
+  it("通貨記号のある列は通貨として扱う", () => {
+    expect(inferFieldType(["￥1,000", "￥2,000"])).toBe("currency");
+    expect(inferFieldType(["1,000円", "▲500"])).toBe("currency");
+    expect(inferFieldType(["1000", "2000"])).toBe("number");
+  });
+
+  it("％は推定では数値にしない（0.15 になるのは直感に反するため）", () => {
+    expect(inferFieldType(["15%", "20%"])).not.toBe("number");
+    // 利用者が明示的に数値型を選んだときだけ換算する。
+    expect(coerceValue("number", "15%")).toEqual({ ok: true, value: 0.15 });
   });
 });

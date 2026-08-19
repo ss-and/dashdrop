@@ -191,6 +191,58 @@ export interface CoerceResult {
  * canonical stored representation for a field type. Empty values normalise to
  * null. Returns { ok:false, error } when the value is present but invalid.
  */
+/**
+ * 日本のビジネス文書に出てくる数の書き方を読む。
+ *
+ * 取り込み時に列の型を「数値」に直すと、`1,234円` `▲500` `１２３` `15%` が
+ * すべて弾かれて空欄になっていた。利用者から見ると「正しい型を選んだのに
+ * 中身が消えた」という最悪の挙動で、文字列のまま諦めるしか無かった。
+ *
+ * 読める書き方:
+ *   1,234 / ￥1,234 / 1,234円 / 1234.5
+ *   ▲500 / △500 / (500) / -500      … 会計表記の負数
+ *   １２３                            … 全角
+ *   15%                              … 0.15 として読む
+ *   1,234万 / 5億                     … 万・億
+ *
+ * 読めないものは null を返す（当て推量で数にしない）。
+ */
+export function parseJapaneseNumber(input: string): number | null {
+  let s = input.normalize("NFKC").trim();
+  if (s === "") return null;
+
+  let sign = 1;
+  // ▲ / △ は会計の負数表記。括弧書きも同じ意味。
+  if (/^[▲△]/.test(s)) {
+    sign = -1;
+    s = s.slice(1).trim();
+  } else if (/^\(.*\)$/.test(s)) {
+    sign = -1;
+    s = s.slice(1, -1).trim();
+  }
+
+  const percent = s.endsWith("%");
+  if (percent) s = s.slice(0, -1).trim();
+
+  // 通貨記号・桁区切り・円/圓 を落とす。
+  s = s.replace(/[¥$€£]/g, "").replace(/,/g, "").replace(/[円圓]$/u, "").trim();
+
+  // 万・億（1,234万 = 12,340,000）。組み合わせは扱わない。
+  let scale = 1;
+  const unit = /^(.*?)(万|億|兆)$/u.exec(s);
+  if (unit) {
+    s = unit[1].trim();
+    scale = unit[2] === "万" ? 1e4 : unit[2] === "億" ? 1e8 : 1e12;
+  }
+
+  if (s === "" || !/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(s)) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+
+  const scaled = n * scale * sign;
+  return percent ? scaled / 100 : scaled;
+}
+
 export function coerceValue(
   type: FieldType,
   raw: unknown,
@@ -220,11 +272,15 @@ export function coerceValue(
     }
     case "number":
     case "currency": {
-      const n =
-        typeof raw === "number"
-          ? raw
-          : Number(String(raw).replace(/[,\s¥$€£]/g, ""));
-      if (!Number.isFinite(n)) return { ok: false, value: raw, error: "Not a number" };
+      if (typeof raw === "number") {
+        return Number.isFinite(raw)
+          ? { ok: true, value: raw }
+          : { ok: false, value: raw, error: "数値として読み取れません" };
+      }
+      const n = parseJapaneseNumber(String(raw));
+      if (n === null) {
+        return { ok: false, value: raw, error: "数値として読み取れません" };
+      }
       return { ok: true, value: n };
     }
     case "checkbox": {
@@ -338,6 +394,34 @@ export function displayValue(type: FieldType, value: unknown): string {
  * Infer the most likely field type from a column of sample values.
  * Used by the Excel importer to auto-build a schema.
  */
+/**
+ * 先頭ゼロを持つ「数字に見えるが数値ではない」値。
+ *
+ * 郵便番号 0600001、社員番号 0012、商品コード 007、電話 0312345678 —
+ * どれも数値にすると先頭のゼロが消えて別物になる。桁数が揃っている
+ * ことが多いので、`0` で始まり2桁以上なら数値とは見なさない。
+ * 「0」「0.5」「-0.3」のような本物の数はここに入らない。
+ */
+const LEADING_ZERO_RE = /^0\d/;
+
+function looksLikeCode(v: unknown): boolean {
+  return typeof v !== "number" && LEADING_ZERO_RE.test(String(v).trim());
+}
+
+/** 真偽値として読める文字列（0/1 は含めない。下の注記を参照）。 */
+const BOOLEAN_WORDS = [
+  "true",
+  "false",
+  "yes",
+  "no",
+  "はい",
+  "いいえ",
+  "有",
+  "無",
+  "○",
+  "×",
+];
+
 export function inferFieldType(samples: unknown[]): FieldType {
   const values = samples
     .filter((v) => v !== null && v !== undefined && String(v).trim() !== "")
@@ -349,21 +433,37 @@ export function inferFieldType(samples: unknown[]): FieldType {
   const test = (pred: (v: unknown) => boolean) => values.every(pred);
 
   if (test((v) => typeof v === "boolean")) return "checkbox";
+  // 0/1 を真偽値扱いしない。数量・在庫・件数の列は小さい値だけのことが普通に
+  // あり、`1,0,1` という数量列がチェックボックスになって true/false として
+  // 保存されてしまっていた。真偽値だと分かる語だけを見る。
   if (
-    test((v) => {
-      const s = String(v).trim().toLowerCase();
-      return ["true", "false", "yes", "no", "0", "1"].includes(s);
-    })
+    test((v) => BOOLEAN_WORDS.includes(String(v).trim().toLowerCase()))
   )
     return "checkbox";
+  // 数値の判定は coerceValue と同じ読み方（parseJapaneseNumber）を使う。
+  // ここだけ別の読み方をしていたため、`▲500` や `￥88,000` を含む金額列が
+  // text と判定され、利用者が型を「数値」に直すと全部の値が消えていた。
+  // ％ は「0.15 として保存される」のが直感に反するので、推定では数値にしない
+  // （利用者が明示的に数値型を選んだ場合だけ換算する）。
   if (
     test(
       (v) =>
         typeof v === "number" ||
-        (String(v).trim() !== "" && Number.isFinite(Number(String(v).replace(/[,\s]/g, "")))),
-    )
-  )
-    return "number";
+        (String(v).trim() !== "" &&
+          !String(v).includes("%") &&
+          !String(v).includes("％") &&
+          parseJapaneseNumber(String(v)) !== null),
+    ) &&
+    // 先頭ゼロが1件でもあれば、その列は数値ではなくコード。1件でも壊したら
+    // 取り返しがつかないので、多数決ではなく「1件でもあれば」で判断する。
+    !values.some(looksLikeCode)
+  ) {
+    // 通貨記号や「円」が付いていれば通貨列として扱う。
+    const CURRENCY_MARK = /[¥￥$€£]|円|圓/u;
+    return values.some((v) => CURRENCY_MARK.test(String(v)))
+      ? "currency"
+      : "number";
+  }
   if (test((v) => v instanceof Date || DATE_RE.test(String(v).trim()) || !Number.isNaN(Date.parse(String(v)))) &&
       values.some((v) => v instanceof Date || DATE_RE.test(String(v).trim())))
     return "date";
