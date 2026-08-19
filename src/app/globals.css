@@ -36,9 +36,19 @@
     text-wrap: pretty;
   }
 
-  /* Honest, visible focus — accessibility over minimalism. */
+  /*
+   * Honest, visible focus — accessibility over minimalism.
+   *
+   * リングは必ずベタ塗り。以前の khaki-500/50 は paper（#f4f4f2）の上で
+   * #b2ae99 = 2.03:1 まで薄まっており、WCAG 2.2 1.4.11（非テキストの
+   * コントラスト 3:1）を満たしていなかった。キーボードだけで操作する人に
+   * とってフォーカスリングは「今どこにいるか」の唯一の手がかりなので、
+   * ここは意匠より視認性を取る。ベタの khaki-500 は paper 上 5.12:1、
+   * paper-raised 上 5.63:1。1px のオフセットは、khaki 系の背景（プライマリ
+   * ボタンやアバター）の上でもリングが背景に溶けないようにするためのもの。
+   */
   :focus-visible {
-    @apply outline-none ring-2 ring-khaki-500/50 ring-offset-1 ring-offset-paper;
+    @apply outline-none ring-2 ring-khaki-500 ring-offset-1 ring-offset-paper;
   }
 
   ::selection {
@@ -105,10 +115,15 @@
     @apply bg-paper-raised border border-ink-line rounded-md;
   }
 
+  /*
+   * 入力欄。プレースホルダーは ink-faint（トークン側で AA を満たすよう
+   * 暗くした）、フォーカスリングはベタの khaki-500。旧 khaki-500/25 は白地で
+   * #dbd9cf = 1.42:1 しかなく、フォーカスが「見えているつもり」の状態だった。
+   */
   .input-base {
     @apply w-full rounded bg-paper-raised border border-ink-rule px-3 text-sm text-ink
       placeholder:text-ink-faint transition-colors
-      focus:border-khaki-500 focus:ring-2 focus:ring-khaki-500/25 focus:outline-none;
+      focus:border-khaki-500 focus:ring-2 focus:ring-khaki-500 focus:outline-none;
     min-height: 2.25rem; /* 36px — a real hit target, not a 32px sliver */
     padding-block: 0.375rem;
   }

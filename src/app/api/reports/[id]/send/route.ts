@@ -1,20 +1,20 @@
 /**
- * "今すぐ送信" — deliver a report now.
+ * 「今すぐ受け取る」 — レポートをその場で1通作る。
  *
- * Always creates an in-app notification linking to the printable report. If the
- * schedule has recipients and SMTP is configured, email delivery *would* occur
- * (no transport wired up yet) and we report channel:'email'; otherwise the
- * report is delivered in-app only.
+ * 配信手段はアプリ内通知だけ。通知から印刷 / PDF ページを開ける。
+ * 以前はここで `SMTP_HOST`/`SMTP_USER` が設定されていると `channel: "email"`
+ * を返し、画面が「メールで送信しました（宛先 N 件）」と表示していたが、
+ * メールを送る経路はこの製品に存在しない（notify.ts にも送信処理は無い）。
+ * つまり SMTP を設定した利用者ほど、届いていないものを「送った」と伝えられて
+ * いた。届いたと言えるのは実際に作れた通知だけなので、通知の作成に失敗したら
+ * 失敗として返す。
+ *
+ * 定期実行での自動配信は `src/app/api/reports/dispatch/route.ts`。
  */
 import { withAuth, ok, ApiError } from "@/lib/api";
 import { db } from "@/lib/db";
-import { createNotification, emailConfigured } from "@/lib/notify";
-
-const FREQ_LABEL: Record<string, string> = {
-  daily: "日次",
-  weekly: "週次",
-  monthly: "月次",
-};
+import { createNotification } from "@/lib/notify";
+import { frequencyLabel } from "../../schedule";
 
 export const POST = withAuth(async (_req, { user, params }) => {
   const workspaceId = user.workspace.id;
@@ -30,29 +30,26 @@ export const POST = withAuth(async (_req, { user, params }) => {
   });
   if (!dashboard) throw new ApiError("ダッシュボードが見つかりません", 404);
 
-  const recipients = Array.isArray(schedule.recipients)
-    ? (schedule.recipients as unknown[]).filter(
-        (r): r is string => typeof r === "string",
-      )
-    : [];
-
-  const freqLabel = FREQ_LABEL[schedule.frequency] ?? schedule.frequency;
-
-  const channel: "email" | "inapp" =
-    recipients.length > 0 && emailConfigured() ? "email" : "inapp";
-
-  await createNotification(workspaceId, {
+  const created = await createNotification(workspaceId, {
     type: "report",
     title: `レポート: ${dashboard.name}`,
-    body: `${freqLabel}レポートを送信しました`,
+    body: `${frequencyLabel(schedule.frequency)}レポートのスナップショットです。開いて印刷・PDF保存できます。`,
     url: `/reports/print/${schedule.id}`,
-    meta: { scheduleId: schedule.id, channel, recipients: recipients.length },
+    meta: { scheduleId: schedule.id, trigger: "manual" },
   });
+
+  // 通知が作れていないなら、何も届いていない。成功を返してはいけない。
+  if (!created) {
+    throw new ApiError(
+      "通知を作成できませんでした。しばらくして再度お試しください。",
+      500,
+    );
+  }
 
   await db.reportSchedule.update({
     where: { id: schedule.id },
     data: { lastSentAt: new Date() },
   });
 
-  return ok({ sent: true, channel, recipients: recipients.length });
+  return ok({ delivered: "inapp" as const });
 });

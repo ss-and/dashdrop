@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -9,6 +9,11 @@ import {
   MAX_ARGS,
   MAX_DEPTH,
   MAX_SOURCE_LENGTH,
+  MAX_TEXT_LENGTH,
+  TEXT_TRUNCATION_NOTE,
+  capText,
+  toNumber,
+  todayInJst,
   type FormulaAst,
   type FormulaValue,
 } from "@/lib/formula";
@@ -403,13 +408,49 @@ describe("date functions", () => {
     expect(parseError("DATEDIFF('2026-01-01')")).toMatch(JA_RE);
   });
 
-  it("TODAY returns today's UTC date as YYYY-MM-DD", () => {
+  it("TODAY returns today's date IN JAPAN as YYYY-MM-DD", () => {
     const today = ev("TODAY()");
     expect(typeof today).toBe("string");
     expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(today).toBe(new Date().toISOString().slice(0, 10));
+    expect(today).toBe(todayInJst());
     expect(ev("DATEDIFF(TODAY(), TODAY())")).toBe(0);
     expect(parseError("TODAY(1)")).toMatch(JA_RE);
+  });
+
+  /**
+   * Regression (P1-12): TODAY() formatted `Date.now()` as a UTC date, and the
+   * servers run in UTC with no TZ configured anywhere in the repo. Between
+   * 00:00 and 09:00 JST that is YESTERDAY, so `DATEDIFF(TODAY(), {納期})` was
+   * off by one for nine hours of every single day.
+   */
+  it("TODAY does not lag a day during the 00:00–09:00 JST window", () => {
+    vi.useFakeTimers();
+    try {
+      // 2026-08-19 00:30 JST == 2026-08-18 15:30 UTC — a UTC clock says 18th.
+      vi.setSystemTime(new Date("2026-08-18T15:30:00Z"));
+      expect(ev("TODAY()")).toBe("2026-08-19");
+      expect(ev("DATEDIFF(TODAY(), '2026-08-22')")).toBe(3);
+
+      // The JST day boundary itself: 15:00Z flips, 14:59:59Z does not.
+      vi.setSystemTime(new Date("2026-08-18T15:00:00Z"));
+      expect(ev("TODAY()")).toBe("2026-08-19");
+      vi.setSystemTime(new Date("2026-08-18T14:59:59Z"));
+      expect(ev("TODAY()")).toBe("2026-08-18");
+
+      // Afternoon JST, where UTC happens to agree, still works.
+      vi.setSystemTime(new Date("2026-08-19T05:00:00Z"));
+      expect(ev("TODAY()")).toBe("2026-08-19");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("todayInJst is UTC+9 with no DST and takes an injectable clock", () => {
+    expect(todayInJst(Date.UTC(2026, 7, 18, 15, 0, 0))).toBe("2026-08-19");
+    expect(todayInJst(Date.UTC(2026, 7, 18, 14, 59, 59))).toBe("2026-08-18");
+    // Japan abolished DST in 1951; the offset is the same in January and July.
+    expect(todayInJst(Date.UTC(2026, 0, 1, 15, 0, 0))).toBe("2026-01-02");
+    expect(todayInJst(Date.UTC(2026, 6, 1, 15, 0, 0))).toBe("2026-07-02");
   });
 
   it("YEAR / MONTH / DAY read UTC parts", () => {
@@ -446,7 +487,7 @@ describe("function names are case-insensitive", () => {
  * ========================================================================== */
 
 describe("coercion rules", () => {
-  it("parses spreadsheet-formatted numbers (mirrors aggregate.toNumber)", () => {
+  it("parses spreadsheet-formatted numbers", () => {
     expect(ev("'1,200' + 1")).toBe(1201);
     expect(ev("'¥500' * 2")).toBe(1000);
     expect(ev("'$1,000' + 0")).toBe(1000);
@@ -691,6 +732,32 @@ describe("safety 2: nesting depth limit", () => {
     const ok = "(".repeat(20) + "1+1" + ")".repeat(20);
     expect(ev(ok)).toBe(2);
     expect(ev("IF(1, IF(1, IF(1, IF(1, 'deep enough', 0), 0), 0), 0)")).toBe("deep enough");
+  });
+
+  /**
+   * Regression (P2-10): the limit was off by one against its own message.
+   * `parseProgram` consumed a depth level of its own, so 31 nested parentheses
+   * parsed and 32 were rejected by an error promising 「最大32段」. MAX_ARGS
+   * (256 ok / 257 rejected) and MAX_SOURCE_LENGTH (2000 ok / 2001 rejected)
+   * were already exact; the third bound now agrees with its own text too.
+   */
+  it(`accepts exactly ${MAX_DEPTH} nested levels and rejects the next one`, () => {
+    const parens = (n: number) => "(".repeat(n) + "1" + ")".repeat(n);
+    expect(parseFormula(parens(MAX_DEPTH - 1)).ok).toBe(true);
+    expect(ev(parens(MAX_DEPTH))).toBe(1);
+
+    const over = parseFormula(parens(MAX_DEPTH + 1));
+    expect(over.ok).toBe(false);
+    if (!over.ok) {
+      expect(over.error).toContain("ネスト");
+      expect(over.error).toContain(String(MAX_DEPTH));
+    }
+  });
+
+  it("counts function-call nesting the same exact way", () => {
+    const calls = (n: number) => "ABS(".repeat(n) + "1" + ")".repeat(n);
+    expect(ev(calls(MAX_DEPTH))).toBe(1);
+    expect(parseFormula(calls(MAX_DEPTH + 1)).ok).toBe(false);
   });
 });
 
@@ -1000,5 +1067,161 @@ describe("robustness against malformed and hostile input", () => {
       expect(parseFormula(bad as unknown as string).ok).toBe(false);
       expect(() => validateFormula(bad as unknown as string, [])).not.toThrow();
     }
+  });
+});
+
+/* ========================================================================== *
+ * Rule 2 — ONE numeric reading of a cell (P1-11)
+ * ========================================================================== */
+
+describe("rule 2: toNumber is the single numeric reading of a cell", () => {
+  /**
+   * Regression (P1-11): three implementations disagreed on the same cell —
+   * formula/functions.ts (no NFKC, no `%`), vlookup.ts (NFKC + strips `%`) and
+   * aggregate.ts (no NFKC, ""→0). Measured divergences: 「１２３」 was null in a
+   * formula but 123 in a vlookup; "50%" was null in a formula but 50 in a
+   * vlookup; "" was null in a formula but 0 in aggregate.
+   */
+  it("reads full-width digits, which Japanese Excel exports are full of", () => {
+    expect(toNumber("１２３")).toBe(123);
+    expect(toNumber("１，２００")).toBe(1200);
+    expect(toNumber("￥５００")).toBe(500);
+    expect(ev("{v} * 2", { v: "１２３" })).toBe(246);
+    expect(ev("{v} + 0", { v: "１，２００" })).toBe(1200);
+  });
+
+  it("folds width variants only, so a list marker is not read as a number", () => {
+    // Whole-string NFKC would turn 「①」 into "1" and 「㈠」 into "(一)".
+    expect(toNumber("①")).toBe(null);
+    expect(toNumber("𝟙")).toBe(null);
+    expect(toNumber("Ⅰ")).toBe(null);
+    expect(toNumber("㍑")).toBe(null);
+    // ...while genuine width variants still read as the number they show.
+    expect(toNumber("１")).toBe(1);
+    expect(toNumber("（1,200）")).toBe(null); // parens are not a minus sign
+  });
+
+  it("refuses to guess at a percentage: 50% is not a number", () => {
+    // Neither 50 nor 0.5 is knowable from the cell, and rule 3 says a wrong
+    // number is worse than no number.
+    expect(toNumber("50%")).toBe(null);
+    expect(toNumber("５０％")).toBe(null);
+    expect(ev("{v} + 1", { v: "50%" })).toBe(null);
+  });
+
+  it("reads an empty or whitespace-only cell as blank, never as 0", () => {
+    expect(toNumber("")).toBe(null);
+    expect(toNumber("   ")).toBe(null);
+    expect(toNumber("　")).toBe(null); // ideographic space
+    expect(ev("{v} + 1", { v: "" })).toBe(null);
+  });
+
+  it("keeps the documented shapes working", () => {
+    expect(toNumber(1200)).toBe(1200);
+    expect(toNumber(true)).toBe(1);
+    expect(toNumber(false)).toBe(0);
+    expect(toNumber(null)).toBe(null);
+    expect(toNumber("1,200")).toBe(1200);
+    expect(toNumber("¥500")).toBe(500);
+    expect(toNumber("-1,500")).toBe(-1500);
+    expect(toNumber("abc")).toBe(null);
+    expect(toNumber("1e999")).toBe(null); // Infinity is not a number here
+    expect(toNumber("1e3")).toBe(1000); // spreadsheets really export this
+  });
+
+  it("reads only plain decimal literals, so 型番 do not become numbers", () => {
+    // `Number()` alone reads these as 16, 3, 8 and ∞ — silently turning a
+    // 商品コード column into arithmetic. Same rule as aggregate.ts's NUMERIC_RE.
+    expect(toNumber("0x10")).toBe(null);
+    expect(toNumber("0b11")).toBe(null);
+    expect(toNumber("0o10")).toBe(null);
+    expect(toNumber("Infinity")).toBe(null);
+    expect(toNumber("-Infinity")).toBe(null);
+  });
+});
+
+/* ========================================================================== *
+ * Rule 12 — bounded value size (P0-1)
+ * ========================================================================== */
+
+describe("safety 7: no formula can produce an unbounded value", () => {
+  const long = (n: number) => "x".repeat(n);
+
+  it("leaves anything at or under the cap completely untouched", () => {
+    expect(capText("")).toBe("");
+    expect(capText(long(10))).toBe(long(10));
+    expect(capText(long(MAX_TEXT_LENGTH))).toBe(long(MAX_TEXT_LENGTH));
+    expect(ev("{v}", { v: long(MAX_TEXT_LENGTH) })).toBe(long(MAX_TEXT_LENGTH));
+  });
+
+  it("cuts anything over the cap and SAYS SO, in Japanese", () => {
+    const out = capText(long(MAX_TEXT_LENGTH + 1));
+    expect(Array.from(out)).toHaveLength(MAX_TEXT_LENGTH);
+    expect(out.endsWith(TEXT_TRUNCATION_NOTE)).toBe(true);
+    expect(TEXT_TRUNCATION_NOTE).toMatch(JA_RE);
+    expect(capText(capText(long(50_000)))).toBe(capText(long(50_000))); // idempotent
+  });
+
+  it("never splits a surrogate pair in half", () => {
+    const emoji = "\u{1F642}".repeat(MAX_TEXT_LENGTH);
+    const out = capText(emoji);
+    expect(Array.from(out)).toHaveLength(MAX_TEXT_LENGTH);
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
+  it("caps a value read straight out of a cell", () => {
+    const cell = long(1_000_000);
+    const out = ev("{note}", { note: cell });
+    expect(typeof out).toBe("string");
+    expect(Array.from(String(out))).toHaveLength(MAX_TEXT_LENGTH);
+  });
+
+  /**
+   * Regression (P0-1): a single formula amplified 128× inside the 2,000-char
+   * source cap via nested CONCAT, so one formula over a 1 MB longtext cell was
+   * 128 MB per row.
+   */
+  it("stops the 128× single-formula amplification", () => {
+    let src = "{t}";
+    for (let i = 0; i < 7; i++) src = `CONCAT(${src},${src})`;
+    expect(src.length).toBeLessThanOrEqual(MAX_SOURCE_LENGTH);
+    const out = ev(src, { t: long(100_000) });
+    expect(Array.from(String(out))).toHaveLength(MAX_TEXT_LENGTH);
+  });
+
+  it("caps `&` concatenation too, not just CONCAT", () => {
+    const out = ev("{a} & {b}", { a: long(MAX_TEXT_LENGTH), b: long(MAX_TEXT_LENGTH) });
+    expect(Array.from(String(out))).toHaveLength(MAX_TEXT_LENGTH);
+  });
+
+  it("caps every other string-producing path", () => {
+    const big = { v: long(MAX_TEXT_LENGTH) };
+    for (const src of [
+      "UPPER({v})",
+      "LOWER({v})",
+      "TRIM({v})",
+      "LEFT({v} & {v}, 999999)",
+      "RIGHT({v} & {v}, 999999)",
+      "COALESCE({v} & {v}, 'x')",
+      "IF(true, {v} & {v}, 'x')",
+      "CONCAT({v}, {v}, {v}, {v})",
+    ]) {
+      const out = ev(src, big);
+      expect(typeof out, src).toBe("string");
+      expect(Array.from(String(out)).length, src).toBeLessThanOrEqual(MAX_TEXT_LENGTH);
+    }
+  });
+
+  it("does not stop CONCAT early on emoji that are still under the cap", () => {
+    // Emoji cost 2 UTF-16 units each, so a naive byte-ish check would drop the
+    // later arguments of a concatenation that is nowhere near the cap.
+    const e = "\u{1F642}".repeat(3000); // 3,000 code points, 6,000 units
+    const out = String(ev("CONCAT({v}, {v}, '末尾')", { v: e }));
+    expect(Array.from(out)).toHaveLength(3000 + 3000 + 2);
+    expect(out.endsWith("末尾")).toBe(true);
+  });
+
+  it("LEN of a capped value is the cap, so nothing hides behind it", () => {
+    expect(ev("LEN({v} & {v})", { v: long(MAX_TEXT_LENGTH) })).toBe(MAX_TEXT_LENGTH);
   });
 });

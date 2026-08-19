@@ -67,6 +67,8 @@ export const GET = withAuth(async (req, { user, params }) => {
     // ルックアップの表示ラベル（保存値 → 選択肢のラベル）。records[].computed は
     // 集計・フィルタ用に生の値のままなので、画面側でこの対応表を当てて表示する。
     lookupLabels: resolved.lookupLabels,
+    // 突合先が上限を超えていたときの注意書き。空なら注意すべきことは無い。
+    vlookupWarnings: resolved.vlookupWarnings,
     nextCursor,
   });
 });

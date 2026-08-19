@@ -495,3 +495,94 @@ describe("computePivot — measure semantics must match every other widget", () 
     expect(data.grandTotal).toBe(5);
   });
 });
+
+describe("computePivot — 実データの「その他」と残余を取り違えない", () => {
+  // 回帰: 残余の番兵が素の文字列 "その他" だったため、実データに「その他」が
+  // あると同じキーが軸に2度並び、列合計は rowKeys を舐めるので同じ行を二度
+  // 足していた（rowLimit:2 で colTotals [232] なのに grandTotal 116 という、
+  // 同じ表の中で食い違う数字が出ていた）。
+  const withOther: AggCollection = {
+    slug: "sales",
+    name: "受注",
+    fields: [
+      { key: "region", name: "区分", type: "text" },
+      { key: "status", name: "状況", type: "text" },
+      { key: "amount", name: "金額", type: "currency" },
+    ],
+    records: [
+      { id: "1", data: { region: "その他", status: "X", amount: 100 }, createdAt: NOW },
+      { id: "2", data: { region: "A", status: "X", amount: 10 }, createdAt: NOW },
+      { id: "3", data: { region: "B", status: "X", amount: 5 }, createdAt: NOW },
+      { id: "4", data: { region: "C", status: "X", amount: 1 }, createdAt: NOW },
+    ],
+  };
+
+  it("実データの「その他」の行はそのまま、残余は別名の行になる", () => {
+    const d = run(withOther, { rowLimit: 2, colLimit: 8 });
+
+    expect(d.rows).toEqual(["その他", "その他（上位以外）"]);
+    expect(new Set(d.rows).size).toBe(d.rows.length); // 描画側の key が重複しない
+    expect(at(d, "その他", "X")).toBe(100);
+    expect(at(d, "その他（上位以外）", "X")).toBe(16); // A+B+C
+  });
+
+  it("合計が表の中で食い違わない", () => {
+    const d = run(withOther, { rowLimit: 2, colLimit: 8 });
+
+    expect(rowTotal(d, "その他")).toBe(100);
+    expect(rowTotal(d, "その他（上位以外）")).toBe(16);
+    expect(colTotal(d, "X")).toBe(116);
+    expect(d.grandTotal).toBe(116);
+    expect(d.rowTotals.reduce((a, b) => a + b, 0)).toBe(d.grandTotal);
+    expect(d.colTotals.reduce((a, b) => a + b, 0)).toBe(d.grandTotal);
+  });
+
+  it("列軸でも同じように分かれる", () => {
+    const d = run(withOther, {
+      rowField: "status",
+      colField: "region",
+      rowLimit: 8,
+      colLimit: 2,
+    });
+    expect(d.cols).toEqual(["その他", "その他（上位以外）"]);
+    expect(colTotal(d, "その他")).toBe(100);
+    expect(colTotal(d, "その他（上位以外）")).toBe(16);
+    expect(d.grandTotal).toBe(116);
+  });
+
+  it("選択肢ラベルが「その他」でも衝突しない", () => {
+    // テンプレートとサンプルシートは { label: "その他", value: "other" } を持つ。
+    const optioned: AggCollection = {
+      ...withOther,
+      fields: [
+        {
+          key: "region",
+          name: "区分",
+          type: "select",
+          options: [{ label: "その他", value: "other" }],
+        },
+        ...withOther.fields.slice(1),
+      ],
+      records: [
+        { id: "1", data: { region: "other", status: "X", amount: 100 }, createdAt: NOW },
+        ...withOther.records.slice(1),
+      ],
+    };
+    const d = run(optioned, { rowLimit: 2, colLimit: 8 });
+    expect(d.rows).toEqual(["その他", "その他（上位以外）"]);
+    expect(at(d, "その他", "X")).toBe(100);
+    expect(d.grandTotal).toBe(116);
+  });
+
+  it("衝突しないときは従来どおり「その他」のまま", () => {
+    const plain: AggCollection = {
+      ...withOther,
+      records: [
+        { id: "1", data: { region: "Z", status: "X", amount: 100 }, createdAt: NOW },
+        ...withOther.records.slice(1),
+      ],
+    };
+    const d = run(plain, { rowLimit: 2, colLimit: 8 });
+    expect(d.rows).toEqual(["Z", "その他"]);
+  });
+});

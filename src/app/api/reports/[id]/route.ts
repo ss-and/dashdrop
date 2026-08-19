@@ -1,26 +1,18 @@
 /**
- * Single report schedule endpoint (tenant-scoped).
- * PATCH  — update frequency / recipients / enabled.
- * DELETE — remove the schedule.
+ * レポート1件のエンドポイント（テナント内に限定）。
+ * PATCH  — 頻度の変更 / 自動配信の停止・再開。
+ * DELETE — レポートの削除。
+ *
+ * 宛先メールは扱わない（メールを送る経路がこの製品に無い。理由は ./ の
+ * route.ts と send/route.ts のコメントを参照）。
  */
 import { z } from "zod";
 import { withAuth, ok, readJson, ApiError } from "@/lib/api";
-import { db, toJson } from "@/lib/db";
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import { db } from "@/lib/db";
+import { REPORT_FREQUENCIES, scheduledNextRun } from "../schedule";
 
 const updateReportSchema = z.object({
-  frequency: z.enum(["daily", "weekly", "monthly"]).optional(),
-  recipients: z
-    .array(
-      z
-        .string()
-        .trim()
-        .refine((v) => EMAIL_RE.test(v), {
-          message: "メールアドレスの形式が正しくありません",
-        }),
-    )
-    .optional(),
+  frequency: z.enum(REPORT_FREQUENCIES).optional(),
   enabled: z.boolean().optional(),
 });
 
@@ -42,24 +34,16 @@ export const PATCH = withAuth(async (req, { user, params }) => {
     data: {
       frequency: input.frequency ?? undefined,
       enabled: input.enabled ?? undefined,
-      recipients:
-        input.recipients !== undefined ? toJson(input.recipients) : undefined,
     },
   });
-
-  const recipients = Array.isArray(updated.recipients)
-    ? (updated.recipients as unknown[]).filter(
-        (r): r is string => typeof r === "string",
-      )
-    : [];
 
   return ok({
     id: updated.id,
     dashboardId: updated.dashboardId,
     frequency: updated.frequency,
-    recipients,
     enabled: updated.enabled,
     lastSentAt: updated.lastSentAt,
+    nextRunAt: scheduledNextRun(updated),
   });
 });
 

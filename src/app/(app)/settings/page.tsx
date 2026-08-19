@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession, clearSessionCookie } from "@/lib/auth";
-import { getPlan, formatPrice } from "@/lib/plans";
+import { getPlan, formatPrice, anyPlanPurchasable } from "@/lib/plans";
 import { Topbar } from "@/components/app/Topbar";
 import { Button } from "@/components/ui/Button";
 import { Card, CardHeader, CardTitle, CardBody } from "@/components/ui/Card";
@@ -12,6 +12,17 @@ import { NotionCard } from "@/components/settings/NotionCard";
 import { getIntegration } from "@/lib/integrations";
 
 export const metadata = { title: "設定" };
+
+/**
+ * ワークスペース内の権限の表示名。DBには "owner" などの内部名で入っているので、
+ * そのまま出すと日本語の画面に英単語が1つだけ混ざる。未知の値は隠さずに
+ * そのまま出す（何が保存されているのか分からなくなるほうが困る）。
+ */
+const ROLE_LABEL: Record<string, string> = {
+  owner: "オーナー",
+  admin: "管理者",
+  member: "メンバー",
+};
 
 /** Server Action: clear the session cookie and return to the login page. */
 async function logout() {
@@ -74,16 +85,28 @@ export default async function SettingsPage() {
                   </span>
                 }
               />
-              <InfoRow label="権限" value={user.workspace.role} />
+              <InfoRow
+                label="権限"
+                value={ROLE_LABEL[user.workspace.role] ?? user.workspace.role}
+              />
+              <InfoRow
+                label="上限"
+                value={`スプレッドシート ${plan.limits.collections} 個 ・ 1シート ${plan.limits.recordsPerCollection.toLocaleString()} 行`}
+              />
             </CardBody>
             <CardBody className="border-t border-ink-line">
               <div className="flex flex-wrap items-center justify-between gap-3">
+                {/* プランを切り替える手段（決済・アップグレードAPI・管理画面）は
+                    まだ無いので、「変更できます」とは書かない。ボタンの行き先も
+                    料金の説明ページであることを名前で示す。 */}
                 <p className="text-sm text-ink-muted">
-                  上限を増やすにはプランを変更してください。
+                  {anyPlanPurchasable
+                    ? "上限を増やすにはプランを変更してください。"
+                    : "現在ご利用いただけるのは Free プランのみです（有料プランは準備中で、お申し込みはまだできません）。"}
                 </p>
                 <Link href="/pricing">
                   <Button variant="outline" size="sm">
-                    プランを変更
+                    {anyPlanPurchasable ? "プランを変更" : "料金プランを見る"}
                   </Button>
                 </Link>
               </div>

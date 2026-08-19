@@ -25,7 +25,7 @@ import {
 } from "./field-types";
 import {
   VLOOKUP_TARGET_ROW_CAP,
-  resolveVlookupValues,
+  resolveVlookupField,
   validateVlookupConfig,
   type VlookupConfig,
 } from "./vlookup";
@@ -118,6 +118,15 @@ export interface ResolvedRecords {
    * 読めるラベル」の対応表だけを別に渡し、画面側で表示の直前に差し替える。
    */
   lookupLabels: Record<string, Record<string, string>>;
+  /**
+   * vlookupWarnings[vlookup列のkey] = 利用者に見せる日本語の注意書き。
+   *
+   * 突合先が上限（VLOOKUP_TARGET_ROW_CAP 行）を超えていて、一部の行しか
+   * 見ていない場合にだけ入る。ここが空だと「突合できなかった」ことと
+   * 「突合したが該当が無かった」ことが画面上まったく区別できず、
+   * 20,000 行のマスターに対して 75% が黙って空欄になる。
+   */
+  vlookupWarnings: Record<string, string>;
 }
 
 /** 選択肢を持つ（＝ラベル差し替えの対象になる）フィールド型。 */
@@ -259,6 +268,7 @@ export async function resolveCollectionRecords(
   // read, so this can never trigger the target sheet's own computed fields
   // (that is what makes an A -> B -> A cycle impossible).
   const perVlookup = new Map<string, unknown[]>();
+  const vlookupWarnings: Record<string, string> = {};
   for (const vf of collection.fields.filter((f) => f.type === "vlookup")) {
     const cfg = (vf.config ?? {}) as VlookupConfig;
     const blank = cfg.aggregate === "count" ? 0 : null;
@@ -285,12 +295,17 @@ export async function resolveCollectionRecords(
       perVlookup.set(vf.key, allBlank());
       continue;
     }
-    const targetRows = await db.record.findMany({
-      where: { collectionId: target.id },
-      orderBy: { createdAt: "asc" }, // the target sheet's own order ("first")
-      take: VLOOKUP_TARGET_ROW_CAP, // capped: see VLOOKUP_TARGET_ROW_CAP
-      select: { id: true, data: true },
-    });
+    // 上限を超えているかどうかを知るために総数も数える。件数が分からないと
+    // 「一部しか見ていない」ことを画面に出せない。
+    const [targetRows, targetTotal] = await Promise.all([
+      db.record.findMany({
+        where: { collectionId: target.id },
+        orderBy: { createdAt: "asc" }, // the target sheet's own order ("first")
+        take: VLOOKUP_TARGET_ROW_CAP, // capped: see VLOOKUP_TARGET_ROW_CAP
+        select: { id: true, data: true },
+      }),
+      db.record.count({ where: { collectionId: target.id } }),
+    ]);
     // vlookup も lookup と同じで、引いてきた先が select / multiselect なら
     // 保存値（"fulltime"）ではなくラベル（「正社員」）を見せる。ここを
     // lookup だけ直して vlookup を忘れると、同じ症状が別の列で残る。
@@ -300,15 +315,17 @@ export async function resolveCollectionRecords(
       if (Object.keys(map).length > 0) lookupLabels[vf.key] = map;
     }
 
-    perVlookup.set(
-      vf.key,
-      resolveVlookupValues(
-        cfg,
-        records.map((r) => ({ data: r.data })),
-        targetRows.map((t) => ({ data: (t.data as Record<string, unknown>) ?? {} })),
-        isFieldType(tf.type) ? tf.type : "text",
-      ),
+    const resolvedVlookup = resolveVlookupField(
+      cfg,
+      records.map((r) => ({ data: r.data })),
+      targetRows.map((t) => ({ data: (t.data as Record<string, unknown>) ?? {} })),
+      isFieldType(tf.type) ? tf.type : "text",
+      { targetTotal },
     );
+    perVlookup.set(vf.key, resolvedVlookup.values);
+    if (resolvedVlookup.truncated && resolvedVlookup.warning) {
+      vlookupWarnings[vf.key] = resolvedVlookup.warning;
+    }
   }
 
   // Formula fields are parsed once for the whole collection and evaluated in
@@ -369,7 +386,7 @@ export async function resolveCollectionRecords(
     return { id: r.id, data: r.data, computed };
   });
 
-  return { records: outRecords, relationLabels, lookupLabels };
+  return { records: outRecords, relationLabels, lookupLabels, vlookupWarnings };
 }
 
 /** Options for a relation picker: recent records of the target collection. */

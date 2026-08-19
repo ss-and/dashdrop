@@ -9,8 +9,15 @@
  * `evaluateFormula` never throws: every failure mode (missing field, bad
  * types, division by zero, unknown function, malformed AST) resolves to
  * `null`. See the coercion rules at the top of ./functions.ts.
+ *
+ * Every value that reaches the value stack goes through `capValue`, so no
+ * string in flight — read from a cell, concatenated, or returned by a function
+ * — can exceed MAX_TEXT_LENGTH (rule 12). That is the ONLY bound on the size
+ * of a value; without it `CONCAT` doubles per chained formula field and one
+ * record can OOM the process.
  */
 import {
+  capValue,
   findFn,
   isBlank,
   sanitize,
@@ -146,8 +153,15 @@ export function evaluateFormula(
     if (!isNode(ast)) return null;
 
     const work: Instr[] = [{ t: "node", node: ast }];
-    const values: FormulaValue[] = [];
+    const stack: FormulaValue[] = [];
     let steps = 0;
+    // Rule 12: the single choke point every produced value passes through.
+    const values = {
+      push: (v: FormulaValue): void => {
+        stack.push(capValue(v));
+      },
+      pop: (): FormulaValue | undefined => stack.pop(),
+    };
 
     while (work.length > 0) {
       if (++steps > MAX_STEPS) return null;
@@ -264,7 +278,7 @@ export function evaluateFormula(
       }
     }
 
-    return values.length === 1 ? values[0] : null;
+    return stack.length === 1 ? stack[0] : null;
   } catch {
     return null;
   }

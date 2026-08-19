@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavIcon } from "./icons";
 
 /**
@@ -27,6 +27,14 @@ const PATHS = [
   },
 ];
 
+/**
+ * ポップオーバー内でフォーカスを回せる要素。role="dialog" を名乗る以上、
+ * Tab がパネルの外へ抜けると「開いたのに閉じ方が分からない」状態になるため、
+ * この一覧で Tab を内側に閉じ込める。
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 const LINKS = [
   { href: "/import", icon: "upload", label: "Excel / CSV を取り込む", desc: "列を自動でフィールド化" },
   { href: "/logs", icon: "report", label: "取り込みログ", desc: "いつ何を取り込んだかの履歴" },
@@ -36,10 +44,63 @@ const LINKS = [
 
 export function HelpButton() {
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const wasOpen = useRef(false);
+
+  /*
+   * 開いたらパネル内へフォーカスを移し、Escape で閉じ、Tab を閉じ込める。
+   * 以前は閉じる手段が aria-hidden のクリック捕捉レイヤーだけで、これは
+   * フォーカスを受け取らないため、キーボードだけの利用者はヘルプを開いたら
+   * 閉じられなかった（WCAG 2.1.1 / 2.1.2）。
+   */
+  useEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+
+    const focusables = () =>
+      Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
+    (focusables()[0] ?? panel).focus();
+
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const list = focusables();
+      if (list.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = list[0];
+      const last = list[list.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === panel)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  /* 閉じたらトリガーへフォーカスを戻す。 */
+  useEffect(() => {
+    if (wasOpen.current && !open) triggerRef.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
 
   return (
     <div className="relative">
       <button
+        ref={triggerRef}
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -56,8 +117,17 @@ export function HelpButton() {
             onClick={() => setOpen(false)}
             aria-hidden="true"
           />
-          <div className="absolute right-0 z-30 mt-2 w-80 animate-fade-in rounded-md border border-ink-line bg-paper-raised p-4 shadow-raised">
-            <p className="text-sm font-semibold text-ink">はじめかたは2通り</p>
+          <div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="help-panel-title"
+            tabIndex={-1}
+            className="absolute right-0 z-30 mt-2 w-80 animate-fade-in rounded-md border border-ink-line bg-paper-raised p-4 shadow-raised"
+          >
+            <p id="help-panel-title" className="text-sm font-semibold text-ink">
+              はじめかたは2通り
+            </p>
             <p className="mt-0.5 text-xs text-ink-muted">
               どちらから始めても、あとで組み合わせられます。
             </p>

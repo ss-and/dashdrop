@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { NavIcon } from "./icons";
 import { NotificationBell } from "./NotificationBell";
 import { HelpButton } from "./HelpButton";
@@ -19,6 +19,14 @@ import type { CurrentUser } from "@/lib/auth";
  * 社員だけを出し、残りはランチャーとサイドバーから辿ってもらう。
  */
 const HR_PRIMARY_SLUG = "hr-employees";
+
+/**
+ * アカウントメニュー内でフォーカスを回せる要素。メニューを開いている間は
+ * Tab を中に閉じ込め、Escape で必ず閉じられるようにする。
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 /** マスターの後ろに並べる、取り込んだシートの上限。 */
 const EXTRA_TABS = 4;
 
@@ -68,6 +76,10 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const accountTriggerRef = useRef<HTMLButtonElement>(null);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const accountWasOpen = useRef(false);
+  const accountHeadingId = useId();
 
   const [nav, setNav] = useState<NavData | null>(null);
   const [navLoading, setNavLoading] = useState(true);
@@ -97,6 +109,62 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
   }, []);
 
   const navItems = buildNavItems(nav);
+
+  /*
+   * アカウントメニューのキーボード操作。以前は Escape ハンドラが無く、閉じる
+   * 手段が aria-hidden のクリック捕捉レイヤーだけだったので、キーボードだけの
+   * 利用者は開いたら閉じられなかった（WCAG 2.1.1 / 2.1.2）。開いたら中の
+   * メニュー項目へフォーカスを移し、上下キーで項目間を移動できるようにする。
+   */
+  useEffect(() => {
+    if (!open) return;
+    const menu = accountMenuRef.current;
+    if (!menu) return;
+
+    const items = () => Array.from(menu.querySelectorAll<HTMLElement>(FOCUSABLE));
+    (items()[0] ?? menu).focus();
+
+    function onKey(e: KeyboardEvent) {
+      const list = items();
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+        return;
+      }
+      if (list.length === 0) return;
+      const index = list.indexOf(document.activeElement as HTMLElement);
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        list[(index + 1 + list.length) % list.length].focus();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        list[(index - 1 + list.length) % list.length].focus();
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        list[0].focus();
+      } else if (e.key === "End") {
+        e.preventDefault();
+        list[list.length - 1].focus();
+      } else if (e.key === "Tab") {
+        // メニューの外へ Tab で抜けられてしまうと開きっぱなしになるため閉じ込める。
+        e.preventDefault();
+        list[
+          e.shiftKey
+            ? (index - 1 + list.length) % list.length
+            : (index + 1) % list.length
+        ].focus();
+      }
+    }
+
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  /* 閉じたらアバターボタンへフォーカスを戻す。 */
+  useEffect(() => {
+    if (accountWasOpen.current && !open) accountTriggerRef.current?.focus();
+    accountWasOpen.current = open;
+  }, [open]);
 
   async function logout() {
     setLoggingOut(true);
@@ -137,6 +205,7 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
 
           <div className="relative">
             <button
+              ref={accountTriggerRef}
               onClick={() => setOpen((v) => !v)}
               className="flex h-8 w-8 items-center justify-center rounded-full bg-khaki-500 text-sm font-semibold text-white"
               aria-haspopup="menu"
@@ -153,7 +222,7 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
                   aria-hidden="true"
                 />
                 <div className="absolute right-0 z-20 mt-2 w-56 animate-fade-in rounded-md border border-ink-line bg-paper-raised p-1.5 shadow-raised">
-                  <div className="px-3 py-2">
+                  <div className="px-3 py-2" id={accountHeadingId}>
                     <p className="truncate text-sm font-medium text-ink">
                       {user.name}
                     </p>
@@ -162,14 +231,28 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
                     </p>
                   </div>
                   <div className="my-1 border-t border-ink-line" />
-                  <button
-                    onClick={logout}
-                    disabled={loggingOut}
-                    className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-ink-soft hover:bg-paper-sunken disabled:opacity-50"
+                  {/*
+                   * トリガーが aria-haspopup="menu" と宣言している以上、開く先は
+                   * 素の <div> ではなく本物のメニューでなければならない。操作可能な
+                   * 項目だけをこの role="menu" に入れ、上のユーザー名ブロックは
+                   * メニューのラベルとして参照する。
+                   */}
+                  <div
+                    ref={accountMenuRef}
+                    role="menu"
+                    aria-labelledby={accountHeadingId}
+                    tabIndex={-1}
                   >
-                    <NavIcon name="logout" className="h-4 w-4" />
-                    ログアウト
-                  </button>
+                    <button
+                      role="menuitem"
+                      onClick={logout}
+                      disabled={loggingOut}
+                      className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-ink-soft hover:bg-paper-sunken disabled:opacity-50"
+                    >
+                      <NavIcon name="logout" className="h-4 w-4" />
+                      ログアウト
+                    </button>
+                  </div>
                 </div>
               </>
             )}

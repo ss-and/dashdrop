@@ -26,8 +26,13 @@ import type { SheetField, SheetRef } from "./types";
  * dashboard, so what you see here is what you get when you press 「このまま保存」.
  */
 
-/** Slices the engine synthesises rather than reads from the data. */
-const NON_DRILLABLE = new Set(["その他", "—"]);
+/**
+ * 空欄をまとめた表示。これは実データの1項目ではないので絞り込みに使えない。
+ * 残余（上限を超えた分をまとめたスライス）は `synthetic` フラグで判定する
+ * ——「その他」というラベルは実データにも普通に存在するため、文字列一致で
+ * 弾くと本物の「その他」までドリルダウンできなくなる。
+ */
+const BLANK_LABEL = "—";
 
 export function AnalyzeView({
   sheet,
@@ -162,7 +167,7 @@ export function AnalyzeView({
         const field = byKey.get(w.groupBy);
         const options = field?.options ?? null;
         const items = data.slices
-          .filter((s) => !NON_DRILLABLE.has(s.label))
+          .filter((s) => !s.synthetic && s.label !== BLANK_LABEL)
           .map((s) => ({
             label: s.label,
             // The slice carries the display label; the filter needs the value.

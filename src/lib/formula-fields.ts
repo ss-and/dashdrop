@@ -38,6 +38,18 @@ export interface PreparedFormula {
  * skipped — they resolve to null. Validation rejects cycles at write time, but
  * a stale config from an earlier edit must never hang the read path, so the
  * ordering is done with an explicit visited/visiting marker rather than trust.
+ *
+ * MEMORY: chaining is what makes this ordering useful and it is also what made
+ * it dangerous. Feeding one formula's output into the next lets `CONCAT` double
+ * per field, and `relations.ts` runs the whole chain for EVERY record on every
+ * sheet view, dashboard render and printed report — 24 chained fields over a
+ * 10-character cell measured at a 167 MB string per record, 28 fields OOM'd the
+ * process. The fix is the per-value cap in the engine (MAX_TEXT_LENGTH, rule 12
+ * in ./formula/functions.ts), not a limit here: capping the number of formula
+ * fields would not have stopped the 128× amplification a SINGLE nested-CONCAT
+ * formula achieves inside the 2,000-character source cap. With the value cap the
+ * cost of a chain is linear — one bounded string per field — so the ordering is
+ * safe to keep exactly as it is.
  */
 export function orderFormulaFields(
   fields: FormulaField[],
@@ -87,7 +99,13 @@ export function orderFormulaFields(
   return ordered;
 }
 
-/** Row values the formula engine accepts (everything else reads as null). */
+/**
+ * Row values the formula engine accepts (everything else reads as null).
+ *
+ * Values are NOT length-capped here: `evaluateFormula` caps every value as it
+ * reaches its stack (rule 12), so copying capped strings into the row as well
+ * would only double the allocation without tightening the bound.
+ */
 export function toFormulaRow(
   data: Record<string, unknown>,
   computed: Record<string, unknown>,

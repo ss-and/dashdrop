@@ -15,14 +15,17 @@ import {
   buildKeyIndex,
   isVlookupAggregate,
   normaliseKey,
+  resolveVlookupField,
   resolveVlookupValues,
   toVlookupNumber,
+  vlookupTruncationWarning,
   validateVlookupConfig,
   type VlookupAggregate,
   type VlookupConfig,
   type VlookupRow,
 } from "@/lib/vlookup";
 import { ApiError } from "@/lib/errors";
+import { sanitize, toNumber } from "@/lib/formula";
 
 /** 売上 rows: the sheet the vlookup column lives on. */
 function sales(...names: Array<unknown>): VlookupRow[] {
@@ -52,7 +55,7 @@ function cfg(patch: Partial<VlookupConfig> = {}): VlookupConfig {
 // ---------------------------------------------------------------------------
 
 describe("normaliseKey", () => {
-  it("trims, case-folds and NFKC-normalises", () => {
+  it("trims, case-folds and folds width variants", () => {
     expect(normaliseKey("株式会社アオイ ")).toBe("株式会社アオイ");
     expect(normaliseKey("　株式会社アオイ　")).toBe("株式会社アオイ"); // 全角スペース
     expect(normaliseKey("ｱｵｲ")).toBe(normaliseKey("アオイ"));
@@ -77,6 +80,41 @@ describe("normaliseKey", () => {
     expect(normaliseKey(true)).toBe("true");
     expect(normaliseKey(["a", "b"])).toBe("a,b");
   });
+
+  /**
+   * Regression (P1-13): the rule was "NFKC", and whole-string NFKC folds far
+   * more than width. Measured merges that nobody asked for: 「①」→1, 「𝟙」→1,
+   * 「Ⅰ」(Roman numeral)→the letter i, 「㍿」→株式会社, 「㈱」→(株). A 商品コード
+   * column mixing 「①②③」 with 「1 2 3」 is two different code systems and the
+   * join merged them silently. Width and case folding stay; the rest does not.
+   */
+  it("does NOT merge keys that are merely similar-looking", () => {
+    const distinct: Array<[string, string]> = [
+      ["①", "1"], // circled digit
+      ["𝟙", "1"], // mathematical double-struck digit
+      ["Ⅰ", "i"], // Roman numeral one vs. the letter i
+      ["Ⅱ", "ii"],
+      ["㍿", "株式会社"], // square ligature
+      ["㈱", "(株)"], // parenthesised ideograph
+      ["㌢", "センチ"], // square katakana abbreviation
+    ];
+    for (const [a, b] of distinct) {
+      expect(normaliseKey(a), `${a} must not fold to ${b}`).not.toBe(normaliseKey(b));
+      expect(normaliseKey(a)).not.toBeNull();
+    }
+  });
+
+  it("keeps the width and case folding the docstring promises", () => {
+    // Documented and intended — these MUST keep matching.
+    expect(normaliseKey("０１２")).toBe(normaliseKey("012"));
+    expect(normaliseKey("ＡＢＣ")).toBe(normaliseKey("abc"));
+    expect(normaliseKey("ｱｵｲ")).toBe(normaliseKey("アオイ"));
+    expect(normaliseKey("ｶﾞｽ")).toBe(normaliseKey("ガス")); // dakuten composition
+    expect(normaliseKey("（株）")).toBe(normaliseKey("(株)")); // full-width parens
+    expect(normaliseKey("￥1,000")).toBe(normaliseKey("¥1,000"));
+    // Canonically-equivalent sequences are the same character, so they match.
+    expect(normaliseKey("ガス")).toBe(normaliseKey("カ\u3099ス"));
+  });
 });
 
 describe("toVlookupNumber", () => {
@@ -89,6 +127,25 @@ describe("toVlookupNumber", () => {
     expect(toVlookupNumber("")).toBeNull();
     expect(toVlookupNumber(null)).toBeNull();
     expect(toVlookupNumber(Number.NaN)).toBeNull();
+  });
+
+  /**
+   * Regression (P1-11): three implementations of "read this cell as a number"
+   * disagreed. This one stripped `%`, so 「50%」 came back as 50 — neither 50%
+   * nor 0.5, just a wrong number — while a formula read the same cell as null.
+   * There is now one implementation; this file only wraps it.
+   */
+  it("agrees with the formula engine on every cell, including 「50%」", () => {
+    for (const cell of [
+      "１２３", "50%", "５０％", "", "   ", "　", "1,200", "¥500", "￥500",
+      "abc", "0", "-1,500", "1e999", "0x10", true, false, null, 42, {},
+    ]) {
+      expect(toVlookupNumber(cell), JSON.stringify(cell)).toBe(
+        toNumber(sanitize(cell)),
+      );
+    }
+    expect(toVlookupNumber("50%")).toBeNull();
+    expect(toVlookupNumber("１２３")).toBe(123);
   });
 });
 
@@ -254,7 +311,11 @@ describe("resolveVlookupValues — aggregates over multiple matches", () => {
     expect(run("avg")).toBe(175);
     expect(run("min")).toBe(100);
     expect(run("max")).toBe(250);
-    expect(run("count")).toBe(4); // count counts ROWS, not parseable numbers
+    // 件数 counts rows that HAVE a value: the null row is not a data point.
+    // 「不明」 is a value, so it is counted even though the numeric modes cannot
+    // read it — the one residual gap, and only reachable on a non-numeric
+    // column, which validateVlookupConfig refuses for 合計/平均/最小/最大.
+    expect(run("count")).toBe(3);
   });
 
   it("sum of no parseable value is null (not 0)", () => {
@@ -349,6 +410,181 @@ describe("resolveVlookupValues — performance shape", () => {
     // One index probe per local row (plus the per-row bucket append lookups).
     expect(gets).toBeLessThanOrEqual(localRows.length + targetRows.length);
     expect(elapsed).toBeLessThan(1000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P0-2: the 5,000-row cap must never be silent
+// ---------------------------------------------------------------------------
+
+describe("resolveVlookupField — truncation of the target set", () => {
+  const master = (n: number, from = 0): VlookupRow[] =>
+    Array.from({ length: n }, (_, i) => ({
+      data: { 取引先名: `会社${from + i}`, 業種: `業種${from + i}` },
+    }));
+
+  it("reports a complete target set as not truncated", () => {
+    const out = resolveVlookupField(cfg(), sales("会社1"), master(10));
+    expect(out.values).toEqual(["業種1"]);
+    expect(out.truncated).toBe(false);
+    expect(out.warning).toBeNull();
+    expect(out.loaded).toBe(10);
+    expect(out.total).toBe(10);
+  });
+
+  it("treats exactly the cap with a matching count as complete", () => {
+    const rows = master(VLOOKUP_TARGET_ROW_CAP);
+    const out = resolveVlookupField(cfg(), sales("会社0"), rows, "text", {
+      targetTotal: VLOOKUP_TARGET_ROW_CAP,
+    });
+    expect(out.truncated).toBe(false);
+    expect(out.warning).toBeNull();
+  });
+
+  /**
+   * Regression (P0-2): the cap was applied with `orderBy: createdAt asc` and
+   * nothing anywhere reported it — no count query, no flag, no UI string. Pro
+   * allows 50,000 rows per collection and Business 1,000,000, so on a 20,000-row
+   * 顧客マスター 75% of the keys resolved to null (or 0 for 件数) — and because
+   * of the ordering it was always the NEWEST customers that vanished. The join
+   * looked like it worked and returned wrong numbers.
+   */
+  it("reports truncation, in Japanese, when the caller's count exceeds the cap", () => {
+    const loaded = master(VLOOKUP_TARGET_ROW_CAP);
+    const out = resolveVlookupField(
+      cfg(),
+      sales("会社0", "会社19999"),
+      loaded,
+      "text",
+      { targetTotal: 20000 },
+    );
+    expect(out.truncated).toBe(true);
+    expect(out.loaded).toBe(VLOOKUP_TARGET_ROW_CAP);
+    expect(out.total).toBe(20000);
+    // The row inside the cap resolves; the one past it is indistinguishable
+    // from "no such customer" — which is exactly why the warning must exist.
+    expect(out.values[0]).toBe("業種0");
+    expect(out.values[1]).toBeNull();
+
+    const warning = String(out.warning);
+    expect(warning).toMatch(/[ぁ-んァ-ン一-龯]/);
+    expect(warning).toContain("20,000");
+    expect(warning).toContain("5,000");
+    expect(warning).toContain("15,000"); // how many rows are missing
+    expect(warning).toBe(vlookupTruncationWarning(VLOOKUP_TARGET_ROW_CAP, 20000));
+  });
+
+  it("enforces the cap itself, so a caller that forgets `take` cannot blow it", () => {
+    const out = resolveVlookupField(cfg(), sales("会社0"), master(VLOOKUP_TARGET_ROW_CAP + 500));
+    expect(out.loaded).toBe(VLOOKUP_TARGET_ROW_CAP);
+    expect(out.total).toBe(VLOOKUP_TARGET_ROW_CAP + 500);
+    expect(out.truncated).toBe(true);
+  });
+
+  it("ignores a nonsensical targetTotal instead of under-reporting", () => {
+    const rows = master(100);
+    for (const targetTotal of [0, -5, 12, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const out = resolveVlookupField(cfg(), sales("会社0"), rows, "text", { targetTotal });
+      expect(out.total).toBe(100);
+      expect(out.truncated).toBe(false);
+    }
+  });
+
+  it("still reports truncation when the config is incomplete", () => {
+    const out = resolveVlookupField(
+      cfg({ targetField: "" }),
+      sales("会社0"),
+      master(VLOOKUP_TARGET_ROW_CAP),
+      "text",
+      { targetTotal: 9999 },
+    );
+    expect(out.values).toEqual([null]);
+    expect(out.truncated).toBe(true);
+  });
+
+  it("resolveVlookupValues is exactly resolveVlookupField's values", () => {
+    const rows = master(50);
+    expect(resolveVlookupValues(cfg(), sales("会社3"), rows)).toEqual(
+      resolveVlookupField(cfg(), sales("会社3"), rows).values,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mode consistency: a blank cell is not a data point, in ANY mode
+// ---------------------------------------------------------------------------
+
+describe("resolveVlookupValues — blank cells are skipped by every aggregate", () => {
+  /** アオイ has four rows; the first two have no 金額 at all. */
+  const patchy: VlookupRow[] = [
+    { data: { 取引先名: "アオイ", 金額: null, 区分: null } },
+    { data: { 取引先名: "アオイ", 金額: "  ", 区分: "  " } },
+    { data: { 取引先名: "アオイ", 金額: 10, 区分: "A" } },
+    { data: { 取引先名: "アオイ", 金額: 20, 区分: "B" } },
+  ];
+  const run = (aggregate: VlookupAggregate, targetField = "金額") =>
+    resolveVlookupValues(cfg({ targetField, aggregate }), sales("アオイ"), patchy)[0];
+
+  /**
+   * Regression: `first` returned the first ROW's value even when it was blank,
+   * so a filled row two lines down was thrown away and the cell was
+   * indistinguishable from "no match", while `concat` skipped blanks.
+   */
+  it("first returns the first row that actually HAS a value", () => {
+    expect(run("first")).toBe(10);
+    expect(run("first", "区分")).toBe("A");
+  });
+
+  /**
+   * Regression: `count` counted rows whose value was blank/non-numeric, so a
+   * 件数 of 4 sat next to a 合計 of 30 — implying an average of 7.5 while 平均
+   * reported 15. 件数 now counts data points, like every other mode.
+   */
+  it("count counts data points, so 件数 × 平均 = 合計", () => {
+    expect(run("count")).toBe(2);
+    expect(run("sum")).toBe(30);
+    expect(run("avg")).toBe(15);
+    expect(Number(run("count")) * Number(run("avg"))).toBe(run("sum"));
+  });
+
+  it("min / max / concat see the same set", () => {
+    expect(run("min")).toBe(10);
+    expect(run("max")).toBe(20);
+    expect(run("concat", "区分")).toBe("A、B");
+  });
+
+  it("a match whose every value is blank is empty, not zero-ish", () => {
+    const allBlank: VlookupRow[] = [
+      { data: { 取引先名: "アオイ", 金額: null } },
+      { data: { 取引先名: "アオイ", 金額: "" } },
+    ];
+    for (const a of ["first", "sum", "avg", "min", "max", "concat"] as VlookupAggregate[]) {
+      expect(
+        resolveVlookupValues(cfg({ targetField: "金額", aggregate: a }), sales("アオイ"), allBlank)[0],
+        a,
+      ).toBeNull();
+    }
+    // 件数 is the one mode that answers with a number: zero data points.
+    expect(
+      resolveVlookupValues(
+        cfg({ targetField: "金額", aggregate: "count" }),
+        sales("アオイ"),
+        allBlank,
+      )[0],
+    ).toBe(0);
+  });
+
+  it("does not mistake 0 or false for a blank", () => {
+    const zeros: VlookupRow[] = [
+      { data: { 取引先名: "アオイ", 金額: 0 } },
+      { data: { 取引先名: "アオイ", 金額: 5 } },
+    ];
+    const z = (aggregate: VlookupAggregate) =>
+      resolveVlookupValues(cfg({ targetField: "金額", aggregate }), sales("アオイ"), zeros)[0];
+    expect(z("first")).toBe(0);
+    expect(z("count")).toBe(2);
+    expect(z("min")).toBe(0);
+    expect(z("sum")).toBe(5);
   });
 });
 

@@ -26,12 +26,22 @@ interface SheetPreview {
   inferredFields: InferredField[];
   previewRows: Record<string, unknown>[];
   empty: boolean;
+  /** Excel上で非表示のシートか。パーサが申告しない場合に備えて任意扱い。 */
+  hidden?: boolean;
+  /** 行・列が打ち切られたときの日本語の警告（パーサが生成）。 */
+  warnings?: string[];
 }
 interface EditableField {
+  /** 利用者が自由に変えられる表示名。 */
   name: string;
   key: string;
   type: FieldType;
   required: boolean;
+  /**
+   * 値を読み出す元の列名。表示名を変えても絶対に動かさない。
+   * これを送らないと、サーバ側は並び順でしか列と対応づけられない。
+   */
+  sourceHeader: string;
 }
 interface SheetState {
   sheetName: string;
@@ -41,6 +51,7 @@ interface SheetState {
   fields: EditableField[];
   collectionName: string;
   selected: boolean;
+  warnings: string[];
 }
 
 interface NotionDatabase {
@@ -53,6 +64,17 @@ interface NotionDatabase {
 interface NotionImportResult {
   collectionId?: string;
   /** 行が途中で打ち切られたときの日本語の警告。全行取り込めていれば null。 */
+  warning?: string | null;
+}
+
+/** /api/import と /api/import/gsheets の成功ペイロードのうち、この画面が使う部分。 */
+interface FileImportResult {
+  collectionId?: string;
+  workbookId?: string;
+  sheetsImported?: number;
+  /** 型に合わず空欄として取り込まれたセル数。 */
+  skipped?: number;
+  /** 打ち切りや未変換セルがあるときの日本語の警告。問題なければ null。 */
   warning?: string | null;
 }
 
@@ -75,6 +97,10 @@ export function ImportWizard() {
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 取り込みは成功したが、そのまま画面を移ると気づけないこと（打ち切り・
+  // 空欄になったセル）。遷移先は保持して、進むかどうかは本人に決めてもらう。
+  const [importWarning, setImportWarning] = useState<string | null>(null);
+  const [importDest, setImportDest] = useState<string | null>(null);
 
   // Import source: a local file, a public/link-shared Google Sheets URL, or a
   // Notion database read through the workspace's stored integration token.
@@ -111,6 +137,14 @@ export function ImportWizard() {
 
   const step: "upload" | "map" = sheets ? "map" : "upload";
   const selectedCount = sheets?.filter((s) => s.selected).length ?? 0;
+  // 列名が空のまま送ると、サーバ側でその項目が落ちて以降の列が1つずつずれる
+  // （入社日の欄に部署が入り、最後の列は消える）。押せる前に止める。
+  const blankNameBlocked =
+    sheets?.some((s) => s.selected && s.fields.some((f) => !f.name.trim())) ??
+    false;
+  // 警告付きで完了したあとの再実行は、同じ内容のスプレッドシートを
+  // もう1つ作るだけ（＋唯一の導線である警告表示が消える）。
+  const importDone = importWarning !== null;
 
   function reset() {
     setFile(null);
@@ -125,6 +159,8 @@ export function ImportWizard() {
     setNotionWarning(null);
     setNotionResultId(null);
     setNotionTruncatedDbId(null);
+    setImportWarning(null);
+    setImportDest(null);
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -137,12 +173,18 @@ export function ImportWizard() {
         rowCount: s.rowCount,
         previewRows: s.previewRows,
         collectionName: s.sheetName || "インポート",
-        selected: true,
+        // 【回帰防止】以前は非表示シートも含めて全て選択済みにしていた。
+        // 「作業用」のような裏方のタブが勝手にスプレッドシート化され、
+        // プランのシート数まで消費していた。必要なら本人が選び直せる。
+        selected: s.hidden !== true,
+        warnings: Array.isArray(s.warnings) ? s.warnings : [],
         fields: s.inferredFields.map((f) => ({
           name: f.name,
           key: f.key,
           type: f.type,
           required: false,
+          // 推定時点の名前＝元の列。以降 name をどう変えてもここは動かさない。
+          sourceHeader: f.name,
         })),
       })),
     );
@@ -317,6 +359,8 @@ export function ImportWizard() {
   async function runImport() {
     if (!sheets) return;
     if (source === "file" && !file) return;
+    // ボタンのdisabledと同じ条件。Enterキーなど別経路からの実行も塞ぐ。
+    if (importing || importDone || blankNameBlocked) return;
     const chosen = sheets.filter((s) => s.selected && s.fields.length > 0);
     if (chosen.length === 0) return;
     const selection = chosen.map((s) => ({
@@ -345,12 +389,29 @@ export function ImportWizard() {
         setError(body?.error ?? "取り込みに失敗しました");
         return;
       }
+      const data = body.data as FileImportResult | undefined;
       // Multi-sheet imports land on the file overview (the nested workbook);
       // a single sheet goes straight to its grid.
       const dest =
-        body.data.sheetsImported > 1 && body.data.workbookId
-          ? `/f/${body.data.workbookId}`
-          : `/c/${body.data.collectionId}`;
+        (data?.sheetsImported ?? 0) > 1 && data?.workbookId
+          ? `/f/${data.workbookId}`
+          : data?.collectionId
+            ? `/c/${data.collectionId}`
+            : null;
+      if (!dest) {
+        setError("取り込み結果を受け取れませんでした。スプレッドシート一覧をご確認ください。");
+        return;
+      }
+      if (data?.warning) {
+        // 【回帰防止】以前は skipped も warning も読まずに即 router.push して
+        // いた。3,000行の売上台帳で金額200セルが「1,234円」のまま空欄になって
+        // も、緑のグリッドが出るだけで何も知らせていなかった。
+        // 自動遷移すると警告ごと消えるので、進むかどうかは本人に決めてもらう。
+        setImportWarning(data.warning);
+        setImportDest(dest);
+        router.refresh();
+        return;
+      }
       router.push(dest);
       router.refresh();
     } catch {
@@ -596,6 +657,30 @@ export function ImportWizard() {
 
       {step === "map" && sheets && (
         <>
+          {importWarning && (
+            <div
+              role="status"
+              className="rounded border border-warning/30 bg-warning-soft px-3 py-2 text-sm text-warning"
+            >
+              <p className="font-medium">取り込みは完了しましたが、確認が必要です。</p>
+              {/* 打ち切りと未変換セルは改行区切りで届く。 */}
+              <p className="mt-1 whitespace-pre-line">{importWarning}</p>
+              {importDest && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => {
+                    router.push(importDest);
+                    router.refresh();
+                  }}
+                >
+                  取り込んだスプレッドシートを開く
+                </Button>
+              )}
+            </div>
+          )}
+
           {sheets.length > 1 && (
             <div className="flex items-center gap-2 rounded-md border border-ink-line bg-paper-raised px-4 py-2.5 text-sm text-ink-muted">
               <Badge tone="khaki" variant="soft">{sheets.length} シート検出</Badge>
@@ -616,9 +701,18 @@ export function ImportWizard() {
                   <CardTitle>{sheet.sheetName || "（無題シート）"}</CardTitle>
                   <Badge tone="neutral" variant="soft">
                     <NavIcon name="table" className="h-3.5 w-3.5" />
+                    {/* 打ち切られたシートで「50,000 行」とだけ出すと、それが
+                        全部だと読めてしまう。読めた範囲であることを明示する。 */}
+                    {sheet.warnings.length > 0 ? "先頭 " : ""}
                     {sheet.rowCount.toLocaleString()} 行
                   </Badge>
                 </label>
+                {sheet.warnings.length > 0 && (
+                  // 取り込んだ後にしか知らせないと、選ぶ判断ができない。
+                  <p role="status" className="w-full text-xs text-warning">
+                    {sheet.warnings.join(" ")}
+                  </p>
+                )}
               </CardHeader>
 
               {sheet.selected && (
@@ -651,7 +745,12 @@ export function ImportWizard() {
                                 <Input
                                   value={f.name}
                                   onChange={(e) => patchField(si, fi, { name: e.target.value })}
-                                  className="h-8"
+                                  aria-label={`${f.sourceHeader} の列名`}
+                                  aria-invalid={f.name.trim() ? undefined : true}
+                                  className={cn(
+                                    "h-8",
+                                    !f.name.trim() && "border-danger focus:ring-danger/40",
+                                  )}
                                 />
                               </td>
                               <td className="px-3 py-2 align-middle">
@@ -679,6 +778,18 @@ export function ImportWizard() {
                         </tbody>
                       </table>
                     </div>
+                    {sheet.fields.some((f) => !f.name.trim()) && (
+                      // 空欄のまま取り込むと、以降の列が1つずつずれて入る。
+                      // 元のバグはここに検証が無かったこと。
+                      <p role="alert" className="mt-1.5 text-xs text-danger">
+                        列名が空の列があります。空欄のままでは取り込めません。元の列名（
+                        {sheet.fields
+                          .filter((f) => !f.name.trim())
+                          .map((f) => f.sourceHeader)
+                          .join("、")}
+                        ）を入力してください。
+                      </p>
+                    )}
                   </div>
 
                   {sheet.previewRows.length > 0 && (
@@ -719,14 +830,33 @@ export function ImportWizard() {
             <Button variant="ghost" onClick={reset} disabled={importing}>
               {source === "file" ? "別のファイルを選ぶ" : "別のソースを選ぶ"}
             </Button>
-            <Button onClick={runImport} disabled={importing || selectedCount === 0}>
-              <NavIcon name="download" className="h-4 w-4" />
-              {importing
-                ? "取り込み中…"
-                : selectedCount > 1
-                  ? `${selectedCount}件のシートを取り込む`
-                  : "取り込む"}
-            </Button>
+            <div className="flex flex-col items-end gap-1">
+              {blankNameBlocked && (
+                <p className="text-xs text-danger">
+                  列名が空の列があるため取り込めません。
+                </p>
+              )}
+              <Button
+                onClick={runImport}
+                // 列名が空だと列がずれて取り込まれる。警告付きで完了した後の
+                // 再実行は、同じ内容のスプレッドシートを増やすだけ。
+                disabled={
+                  importing ||
+                  selectedCount === 0 ||
+                  blankNameBlocked ||
+                  importDone
+                }
+              >
+                <NavIcon name="download" className="h-4 w-4" />
+                {importing
+                  ? "取り込み中…"
+                  : importDone
+                    ? "取り込み済み"
+                    : selectedCount > 1
+                      ? `${selectedCount}件のシートを取り込む`
+                      : "取り込む"}
+              </Button>
+            </div>
           </div>
         </>
       )}

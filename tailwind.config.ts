@@ -47,13 +47,24 @@ const config: Config = {
           800: "#34301b",
           900: "#242116",
         },
-        // Ink — text and rules. Darker than before: the old #2c2a24 body text
-        // on a tinted panel is what read as "washed out".
+        // Ink — text and rules.
+        //
+        // 4段の階調（ink > soft > muted > faint）は「重要度の差」を表すためのもので、
+        // 「読めなさの差」ではない。旧 muted #78756b / faint #9b988e はキャンバス
+        // （paper #f4f4f2）や溝（paper-sunken #eeedea）の上で 4.19:1 / 2.47:1 しか
+        // 出ておらず、WCAG 2.2 AA（本文 4.5:1）を満たしていなかった。faint は
+        // 行数・件数・タイムスタンプ・入力プレースホルダーといった実データを
+        // 12–13px で載せる役なので、大文字例外（3:1）も使えない。
+        //
+        // そこで暖色（R>G>B）のカーキ寄りグレーという性格は保ったまま、明度だけを
+        // 均等に下げ、いちばん条件の悪い paper-sunken の上でも全段が 4.5:1 を超える
+        // ようにした。階調の順序（faint が最も静か）は維持している。
+        // paper-sunken 上の実測: soft 7.56 / muted 5.97 / faint 4.63。
         ink: {
           DEFAULT: "#1c1b17",
           soft: "#4d4a42",
-          muted: "#78756b",
-          faint: "#9b988e",
+          muted: "#5c5951",
+          faint: "#6d6a5f",
           line: "#e4e2dc", // hairline between sections
           rule: "#d3d0c8", // stronger rule: table verticals, headers
         },
@@ -93,7 +104,9 @@ const config: Config = {
         card: "none",
         raised:
           "0 1px 3px rgba(28, 27, 23, 0.08), 0 8px 24px rgba(28, 27, 23, 0.10)",
-        focus: "0 0 0 3px rgba(111, 104, 63, 0.30)",
+        // 不透明。半透明のリングは paper の上で 1.5:1 まで薄まり、WCAG 2.2
+        // 1.4.11（非テキスト 3:1）を満たせなかった。khaki-500 のベタで 5.12:1。
+        focus: "0 0 0 3px rgba(111, 104, 63, 1)",
       },
       /**
        * Type scale, shifted up one notch from Tailwind's default so `text-sm`

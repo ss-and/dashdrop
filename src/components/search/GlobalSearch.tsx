@@ -17,6 +17,17 @@ import { cn } from "@/lib/utils";
  * Stale responses are dropped with an incrementing sequence ref (same guard as
  * DashboardBuilder's live preview), so a slow early request can never overwrite
  * the results of a later keystroke.
+ *
+ * 日本語入力（IME）について:
+ * 変換中のキーは無視する。「たなか」と打って Space→↓ で候補を選び Enter で
+ * 確定する操作は、日本語のこの製品では一番よく通る道なのに、変換確定の Enter を
+ * 「選択中の結果を開く」と解釈して勝手に画面遷移していた。`isComposing` が
+ * true の間は、この入力はまだ検索語ですらない。
+ *
+ * 読み上げについて:
+ * listbox の直接の子は option / group だけにし、見出しは装飾（aria-hidden）
+ * として置く。強調行は背景色だけでなく `aria-activedescendant` で伝える
+ * （色が見えない利用者にも「今どれが選ばれているか」が届くように）。
  */
 
 interface SearchHit {
@@ -32,6 +43,8 @@ interface SearchGroup {
   icon: string;
   isCrm: boolean;
   hits: SearchHit[];
+  /** 上限で切ったため、この表にはまだ一致が残っているかもしれない。 */
+  more: boolean;
 }
 
 interface SearchObject {
@@ -53,6 +66,14 @@ interface SearchData {
   objects: SearchObject[];
   files: SearchNamed[];
   dashboards: SearchNamed[];
+  /** 名前一致を表示上限で切ったか。 */
+  more: { objects: boolean; files: boolean; dashboards: boolean };
+  /** 何をどこまで見たか（画面でそのまま断り書きにする）。 */
+  scope: {
+    rowsPerCollection: number;
+    collections: number;
+    computedFields: boolean;
+  };
 }
 
 const DEBOUNCE_MS = 250;
@@ -63,7 +84,14 @@ const EMPTY: SearchData = {
   objects: [],
   files: [],
   dashboards: [],
+  more: { objects: false, files: false, dashboards: false },
+  scope: { rowsPerCollection: 0, collections: 0, computedFields: false },
 };
+
+/** 強調行を `aria-activedescendant` で指すための id。 */
+function optionId(index: number): string {
+  return `global-search-option-${index}`;
+}
 
 /** Magnifier in the same 1.7-stroke style as the shared icon set. */
 function SearchIcon({ className }: { className?: string }) {
@@ -84,10 +112,26 @@ function SearchIcon({ className }: { className?: string }) {
   );
 }
 
+/**
+ * 見出しは listbox の中では装飾。読み上げには各グループの aria-label で
+ * 同じ情報が入るので、ここは目で見るためだけのもの。
+ */
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <p className="px-2 pb-1 pt-3 text-2xs font-semibold uppercase tracking-wider text-ink-faint first:pt-1">
+    <p
+      aria-hidden="true"
+      className="px-2 pb-1 pt-3 text-2xs font-semibold uppercase tracking-wider text-ink-faint first:pt-1"
+    >
       {children}
+    </p>
+  );
+}
+
+/** 上限で切ったときの控えめな断り書き。 */
+function MoreHint({ className }: { className?: string }) {
+  return (
+    <p className={cn("px-2 py-1 text-2xs text-ink-faint", className)}>
+      ほかにも一致があります。検索語を絞り込んでください。
     </p>
   );
 }
@@ -216,6 +260,7 @@ export function GlobalSearch({ className }: { className?: string }) {
 
   const isEmpty = model.flat.length === 0;
   const panelOpen = open && trimmed.length > 0;
+  const hasScopeNote = data.scope.rowsPerCollection > 0 && !isEmpty;
 
   function close() {
     setOpen(false);
@@ -223,6 +268,11 @@ export function GlobalSearch({ className }: { className?: string }) {
   }
 
   function onInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    // 変換中（IME）のキーには一切反応しない。Enter は変換の確定、↓ は候補の
+    // 選択であって、検索結果の操作ではない。`keyCode === 229` は
+    // `isComposing` を出さない環境（古い Safari など）向けの保険。
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+
     if (e.key === "Escape") {
       e.preventDefault();
       close();
@@ -268,8 +318,11 @@ export function GlobalSearch({ className }: { className?: string }) {
           role="combobox"
           aria-label="ワークスペース内を検索"
           aria-expanded={panelOpen}
-          aria-controls="global-search-panel"
+          aria-controls="global-search-listbox"
           aria-autocomplete="list"
+          aria-activedescendant={
+            panelOpen && highlight >= 0 ? optionId(highlight) : undefined
+          }
           autoComplete="off"
           value={query}
           placeholder="顧客・商談・シートを検索…"
@@ -305,156 +358,201 @@ export function GlobalSearch({ className }: { className?: string }) {
           <div
             id="global-search-panel"
             ref={panelRef}
-            role="listbox"
-            aria-label="検索結果"
             className="absolute left-0 z-30 mt-2 max-h-[70vh] w-[28rem] max-w-[calc(100vw-2rem)] animate-fade-in overflow-y-auto rounded-md border border-ink-line bg-paper-raised p-1.5 shadow-raised"
           >
             {loading && (
-              <p className="px-2 py-3 text-xs text-ink-faint">検索中…</p>
+              <p className="px-2 py-3 text-xs text-ink-faint" role="status">
+                検索中…
+              </p>
             )}
 
             {error && !loading && (
-              <p className="px-2 py-3 text-xs text-danger">{error}</p>
+              <p className="px-2 py-3 text-xs text-danger" role="alert">
+                {error}
+              </p>
             )}
 
-            {!loading && !error && (
-              <>
-                {/* レコード — collection groups, 顧客データベース first */}
-                {model.groups.length > 0 && (
-                  <>
-                    <SectionTitle>レコード</SectionTitle>
-                    {model.groups.map((g) => (
-                      <div key={g.collectionId} className="pb-1">
-                        <div className="flex items-center gap-2 px-2 py-1">
-                          <CollectionIcon
-                            name={g.icon}
-                            className="h-3.5 w-3.5 shrink-0 text-khaki-500"
-                          />
-                          <span className="min-w-0 truncate text-xs font-medium text-ink-soft">
-                            {g.collectionName}
-                          </span>
-                          {g.isCrm && (
-                            <span className="shrink-0 rounded-sm border border-khaki-100 bg-khaki-50 px-1.5 py-0.5 text-2xs text-khaki-600">
-                              顧客データベース
+            {/* listbox の直接の子は option / group と、読み上げから外した
+                見出しだけ。状態メッセージは外に出してある。 */}
+            <div id="global-search-listbox" role="listbox" aria-label="検索結果">
+              {!loading && !error && (
+                <>
+                  {/* レコード — collection groups, 顧客データベース first */}
+                  {model.groups.length > 0 && (
+                    <>
+                      <SectionTitle>レコード</SectionTitle>
+                      {model.groups.map((g) => (
+                        <div
+                          key={g.collectionId}
+                          role="group"
+                          aria-label={`レコード: ${g.collectionName}`}
+                          className="pb-1"
+                        >
+                          <div
+                            aria-hidden="true"
+                            className="flex items-center gap-2 px-2 py-1"
+                          >
+                            <CollectionIcon
+                              name={g.icon}
+                              className="h-3.5 w-3.5 shrink-0 text-khaki-500"
+                            />
+                            <span className="min-w-0 truncate text-xs font-medium text-ink-soft">
+                              {g.collectionName}
                             </span>
-                          )}
-                        </div>
-                        <div className="ml-3 border-l border-ink-line pl-1">
-                          {g.hits.map((h) => (
-                            <Link
-                              key={h.recordId}
-                              href={h.href}
-                              data-idx={h.index}
-                              role="option"
-                              aria-selected={highlight === h.index}
-                              onClick={close}
-                              onMouseEnter={() => setHighlight(h.index)}
-                              className={rowClass(h.index)}
-                            >
-                              <span className="min-w-0 flex-1">
-                                <span className="block truncate font-medium text-ink">
-                                  {h.title}
-                                </span>
-                                {h.subtitle && (
-                                  <span className="block truncate text-2xs text-ink-muted">
-                                    {h.subtitle}
-                                  </span>
-                                )}
+                            {g.isCrm && (
+                              <span className="shrink-0 rounded-sm border border-khaki-100 bg-khaki-50 px-1.5 py-0.5 text-2xs text-khaki-600">
+                                顧客データベース
                               </span>
-                            </Link>
-                          ))}
+                            )}
+                          </div>
+                          <div className="ml-3 border-l border-ink-line pl-1">
+                            {g.hits.map((h) => (
+                              <Link
+                                key={h.recordId}
+                                id={optionId(h.index)}
+                                href={h.href}
+                                data-idx={h.index}
+                                role="option"
+                                aria-selected={highlight === h.index}
+                                onClick={close}
+                                onMouseEnter={() => setHighlight(h.index)}
+                                className={rowClass(h.index)}
+                              >
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-medium text-ink">
+                                    {h.title}
+                                  </span>
+                                  {h.subtitle && (
+                                    <span className="block truncate text-2xs text-ink-muted">
+                                      {h.subtitle}
+                                    </span>
+                                  )}
+                                </span>
+                              </Link>
+                            ))}
+                            {g.more && <MoreHint className="pl-1" />}
+                          </div>
                         </div>
+                      ))}
+                    </>
+                  )}
+
+                  {/* スプレッドシート */}
+                  {model.objects.length > 0 && (
+                    <>
+                      <SectionTitle>スプレッドシート</SectionTitle>
+                      <div role="group" aria-label="スプレッドシート">
+                        {model.objects.map((o) => (
+                          <Link
+                            key={o.id}
+                            id={optionId(o.index)}
+                            href={o.href}
+                            data-idx={o.index}
+                            role="option"
+                            aria-selected={highlight === o.index}
+                            onClick={close}
+                            onMouseEnter={() => setHighlight(o.index)}
+                            className={rowClass(o.index)}
+                          >
+                            <CollectionIcon
+                              name={o.icon}
+                              className="h-4 w-4 shrink-0 text-khaki-500"
+                            />
+                            <span className="min-w-0 flex-1 truncate">
+                              {o.name}
+                            </span>
+                            <span className="shrink-0 text-2xs text-ink-faint">
+                              {o.kind === "crm"
+                                ? "顧客データベース"
+                                : "スプレッドシート"}
+                            </span>
+                          </Link>
+                        ))}
+                        {data.more.objects && <MoreHint />}
                       </div>
-                    ))}
-                  </>
-                )}
+                    </>
+                  )}
 
-                {/* スプレッドシート */}
-                {model.objects.length > 0 && (
-                  <>
-                    <SectionTitle>スプレッドシート</SectionTitle>
-                    {model.objects.map((o) => (
-                      <Link
-                        key={o.id}
-                        href={o.href}
-                        data-idx={o.index}
-                        role="option"
-                        aria-selected={highlight === o.index}
-                        onClick={close}
-                        onMouseEnter={() => setHighlight(o.index)}
-                        className={rowClass(o.index)}
-                      >
-                        <CollectionIcon
-                          name={o.icon}
-                          className="h-4 w-4 shrink-0 text-khaki-500"
-                        />
-                        <span className="min-w-0 flex-1 truncate">{o.name}</span>
-                        <span className="shrink-0 text-2xs text-ink-faint">
-                          {o.kind === "crm"
-                            ? "顧客データベース"
-                            : "スプレッドシート"}
-                        </span>
-                      </Link>
-                    ))}
-                  </>
-                )}
+                  {/* ファイル */}
+                  {model.files.length > 0 && (
+                    <>
+                      <SectionTitle>ファイル</SectionTitle>
+                      <div role="group" aria-label="ファイル">
+                        {model.files.map((f) => (
+                          <Link
+                            key={f.id}
+                            id={optionId(f.index)}
+                            href={f.href}
+                            data-idx={f.index}
+                            role="option"
+                            aria-selected={highlight === f.index}
+                            onClick={close}
+                            onMouseEnter={() => setHighlight(f.index)}
+                            className={rowClass(f.index)}
+                          >
+                            <NavIcon
+                              name="folder"
+                              className="h-4 w-4 shrink-0 text-khaki-500"
+                            />
+                            <span className="min-w-0 flex-1 truncate">
+                              {f.name}
+                            </span>
+                          </Link>
+                        ))}
+                        {data.more.files && <MoreHint />}
+                      </div>
+                    </>
+                  )}
 
-                {/* ファイル */}
-                {model.files.length > 0 && (
-                  <>
-                    <SectionTitle>ファイル</SectionTitle>
-                    {model.files.map((f) => (
-                      <Link
-                        key={f.id}
-                        href={f.href}
-                        data-idx={f.index}
-                        role="option"
-                        aria-selected={highlight === f.index}
-                        onClick={close}
-                        onMouseEnter={() => setHighlight(f.index)}
-                        className={rowClass(f.index)}
-                      >
-                        <NavIcon
-                          name="folder"
-                          className="h-4 w-4 shrink-0 text-khaki-500"
-                        />
-                        <span className="min-w-0 flex-1 truncate">{f.name}</span>
-                      </Link>
-                    ))}
-                  </>
-                )}
+                  {/* ダッシュボード */}
+                  {model.dashboards.length > 0 && (
+                    <>
+                      <SectionTitle>ダッシュボード</SectionTitle>
+                      <div role="group" aria-label="ダッシュボード">
+                        {model.dashboards.map((d) => (
+                          <Link
+                            key={d.id}
+                            id={optionId(d.index)}
+                            href={d.href}
+                            data-idx={d.index}
+                            role="option"
+                            aria-selected={highlight === d.index}
+                            onClick={close}
+                            onMouseEnter={() => setHighlight(d.index)}
+                            className={rowClass(d.index)}
+                          >
+                            <NavIcon
+                              name="dashboard"
+                              className="h-4 w-4 shrink-0 text-khaki-500"
+                            />
+                            <span className="min-w-0 flex-1 truncate">
+                              {d.name}
+                            </span>
+                          </Link>
+                        ))}
+                        {data.more.dashboards && <MoreHint />}
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
 
-                {/* ダッシュボード */}
-                {model.dashboards.length > 0 && (
-                  <>
-                    <SectionTitle>ダッシュボード</SectionTitle>
-                    {model.dashboards.map((d) => (
-                      <Link
-                        key={d.id}
-                        href={d.href}
-                        data-idx={d.index}
-                        role="option"
-                        aria-selected={highlight === d.index}
-                        onClick={close}
-                        onMouseEnter={() => setHighlight(d.index)}
-                        className={rowClass(d.index)}
-                      >
-                        <NavIcon
-                          name="dashboard"
-                          className="h-4 w-4 shrink-0 text-khaki-500"
-                        />
-                        <span className="min-w-0 flex-1 truncate">{d.name}</span>
-                      </Link>
-                    ))}
-                  </>
-                )}
+            {!loading && !error && isEmpty && (
+              <p className="px-2 py-4 text-xs text-ink-faint">
+                「{trimmed}」に一致するものがありません
+              </p>
+            )}
 
-                {isEmpty && (
-                  <p className="px-2 py-4 text-xs text-ink-faint">
-                    「{trimmed}」に一致するものがありません
-                  </p>
-                )}
-              </>
+            {/* 何を見て何を見ていないかを添える。「無い」と「これ以上は
+                見ていない」を取り違えさせないため。 */}
+            {!loading && !error && hasScopeNote && (
+              <p className="mt-1 border-t border-ink-line px-2 pt-2 text-2xs leading-relaxed text-ink-faint">
+                各シートの新しい順 {data.scope.rowsPerCollection.toLocaleString()}{" "}
+                行・最大 {data.scope.collections} シートを対象に検索しています。
+                {!data.scope.computedFields &&
+                  "数式・VLOOKUP などの計算列は対象外です。"}
+              </p>
             )}
           </div>
         </>

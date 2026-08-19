@@ -9,13 +9,28 @@
  *    reaches the evaluator from a row (object, array, undefined, NaN,
  *    Infinity, Date, function) is read as `null` — never coerced, never thrown.
  *
- * 2. NUMERIC COERCION (`toNumber`) mirrors `toNumber` in src/lib/aggregate.ts:
+ * 2. NUMERIC COERCION (`toNumber`) is THE ONE numeric reading of a cell in this
+ *    product. `toVlookupNumber` in src/lib/vlookup.ts delegates to it, and
+ *    `toNumber` in src/lib/aggregate.ts must match it rule for rule:
  *      - number   → itself when finite, else null
  *      - boolean  → 1 / 0
- *      - string   → strip `, whitespace ¥ $ € £` then Number(); a
+ *      - string   → fold full-width/half-width variants (so 「１２３」 reads as
+ *                   123 — Japanese Excel exports are full of full-width
+ *                   digits), strip `, whitespace ¥ $ € £`, and accept the
+ *                   result only if it is a plain decimal literal; a
  *                   whitespace-only / empty string is null (NOT 0)
  *      - null / anything else → null
- *    So "1,200" → 1200 and "¥500" → 500, but "abc" → null.
+ *    So "1,200" → 1200, "¥500" → 500 and 「１，２００」 → 1200, but "abc" → null.
+ *    `%` is deliberately NOT stripped: "50%" is null, never 50 and never 0.5.
+ *    Whether the author meant 50 or 0.5 is unknowable, and rule 3 says a wrong
+ *    number is worse than no number. (Regression: vlookup used to strip `%`
+ *    and report "50%" as 50, so a 割引率 column silently summed to nonsense.)
+ *    Folding is width-only for the same reason: whole-string NFKC would read
+ *    the list marker 「①」 as the number 1. And only decimal literals count:
+ *    `Number()` reads "0x10" as 16, "0b11" as 3 and "Infinity" as ∞, but in
+ *    business data those strings are 型番 and 商品コード, not numbers.
+ *    Exponent notation ("1e3" → 1000) IS accepted, because spreadsheets write
+ *    it. This matches `NUMERIC_RE` in src/lib/aggregate.ts exactly.
  *
  * 3. A failed numeric coercion POISONS the expression: any arithmetic on a
  *    value that will not parse yields `null` for the whole expression — never
@@ -43,8 +58,9 @@
  *
  * 9. DATES are `"YYYY-MM-DD"` strings (a longer ISO string is accepted and
  *    truncated to its date part) and are parsed as UTC midnight, so DATEDIFF
- *    is DST-free integer arithmetic. `TODAY()` returns today's UTC date as a
- *    "YYYY-MM-DD" string. A non-date input yields null.
+ *    is DST-free integer arithmetic. `TODAY()` returns today's date IN JAPAN
+ *    (Asia/Tokyo, UTC+9) as a "YYYY-MM-DD" string — see `todayInJst`. A
+ *    non-date input yields null.
  *
  * 10. AGGREGATE functions (SUM/AVERAGE/MIN/MAX) SKIP blanks rather than
  *     poisoning — a blank cell is "not a data point". A present-but-
@@ -53,6 +69,20 @@
  *
  * 11. String functions (LEFT/RIGHT/TRIM/UPPER/LOWER) propagate null, and count
  *     in Unicode code points (so emoji are not cut in half). LEN(null) is 0.
+ *
+ * 12. TEXT SIZE IS BOUNDED. No string a formula produces — or reads out of a
+ *     cell — may exceed MAX_TEXT_LENGTH code points; anything longer is cut
+ *     and marked with a Japanese 「…（省略）」 note so the truncation is visible
+ *     rather than silent. This is a memory-safety bound, not a nicety: every
+ *     other bound in the engine is per-formula (source length, depth, args,
+ *     steps) and none of them bounds the SIZE OF A VALUE. Without this rule
+ *     `CONCAT({t},{t})` doubles its input, `orderFormulaFields` feeds one
+ *     formula's output into the next, and relations.ts evaluates the chain per
+ *     record: 24 chained fields over a 10-character cell measured at a
+ *     167,772,160-character string in 243 ms, and 28 fields OOM'd the server
+ *     from a single record. A single formula also amplifies 128× within the
+ *     2,000-character source cap via nested CONCAT. Capping the VALUE fixes
+ *     both; a cap on the number of formula fields would only fix the first.
  */
 import { MAX_ARGS } from "./tokenizer";
 
@@ -70,17 +100,101 @@ export function sanitize(v: unknown): FormulaValue {
   return null;
 }
 
-/** Rule 2/3. */
+/**
+ * Full-width / half-width variants (U+FF01–U+FFEE) plus the ideographic space.
+ * A static pattern — this engine never builds a RegExp out of user input.
+ */
+const WIDTH_VARIANTS_RE = /[\u3000\uFF01-\uFFEE]+/g;
+
+/**
+ * Fold ONLY width variants, by NFKC-normalising the runs of characters that
+ * ARE width variants and leaving every other character alone.
+ *
+ * Whole-string NFKC folds far more than width — 「①」→1, 「𝟙」→1, 「Ⅰ」→「I」,
+ * 「㍿」→「株式会社」, 「㈱」→「(株)」 — and each of those is a different
+ * character with a different meaning, not a different width. Reading 「①」 as
+ * the number 1 (rule 2) or matching it against the key 「1」 (normaliseKey in
+ * src/lib/vlookup.ts, which shares this helper) is a silent wrong answer.
+ *
+ * Matching runs rather than single characters keeps half-width katakana
+ * dakuten composition working (「ｶ」+「ﾞ」 → 「ガ」), which needs both code
+ * points normalised together.
+ */
+export function foldWidthVariants(s: string): string {
+  return s.replace(WIDTH_VARIANTS_RE, (run) => run.normalize("NFKC"));
+}
+
+/**
+ * A plain decimal literal, optionally signed, optionally with an exponent.
+ * Kept identical to `NUMERIC_RE` in src/lib/aggregate.ts — see rule 2 for why
+ * `Number()` alone is not good enough.
+ */
+const DECIMAL_LITERAL_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/**
+ * Rule 2/3 — the single numeric reading of a cell.
+ *
+ * `toVlookupNumber` (src/lib/vlookup.ts) is a thin wrapper around this, and
+ * `toNumber` in src/lib/aggregate.ts must stay identical. Regression: the three
+ * used to disagree on the same cell — 「１２３」 was null in a formula but 123 in
+ * a vlookup, "50%" was null in a formula but 50 in a vlookup, "" was null in a
+ * formula but 0 in aggregate.
+ *
+ * Width folding handles the full-width digits and punctuation that Japanese
+ * Excel exports are full of. `%` is NOT stripped (see rule 2).
+ */
 export function toNumber(v: FormulaValue): number | null {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
   if (typeof v === "boolean") return v ? 1 : 0;
   if (typeof v === "string") {
-    const stripped = v.replace(/[,\s¥$€£　]/g, "");
-    if (stripped === "") return null;
+    // \s already covers U+3000, which the fold turns into a plain space anyway.
+    const stripped = foldWidthVariants(v).replace(/[,\s¥$€£]/g, "");
+    if (stripped === "" || !DECIMAL_LITERAL_RE.test(stripped)) return null;
     const n = Number(stripped);
     return Number.isFinite(n) ? n : null;
   }
   return null;
+}
+
+/* ------------------------------ text bound -------------------------------- */
+
+/**
+ * Rule 12. Hard cap on the length of ANY string value inside the engine, in
+ * Unicode code points.
+ *
+ * Deliberately generous for a spreadsheet cell (no grid shows 10,000
+ * characters) and deliberately finite, because the engine's other bounds are
+ * all per-formula and none of them bounds the size of a value. With this cap
+ * the worst case is linear — one capped string per formula field per record —
+ * instead of doubling with every chained field.
+ */
+export const MAX_TEXT_LENGTH = 10_000;
+
+/** Japanese marker appended in place of the part that was cut. */
+export const TEXT_TRUNCATION_NOTE = `…（${MAX_TEXT_LENGTH}文字を超えたため省略）`;
+
+const TRUNCATION_NOTE_LENGTH = Array.from(TEXT_TRUNCATION_NOTE).length;
+
+/**
+ * Cut `s` to MAX_TEXT_LENGTH code points, appending {@link TEXT_TRUNCATION_NOTE}
+ * so a truncated cell never looks like a complete one. The result is always
+ * MAX_TEXT_LENGTH code points or fewer, so capping is idempotent.
+ *
+ * Cheap on the common path: strings at or under the cap are returned as-is
+ * without allocating, and the code-point walk only runs when a cut is needed
+ * (so an emoji or a surrogate pair is never split in half).
+ */
+export function capText(s: string): string {
+  // A code point is at most 2 UTF-16 units, so length <= cap can never be over.
+  if (s.length <= MAX_TEXT_LENGTH) return s;
+  const cs = Array.from(s);
+  if (cs.length <= MAX_TEXT_LENGTH) return s;
+  return cs.slice(0, MAX_TEXT_LENGTH - TRUNCATION_NOTE_LENGTH).join("") + TEXT_TRUNCATION_NOTE;
+}
+
+/** {@link capText} for a whole value; non-strings pass through untouched. */
+export function capValue(v: FormulaValue): FormulaValue {
+  return typeof v === "string" ? capText(v) : v;
 }
 
 /** Rule 5. */
@@ -131,6 +245,24 @@ export function formatDate(ms: number): string {
   const d = new Date(ms);
   const p = (n: number, w = 2) => String(n).padStart(w, "0");
   return `${p(d.getUTCFullYear(), 4)}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
+}
+
+/**
+ * Japan Standard Time is a fixed UTC+9 with no DST, ever — so "today in Japan"
+ * is exactly the UTC calendar date nine hours from now, with no ICU/timezone
+ * database dependency and nothing to configure.
+ *
+ * Regression: TODAY() used to format `Date.now()` as a UTC date. The servers
+ * run in UTC (there is no TZ set anywhere in the repo), so between 00:00 and
+ * 09:00 JST it returned YESTERDAY and `DATEDIFF(TODAY(), {納期})` was off by
+ * one for nine hours of every day. DATEDIFF itself is fine — it anchors date
+ * strings at UTC midnight — only "today" was wrong.
+ */
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/** Today's date in Japan as "YYYY-MM-DD". `now` is injectable for tests. */
+export function todayInJst(now: number = Date.now()): string {
+  return formatDate(now + JST_OFFSET_MS);
 }
 
 const DAY_MS = 86400000;
@@ -352,7 +484,20 @@ const DEFS: FunctionDef[] = [
     description: "文字列を連結（空欄は空文字）",
     minArgs: 1,
     maxArgs: MAX_ARGS,
-    call: (a) => a.map((v) => toText(v)).join(""),
+    // Bounded as it builds: joining 256 arguments first and cutting afterwards
+    // would still allocate the oversized string rule 12 exists to prevent.
+    // A code point costs at most 2 UTF-16 units, so once the buffer is past
+    // 2 × the cap it is certainly over the cap in code points and no remaining
+    // argument can change the capped result — which is why this stops early
+    // only on that certainty, and never on the UTF-16 length alone.
+    call: (a) => {
+      let out = "";
+      for (const v of a) {
+        out += toText(v);
+        if (out.length > MAX_TEXT_LENGTH * 2) break;
+      }
+      return capText(out);
+    },
   },
   {
     name: "LEFT",
@@ -437,10 +582,10 @@ const DEFS: FunctionDef[] = [
   {
     name: "TODAY",
     args: "()",
-    description: "今日の日付（UTC、YYYY-MM-DD）",
+    description: "今日の日付（日本時間、YYYY-MM-DD）",
     minArgs: 0,
     maxArgs: 0,
-    call: () => formatDate(Date.now()),
+    call: () => todayInJst(),
   },
   {
     name: "YEAR",

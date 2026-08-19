@@ -169,6 +169,31 @@ export default async function CollectionPage({
             active={isAnalyze ? "analyze" : "table"}
           />
 
+          {/*
+            シート結合（vlookup）の突合先が上限を超えていた場合の注意書き。
+            これを出さないと「突合できなかった」のか「該当が無かった」のかが
+            画面上まったく区別できず、大きなマスターに対して大半の行が黙って
+            空欄になる。
+          */}
+          {gridData &&
+            Object.entries(gridData.resolved.vlookupWarnings).length > 0 && (
+              <div
+                role="status"
+                className="space-y-1 rounded border border-warning/30 bg-warning-soft px-3 py-2.5"
+              >
+                {Object.entries(gridData.resolved.vlookupWarnings).map(
+                  ([key, warning]) => {
+                    const field = collection.fields.find((f) => f.key === key);
+                    return (
+                      <p key={key} className="text-sm text-warning">
+                        「{field?.name ?? key}」: {warning}
+                      </p>
+                    );
+                  },
+                )}
+              </div>
+            )}
+
           {gridData ? (
             <DataGrid
               collection={{ id: collection.id, template: collection.template }}

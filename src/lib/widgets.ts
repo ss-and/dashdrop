@@ -213,7 +213,20 @@ export interface SeriesData {
 }
 export interface BreakdownData {
   type: "donut" | "hbar";
-  slices: Array<{ label: string; value: number; color?: string }>;
+  slices: Array<{
+    label: string;
+    value: number;
+    color?: string;
+    /**
+     * 上限を超えた分をまとめた「残余」のスライス。実データの1項目ではないので、
+     * ドリルダウンの対象にしてはいけない（その値で絞り込んでも1件も出ない）。
+     *
+     * ラベル文字列で見分けようとしないこと。残余は既定で「その他」と表示するが、
+     * 実データにも「その他」という項目は普通に存在する。文字列一致だと、
+     * 本物の「その他」までドリルダウン不可にしてしまう。
+     */
+    synthetic?: boolean;
+  }>;
   total: number;
 }
 export interface TableData {

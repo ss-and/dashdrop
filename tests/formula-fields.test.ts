@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { orderFormulaFields } from "@/lib/formula-fields";
-import { evaluateFormula } from "@/lib/formula";
+import { evaluateFormula, MAX_TEXT_LENGTH, TEXT_TRUNCATION_NOTE } from "@/lib/formula";
 
 /**
  * The wiring between the formula engine and the record resolver: formulas are
@@ -159,5 +159,62 @@ describe("orderFormulaFields", () => {
     // `total` stands in for a rollup already written into `computed`.
     const fields = [formula("half", "{total} / 2")];
     expect(evalAll(fields, { total: 50 }).half).toBe(25);
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * P0-1: chained formulas must not be able to OOM the server
+ * -------------------------------------------------------------------------- */
+
+describe("chained formula fields are bounded in memory", () => {
+  /** f0 = CONCAT({t},{t}), f1 = CONCAT({f0},{f0}), … — doubling per field. */
+  function doublingChain(n: number): F[] {
+    const fields: F[] = [{ key: "t", name: "元テキスト", type: "text" }];
+    for (let i = 0; i < n; i++) {
+      fields.push(formula(`f${i}`, i === 0 ? "CONCAT({t},{t})" : `CONCAT({f${i - 1}},{f${i - 1}})`));
+    }
+    return fields;
+  }
+
+  /**
+   * Regression (P0-1): every bound in the engine was per FORMULA (2,000 source
+   * characters, 32 levels, 256 args, 100,000 steps) and nothing bounded the
+   * size of a VALUE. `orderFormulaFields` deliberately feeds one formula's
+   * output into the next and relations.ts runs the chain for every record on
+   * every sheet view, dashboard render and printed report, so CONCAT doubled
+   * per field with no ceiling: 24 fields over a 10-character cell measured at
+   * a 167,772,160-character string in 243 ms PER RECORD, and 28 fields reached
+   * ~2.7 GB and OOM'd the process. One record was enough to kill the server.
+   */
+  it("holds a 24-deep doubling chain to the cap instead of 167 MB", () => {
+    const started = Date.now();
+    const out = evalAll(doublingChain(24), { t: "0123456789" });
+    // 10 chars doubled 24 times would be 167,772,160 characters.
+    for (let i = 0; i < 24; i++) {
+      expect(typeof out[`f${i}`]).toBe("string");
+      expect(Array.from(String(out[`f${i}`])).length).toBeLessThanOrEqual(MAX_TEXT_LENGTH);
+    }
+    // Growth stops at the cap and stays there — it never compounds again.
+    expect(Array.from(String(out.f23))).toHaveLength(MAX_TEXT_LENGTH);
+    expect(String(out.f23).endsWith(TEXT_TRUNCATION_NOTE)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("stays linear at the depth that used to OOM the process", () => {
+    const out = evalAll(doublingChain(28), { t: "0123456789" });
+    let total = 0;
+    for (let i = 0; i < 28; i++) total += String(out[`f${i}`]).length;
+    // Was ~2.7 GB; now bounded by fields × cap.
+    expect(total).toBeLessThanOrEqual(28 * MAX_TEXT_LENGTH * 2);
+  });
+
+  it("still computes the small chains people actually write", () => {
+    const fields = [
+      { key: "姓", name: "姓", type: "text" },
+      { key: "名", name: "名", type: "text" },
+      formula("氏名", "CONCAT({姓}, ' ', {名})"),
+      formula("表示名", "CONCAT({氏名}, ' 様')"),
+    ];
+    expect(evalAll(fields, { 姓: "山田", 名: "太郎" }).表示名).toBe("山田 太郎 様");
   });
 });

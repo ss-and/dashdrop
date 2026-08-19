@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CollectionIcon, NavIcon } from "./icons";
 import { cn } from "@/lib/utils";
 
@@ -44,6 +44,14 @@ export interface NavData {
   looseSheets: NavSheet[];
   dashboards: NavDashboard[];
 }
+
+/**
+ * ポップオーバー内でフォーカスを回せる要素。role="dialog" を名乗る以上、
+ * Tab がパネルの外へ抜けると「開いたのに閉じ方が分からない」状態になるため、
+ * この一覧で Tab を内側に閉じ込める。
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** 3×3 waffle — the launcher affordance. Matches the 1.7-stroke icon set. */
 function WaffleIcon({ className }: { className?: string }) {
@@ -169,14 +177,56 @@ export function AppLauncher({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const wasOpen = useRef(false);
 
+  /*
+   * Escape で閉じ、開いた瞬間にパネル内（検索欄）へフォーカスを移し、Tab を
+   * パネル内に閉じ込める。クリック捕捉レイヤーは aria-hidden でフォーカスを
+   * 受け取らないため、キーボード操作には閉じる手段として使えない。
+   */
   useEffect(() => {
     if (!open) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+
+    const focusables = () =>
+      Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
+    (focusables()[0] ?? panel).focus();
+
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const list = focusables();
+      if (list.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = list[0];
+      const last = list[list.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === panel)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  /* 閉じたらトリガーへフォーカスを戻す。 */
+  useEffect(() => {
+    if (wasOpen.current && !open) triggerRef.current?.focus();
+    wasOpen.current = open;
   }, [open]);
 
   const close = () => {
@@ -217,6 +267,7 @@ export function AppLauncher({
   return (
     <div className="relative">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => (open ? close() : setOpen(true))}
         aria-haspopup="dialog"
@@ -237,14 +288,25 @@ export function AppLauncher({
             onClick={close}
             aria-hidden="true"
           />
-          <div className="absolute left-0 z-30 mt-2 max-h-[70vh] w-[26rem] max-w-[calc(100vw-2rem)] animate-fade-in overflow-y-auto rounded-md border border-ink-line bg-paper-raised p-3 shadow-raised">
+          <div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="アプリケーションランチャー"
+            tabIndex={-1}
+            className="absolute left-0 z-30 mt-2 max-h-[70vh] w-[26rem] max-w-[calc(100vw-2rem)] animate-fade-in overflow-y-auto rounded-md border border-ink-line bg-paper-raised p-3 shadow-raised"
+          >
+            {/* ここで絞り込めるのは、この一覧に並んでいる名前だけ
+                （/api/nav で取得済みのシート・ファイル・ダッシュボード名）。
+                レコードは1件も読んでいないので「レコードを検索」とは言わない。
+                行そのものを探すのは上部のグローバル検索。 */}
             <input
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="スプレッドシート・レコードを検索…"
-              aria-label="スプレッドシート・レコードを検索"
-              className="w-full rounded border border-ink-line bg-paper px-3 py-2 text-sm text-ink placeholder:text-ink-faint transition-colors focus:border-khaki-400 focus:outline-none focus:ring-2 focus:ring-khaki-500/25"
+              placeholder="この一覧を名前で絞り込む…"
+              aria-label="スプレッドシート・ダッシュボードを名前で絞り込む"
+              className="w-full rounded border border-ink-line bg-paper px-3 py-2 text-sm text-ink placeholder:text-ink-faint transition-colors focus:border-khaki-500 focus:outline-none focus:ring-2 focus:ring-khaki-500"
             />
 
             {homeVisible && (
@@ -398,9 +460,13 @@ export function AppLauncher({
                 )}
 
                 {nothingFound && (
-                  <p className="px-1 py-4 text-xs text-ink-faint">
-                    一致するものがありません
-                  </p>
+                  <div className="px-1 py-4 text-xs text-ink-faint">
+                    <p>名前が一致するものがありません</p>
+                    {/* レコードを探しに来た人を、実際に探せる場所へ送る。 */}
+                    <p className="mt-1">
+                      レコード（行）を探すときは、上部の検索ボックスをお使いください。
+                    </p>
+                  </div>
                 )}
               </>
             )}

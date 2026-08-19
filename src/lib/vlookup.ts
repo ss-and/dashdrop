@@ -18,6 +18,7 @@
  */
 import { ApiError } from "./errors";
 import { FIELD_TYPE_META, displayValue, isComputedField, isFieldType, type FieldType } from "./field-types";
+import { foldWidthVariants, sanitize, toNumber } from "./formula";
 
 /** How several matching target rows are combined into one cell value. */
 export const VLOOKUP_AGGREGATES = [
@@ -54,6 +55,19 @@ export const NUMERIC_VLOOKUP_AGGREGATES: readonly VlookupAggregate[] = [
  * Hard cap on target rows loaded per vlookup field. A join is one query plus
  * one index build, so the cost is O(n+m) — but an unbounded `findMany` on a
  * huge sheet would still blow memory, so we stop at 5,000 target rows.
+ *
+ * THE CAP IS NOT INVISIBLE. Pro allows 50,000 rows per collection and Business
+ * 1,000,000 — 10× to 200× this cap — so on a real 顧客マスター of 20,000 rows
+ * three quarters of the keys used to resolve to `null` (or `0` for 件数) while
+ * the column looked like a working join. Which rows survive depends on the
+ * caller's `orderBy`: relations.ts loads oldest-first, so it is always the
+ * NEWEST customers that disappear.
+ *
+ * The contract for every caller is therefore:
+ *  1. load the target rows with a deterministic `orderBy` and `take` this cap;
+ *  2. run a `count` on the same `where`, and pass it as `targetTotal`;
+ *  3. show {@link VlookupResolution.warning} to the user when `truncated`.
+ * {@link resolveVlookupField} returns all three so nothing has to guess.
  */
 export const VLOOKUP_TARGET_ROW_CAP = 5000;
 /** `concat` keeps at most this many distinct values. */
@@ -92,11 +106,23 @@ export function isVlookupAggregate(v: unknown): v is VlookupAggregate {
 /**
  * Normalise a join key so real-world Excel data actually matches.
  *
- * Rule: NFKC → trim → collapse internal whitespace → lower-case.
- *  - NFKC folds full-width to half-width, so 「ｱｵｲ」 === 「アオイ」 and
- *    「ＡＢＣ」 === 「ABC」, and turns the ideographic space U+3000 into a
- *    plain space so 「株式会社アオイ　」 trims away.
+ * Rule: NFC → fold width variants → trim → collapse internal whitespace →
+ * lower-case.
+ *  - NFC only composes canonically-equivalent sequences (「カ」+U+3099 →
+ *    「ガ」); by definition it can never merge two different characters.
+ *  - width folding makes 「ｱｵｲ」 === 「アオイ」, 「ＡＢＣ」 === 「ABC」 and
+ *    「０１２」 === 「012」, and turns the ideographic space U+3000 into a plain
+ *    space so 「株式会社アオイ　」 trims away.
  *  - lower-casing makes 「Aoi」 === 「aoi」.
+ *  - Anything else keeps its identity: 「①」 ≠ 「1」, 「Ⅰ」 ≠ 「i」,
+ *    「㈱」 ≠ 「(株)」, 「㍿」 ≠ 「株式会社」.
+ *
+ * Regression (P1-13): the rule used to be whole-string NFKC, which merged all
+ * of those silently — a 商品コード column mixing 「①②③」 with 「1 2 3」 is two
+ * different code systems and the join joined them anyway. The 「０１２」/「012」
+ * and 「ＡＢＣ」/「abc」 collisions ARE intended and are kept; the folding now
+ * shares `foldWidthVariants` with the formula engine's `toNumber`, so "which
+ * characters are the same character" is answered in exactly one place.
  *  - Empty / null / whitespace-only keys return null and NEVER match, so
  *    blank cells cannot all collide into a single bucket.
  */
@@ -111,19 +137,26 @@ export function normaliseKey(raw: unknown): string | null {
   } else {
     s = String(raw);
   }
-  const out = s.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+  const out = foldWidthVariants(s.normalize("NFC")).trim().replace(/\s+/g, " ").toLowerCase();
   return out === "" ? null : out;
 }
 
-/** Parse a cell into a number, tolerating 「1,000」「¥1,000」「１０００」. */
+/**
+ * Parse a cell into a number, tolerating 「1,000」「¥1,000」「１０００」.
+ *
+ * Delegates to the formula engine's `toNumber` so the two can never drift:
+ * there is exactly ONE numeric reading of a cell in this product, documented as
+ * rule 2 at the top of src/lib/formula/functions.ts, and `toNumber` in
+ * src/lib/aggregate.ts must match it too.
+ *
+ * Regression: this used to be its own implementation and disagreed with the
+ * formula engine on the same cell — 「１２３」 was 123 here and null there, and
+ * `%` was stripped so 「50%」 came back as **50**, which is neither 50% nor 0.5.
+ * `%` is no longer stripped: an ambiguous percentage now reads as "not a
+ * number" instead of silently producing a wrong magnitude.
+ */
 export function toVlookupNumber(v: unknown): number | null {
-  if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  if (typeof v === "boolean") return v ? 1 : 0;
-  if (typeof v !== "string") return null;
-  const cleaned = v.normalize("NFKC").replace(/[,\s¥$€£%]/g, "");
-  if (cleaned === "") return null;
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n : null;
+  return toNumber(sanitize(v));
 }
 
 /**
@@ -151,25 +184,60 @@ function emptyResult(aggregate: VlookupAggregate): unknown {
   return aggregate === "count" ? 0 : null;
 }
 
+/**
+ * Is this pulled cell blank? null / undefined / "" / whitespace-only / an empty
+ * array (a multiselect with nothing chosen).
+ */
+function isBlankCell(v: unknown): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === "string") return v.trim() === "";
+  if (Array.isArray(v)) return v.length === 0;
+  return false;
+}
+
+/**
+ * The non-blank values of the pulled column across the matching rows, in the
+ * target sheet's own order.
+ *
+ * EVERY aggregate works off this one list, which is the whole point: `first`
+ * used to return the first ROW's value even when it was blank — producing a
+ * blank cell that is indistinguishable from "no match" — while `concat` skipped
+ * blanks, and `count` counted rows whose value was blank, so a 件数 of 5 sat
+ * next to a 合計 of 30 and implied an average of 6 while 平均 reported 15.
+ *
+ * The rule is now one line: A BLANK CELL IS NOT A DATA POINT, for every mode.
+ * 件数 × 平均 = 合計 then holds on any numeric column, and it always is one:
+ * `validateVlookupConfig` only allows 合計/平均/最小/最大 on a numeric field, so
+ * the "non-blank" set and the "parses as a number" set coincide. (Text left in
+ * a numeric column by a stale import is the one residual gap: numeric modes
+ * ignore it, 件数 still counts it. Ignoring is right there — poisoning the whole
+ * column because one row says 「未定」 would be worse.)
+ */
+function matchedValues(matches: VlookupRow[], targetField: string): unknown[] {
+  const out: unknown[] = [];
+  for (const m of matches) {
+    const v = m?.data?.[targetField];
+    if (!isBlankCell(v)) out.push(v);
+  }
+  return out;
+}
+
 function aggregateMatches(
   aggregate: VlookupAggregate,
   matches: VlookupRow[],
   targetField: string,
   targetFieldType: FieldType,
 ): unknown {
-  if (aggregate === "count") return matches.length;
+  const values = matchedValues(matches, targetField);
 
-  if (aggregate === "first") {
-    const v = matches[0]?.data?.[targetField];
-    return v === undefined || v === "" ? null : v;
-  }
+  if (aggregate === "count") return values.length;
+
+  if (aggregate === "first") return values.length === 0 ? null : values[0];
 
   if (aggregate === "concat") {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const m of matches) {
-      const raw = m?.data?.[targetField];
-      if (raw === null || raw === undefined || raw === "") continue;
+    for (const raw of values) {
       const text = displayValue(targetFieldType, raw);
       if (!text || seen.has(text)) continue;
       seen.add(text);
@@ -179,10 +247,10 @@ function aggregateMatches(
     return out.length === 0 ? null : out.join(VLOOKUP_CONCAT_SEPARATOR);
   }
 
-  // Numeric aggregates: unparseable values are simply ignored.
+  // Numeric aggregates: unparseable values are simply ignored (see above).
   const nums: number[] = [];
-  for (const m of matches) {
-    const n = toVlookupNumber(m?.data?.[targetField]);
+  for (const v of values) {
+    const n = toVlookupNumber(v);
     if (n !== null) nums.push(n);
   }
   if (nums.length === 0) return null;
@@ -200,13 +268,117 @@ function aggregateMatches(
   }
 }
 
+/** What the caller knows about the target set it loaded. */
+export interface VlookupResolveOptions {
+  /**
+   * Total number of rows in the target sheet — the result of a `count` on the
+   * SAME `where` the rows were loaded with, NOT `targetRows.length`.
+   *
+   * Without it truncation can only be detected when the caller hands over more
+   * rows than the cap, which a caller that already applied `take` never does.
+   */
+  targetTotal?: number;
+}
+
+/** The result of one vlookup field, plus what the caller must tell the user. */
+export interface VlookupResolution {
+  /** One value per local row, in the same order. */
+  values: unknown[];
+  /** Target rows actually indexed (never more than VLOOKUP_TARGET_ROW_CAP). */
+  loaded: number;
+  /** Target rows that exist, as far as the caller could tell us. */
+  total: number;
+  /** True when rows were dropped, i.e. some of these values are wrong. */
+  truncated: boolean;
+  /** Japanese, user-facing; null unless `truncated`. */
+  warning: string | null;
+}
+
+const JA_NUM = (n: number): string => n.toLocaleString("ja-JP");
+
+/** The message to put in front of the user when the target set was cut. */
+export function vlookupTruncationWarning(loaded: number, total: number): string {
+  return (
+    `参照先シートの行数（${JA_NUM(total)}件）が突き合わせの上限（${JA_NUM(VLOOKUP_TARGET_ROW_CAP)}件）を超えているため、` +
+    `先頭の${JA_NUM(loaded)}件だけを突き合わせています。` +
+    `残り${JA_NUM(Math.max(0, total - loaded))}件は一致しても空欄（件数は0）になります。` +
+    `参照先シートを絞り込むか、不要な行を減らしてからご利用ください。`
+  );
+}
+
 /**
- * Resolve one vlookup field for a whole page of rows.
+ * Resolve one vlookup field for a whole page of rows, AND report whether the
+ * target set the caller handed over was complete.
  *
- * Returns one value per local row, in the same order. One index build, one
- * pass over the local rows — never a nested scan.
- *
+ * One index build, one pass over the local rows — never a nested scan.
  * No match → null, except `count` → 0.
+ *
+ * Truncation is a correctness problem, not a performance note: a value of
+ * `null` from a truncated join is indistinguishable from "this key genuinely
+ * has no match", so the caller MUST surface `warning` when `truncated` — see
+ * {@link VLOOKUP_TARGET_ROW_CAP} for the full caller contract. Rows past the
+ * cap are ignored here as well, so the function can never index more than the
+ * cap even if a caller forgets its own `take`.
+ */
+export function resolveVlookupField(
+  config: VlookupConfig,
+  localRows: VlookupRow[],
+  targetRows: VlookupRow[],
+  targetFieldType: FieldType = "text",
+  options: VlookupResolveOptions = {},
+): VlookupResolution {
+  const supplied = Array.isArray(targetRows) ? targetRows : [];
+  const used = supplied.length > VLOOKUP_TARGET_ROW_CAP
+    ? supplied.slice(0, VLOOKUP_TARGET_ROW_CAP)
+    : supplied;
+  const loaded = used.length;
+  // A caller that reports fewer rows than it handed over is reporting nonsense;
+  // trust the rows we can see rather than under-reporting the truncation.
+  const total = Math.max(
+    supplied.length,
+    typeof options.targetTotal === "number" && Number.isFinite(options.targetTotal)
+      ? Math.trunc(options.targetTotal)
+      : 0,
+  );
+  const truncated = total > loaded;
+
+  const aggregate = isVlookupAggregate(config?.aggregate) ? config.aggregate : "first";
+  const blank = emptyResult(aggregate);
+  const localKey = config?.localKey ?? "";
+  const targetKey = config?.targetKey ?? "";
+  const targetField = config?.targetField ?? "";
+
+  // An incomplete config resolves to blanks — but the truncation report above
+  // still stands, because it describes the target set, not the config.
+  let values: unknown[];
+  if (!localKey || !targetKey || !targetField) {
+    values = localRows.map(() => blank);
+  } else {
+    const index = buildKeyIndex(used, targetKey);
+    values = localRows.map((row) => {
+      const key = normaliseKey(row?.data?.[localKey]);
+      if (key === null) return blank;
+      const matches = index.get(key);
+      if (!matches || matches.length === 0) return blank;
+      return aggregateMatches(aggregate, matches, targetField, targetFieldType);
+    });
+  }
+
+  return {
+    values,
+    loaded,
+    total,
+    truncated,
+    warning: truncated ? vlookupTruncationWarning(loaded, total) : null,
+  };
+}
+
+/**
+ * Values only — {@link resolveVlookupField} without the truncation report.
+ *
+ * Convenient for tests and for callers that have already checked the target row
+ * count themselves. Anything rendering a sheet should use `resolveVlookupField`
+ * instead, so a silently-truncated join cannot reach the user unannounced.
  */
 export function resolveVlookupValues(
   config: VlookupConfig,
@@ -214,24 +386,7 @@ export function resolveVlookupValues(
   targetRows: VlookupRow[],
   targetFieldType: FieldType = "text",
 ): unknown[] {
-  const aggregate = isVlookupAggregate(config?.aggregate) ? config.aggregate : "first";
-  const blank = emptyResult(aggregate);
-  const localKey = config?.localKey ?? "";
-  const targetKey = config?.targetKey ?? "";
-  const targetField = config?.targetField ?? "";
-  if (!localKey || !targetKey || !targetField) {
-    return localRows.map(() => blank);
-  }
-
-  const index = buildKeyIndex(targetRows, targetKey);
-
-  return localRows.map((row) => {
-    const key = normaliseKey(row?.data?.[localKey]);
-    if (key === null) return blank;
-    const matches = index.get(key);
-    if (!matches || matches.length === 0) return blank;
-    return aggregateMatches(aggregate, matches, targetField, targetFieldType);
-  });
+  return resolveVlookupField(config, localRows, targetRows, targetFieldType).values;
 }
 
 export interface VlookupValidationTarget {

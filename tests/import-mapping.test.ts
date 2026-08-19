@@ -1,0 +1,700 @@
+/**
+ * 取り込み確定パス（Excel / CSV / Google Sheets）の回帰テスト。
+ *
+ * ここで固定したい契約は2つ。
+ *
+ * 1. 列とフィールドの対応 — 列名を空にしても、別の列と同じ名前に変えても、
+ *    重複した列名でも、フィールドが「別の列の値」を読むことは絶対に無い。
+ *    元のバグは並び順（添え字）で突き合わせていたことで、列名を1つ空にすると
+ *    以降のフィールドが1つずつ後ろの列を読み、最後の列は丸ごと消えていた。
+ * 2. 打ち切り・未変換セルの申告 — 「成功」の裏で行やセルが落ちたことを、
+ *    レスポンス・操作ログ・画面のすべてで黙らせない。
+ *
+ * Prisma には触れない（db はモック）。パーサ（@/lib/excel）は本物を使い、
+ * 打ち切りの注入が必要なテストでだけ readSheet を差し替える。
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createElement } from "react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { ImportWizard } from "@/components/import/ImportWizard";
+import { ApiError } from "@/lib/errors";
+
+// パーサ本体は本物。readSheet だけ差し替え可能にして、5万行のファイルを
+// 作らずに「打ち切られた解析結果」を注入できるようにする。
+const actualExcel = await vi.importActual<typeof import("@/lib/excel")>(
+  "@/lib/excel",
+);
+
+const mocks = vi.hoisted(() => ({
+  db: {
+    collection: { findMany: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
+    workbook: { create: vi.fn(), delete: vi.fn() },
+    record: { create: vi.fn() },
+    $transaction: vi.fn(),
+  },
+  logActivity: vi.fn(),
+  assertCanCreateCollection: vi.fn(),
+  fetchSheetCsv: vi.fn(),
+  readSheet: vi.fn(),
+  push: vi.fn(),
+  refresh: vi.fn(),
+}));
+
+vi.mock("@/lib/db", () => ({ db: mocks.db, toJson: (v: unknown) => v }));
+vi.mock("@/lib/workspace", () => ({
+  logActivity: mocks.logActivity,
+  assertCanCreateCollection: mocks.assertCanCreateCollection,
+}));
+vi.mock("@/lib/api", async () => {
+  // next/server を読み込まずに withAuth を素通しにする。ApiError は本物を使い、
+  // instanceof 判定がルート側と一致するようにする。
+  const errors = await import("@/lib/errors");
+  return {
+    ApiError: errors.ApiError,
+    ok: (data: unknown) => ({ ok: true, data }),
+    fail: (error: string, status: number) => ({ ok: false, error, status }),
+    withAuth: (handler: unknown) => handler,
+    readJson: async (
+      req: { json: () => Promise<unknown> },
+      schema: { parse: (v: unknown) => unknown },
+    ) => schema.parse(await req.json()),
+  };
+});
+vi.mock("@/lib/gsheets", () => ({
+  toCsvExportUrl: (url: string) => (url.trim() ? "https://example.test/export" : null),
+  fetchSheetCsv: mocks.fetchSheetCsv,
+}));
+vi.mock("@/lib/excel", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/excel")>("@/lib/excel");
+  return { ...actual, readSheet: mocks.readSheet };
+});
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mocks.push, refresh: mocks.refresh }),
+}));
+
+// ---------------------------------------------------------------------------
+// ヘルパー
+// ---------------------------------------------------------------------------
+
+interface RouteUser {
+  id: string;
+  workspace: { id: string; plan: string };
+}
+interface RouteOk {
+  ok: true;
+  data: Record<string, unknown>;
+}
+/** ルートが実際に使う FormData の一部だけ。jsdom の File は arrayBuffer を持たない。 */
+interface FakeForm {
+  get: (key: string) => unknown;
+}
+type FileRoute = (
+  req: { formData: () => Promise<FakeForm> },
+  ctx: { user: RouteUser; params: Record<string, string> },
+) => Promise<RouteOk>;
+type JsonRoute = (
+  req: { json: () => Promise<unknown> },
+  ctx: { user: RouteUser; params: Record<string, string> },
+) => Promise<RouteOk>;
+
+/** 画面が送るのと同じ形のフィールド定義。 */
+interface SentField {
+  name: string;
+  key: string;
+  type: string;
+  sourceHeader?: string;
+  required?: boolean;
+}
+
+function ctx(plan = "business"): {
+  user: RouteUser;
+  params: Record<string, string>;
+} {
+  return { user: { id: "u-1", workspace: { id: "ws-1", plan } }, params: {} };
+}
+
+function toBuffer(csv: string): ArrayBuffer {
+  const bytes = new TextEncoder().encode(csv);
+  return bytes.buffer.slice(0) as ArrayBuffer;
+}
+
+/**
+ * multipart の代わりに、ルートが読む分だけの FormData を渡す。
+ * jsdom の File には arrayBuffer() が無いので、最小限の代役を立てる。
+ */
+function fileReq(
+  csv: string,
+  sheets?: Array<{ sheetName: string; collectionName?: string; fields?: SentField[] }>,
+): { formData: () => Promise<FakeForm> } {
+  const buffer = toBuffer(csv);
+  const file = {
+    name: "社員名簿.csv",
+    size: buffer.byteLength,
+    arrayBuffer: async () => buffer,
+  };
+  const entries: Record<string, unknown> = { file };
+  if (sheets) entries.sheets = JSON.stringify(sheets);
+  return {
+    formData: async () => ({ get: (key: string) => entries[key] ?? null }),
+  };
+}
+
+function gsheetsReq(body: unknown): { json: () => Promise<unknown> } {
+  return { json: async () => body };
+}
+
+async function importRoute(): Promise<FileRoute> {
+  const mod = await import("@/app/api/import/route");
+  return mod.POST as unknown as FileRoute;
+}
+async function gsheetsRoute(): Promise<JsonRoute> {
+  const mod = await import("@/app/api/import/gsheets/route");
+  return mod.POST as unknown as JsonRoute;
+}
+
+/** 書き込まれたレコードの data だけを取り出す。 */
+function writtenRecords(): Record<string, unknown>[] {
+  return mocks.db.record.create.mock.calls.map(
+    (call) => (call[0] as { data: { data: Record<string, unknown> } }).data.data,
+  );
+}
+
+const STAFF_CSV = "氏名,部署,入社日\n田中,営業部,2024-04-01\n佐藤,開発部,2024-05-01\n";
+
+/** 画面が既定で送る、3列そのままのマッピング。 */
+function staffFields(): SentField[] {
+  return [
+    { name: "氏名", key: "shimei", type: "text", sourceHeader: "氏名" },
+    { name: "部署", key: "busho", type: "text", sourceHeader: "部署" },
+    { name: "入社日", key: "nyushabi", type: "date", sourceHeader: "入社日" },
+  ];
+}
+
+beforeEach(() => {
+  for (const fn of [
+    mocks.db.collection.findMany,
+    mocks.db.collection.create,
+    mocks.db.collection.deleteMany,
+    mocks.db.workbook.create,
+    mocks.db.workbook.delete,
+    mocks.db.record.create,
+    mocks.db.$transaction,
+    mocks.logActivity,
+    mocks.assertCanCreateCollection,
+    mocks.fetchSheetCsv,
+    mocks.readSheet,
+    mocks.push,
+    mocks.refresh,
+  ]) {
+    fn.mockReset();
+  }
+  mocks.readSheet.mockImplementation(actualExcel.readSheet);
+  mocks.assertCanCreateCollection.mockResolvedValue(undefined);
+  mocks.logActivity.mockResolvedValue(undefined);
+  mocks.db.collection.findMany.mockResolvedValue([]);
+  mocks.db.workbook.create.mockResolvedValue({ id: "wb-1" });
+  mocks.db.collection.create.mockResolvedValue({ id: "col-1" });
+  mocks.db.record.create.mockImplementation((args: unknown) => args);
+  mocks.db.$transaction.mockResolvedValue([]);
+  mocks.db.collection.deleteMany.mockResolvedValue({ count: 1 });
+  mocks.db.workbook.delete.mockResolvedValue({});
+});
+
+// ---------------------------------------------------------------------------
+// P0-5 — 列とフィールドの対応
+// ---------------------------------------------------------------------------
+
+describe("列とフィールドの対応 — POST /api/import", () => {
+  it("列名を空にした取り込みは400で止まり、1行も書き込まない", async () => {
+    // 以前はこの入力が 200 で通り、fields が [氏名, 入社日] に詰まって
+    // 入社日が row["部署"]（＝営業部）を読み、入社日の列は丸ごと消えていた。
+    const fields = staffFields();
+    fields[1].name = "";
+    const handler = await importRoute();
+
+    const err = await handler(
+      fileReq(STAFF_CSV, [{ sheetName: "", fields }]),
+      ctx(),
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+    expect(err.message).toContain("2列目");
+    expect(err.message).toContain("列名");
+    // 検証は書き込みの前。中途半端なシートも空のファイルも作らない。
+    expect(mocks.db.workbook.create).not.toHaveBeenCalled();
+    expect(mocks.db.collection.create).not.toHaveBeenCalled();
+    expect(mocks.db.record.create).not.toHaveBeenCalled();
+  });
+
+  it("列名を変えても、値は元の列から読む", async () => {
+    const fields = staffFields();
+    fields[1].name = "所属"; // 表示名だけ変更（sourceHeader は 部署 のまま）
+    const handler = await importRoute();
+
+    const res = await handler(fileReq(STAFF_CSV, [{ sheetName: "", fields }]), ctx());
+
+    expect(res.ok).toBe(true);
+    expect(writtenRecords()).toEqual([
+      { shimei: "田中", busho: "営業部", nyushabi: "2024-04-01" },
+      { shimei: "佐藤", busho: "開発部", nyushabi: "2024-05-01" },
+    ]);
+    // フィールド名は変わっても、入社日に部署の値が入っていないこと。
+    expect(writtenRecords()[0].nyushabi).not.toBe("営業部");
+  });
+
+  it("重複した列名に戻しても、空欄のセルが隣の列の値を継承しない", async () => {
+    // 同名の列はパーサが「金額」「金額-2」に開く。画面で2列目を「金額」に
+    // 戻すと、以前は 2列目の空欄セルが row["金額"] を拾って1列目の金額を
+    // 静かに継承していた（?? row[f.name] のフォールバック）。
+    const csv = "金額,金額\n1000,\n2000,3000\n";
+    const fields: SentField[] = [
+      { name: "金額", key: "kingaku", type: "number", sourceHeader: "金額" },
+      { name: "金額", key: "kingaku_2", type: "number", sourceHeader: "金額-2" },
+    ];
+    const handler = await importRoute();
+
+    const res = await handler(fileReq(csv, [{ sheetName: "", fields }]), ctx());
+
+    expect(res.ok).toBe(true);
+    const rows = writtenRecords();
+    expect(rows[0]).toEqual({ kingaku: 1000, kingaku_2: null });
+    expect(rows[1]).toEqual({ kingaku: 2000, kingaku_2: 3000 });
+  });
+
+  it("sourceHeader を送らない旧クライアントでも、元の並び順で対応する", async () => {
+    const fields = staffFields().map(({ sourceHeader: _drop, ...rest }) => rest);
+    const handler = await importRoute();
+
+    const res = await handler(fileReq(STAFF_CSV, [{ sheetName: "", fields }]), ctx());
+
+    expect(res.ok).toBe(true);
+    expect(writtenRecords()[0]).toEqual({
+      shimei: "田中",
+      busho: "営業部",
+      nyushabi: "2024-04-01",
+    });
+  });
+
+  it("存在しない列を指定した取り込みは409で止まり、1行も書き込まない", async () => {
+    const fields = staffFields();
+    fields[1].sourceHeader = "部門"; // ファイルに無い列
+    const handler = await importRoute();
+
+    const err = await handler(
+      fileReq(STAFF_CSV, [{ sheetName: "", fields }]),
+      ctx(),
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(409);
+    expect(err.message).toContain("部門");
+    expect(mocks.db.collection.create).not.toHaveBeenCalled();
+    expect(mocks.db.record.create).not.toHaveBeenCalled();
+  });
+
+  it("マッピングを送らなければ、推定した列がそのまま自分の列を読む", async () => {
+    const handler = await importRoute();
+
+    const res = await handler(fileReq(STAFF_CSV), ctx());
+
+    expect(res.ok).toBe(true);
+    const rows = writtenRecords();
+    expect(Object.values(rows[0])).toEqual(["田中", "営業部", "2024-04-01"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Google Sheets — 取り込み直前の再取得によるずれ（TOCTOU）
+// ---------------------------------------------------------------------------
+
+describe("Google Sheets の取り込み直前の列変更 — POST /api/import/gsheets", () => {
+  it("プレビュー後に列が消えていたら409で止め、ずれたまま取り込まない", async () => {
+    // プレビュー時は 氏名/部署/入社日。確定時のCSVからは 部署 が消えている。
+    // 並び順で突き合わせると、入社日フィールドが入社日の列を飛ばして
+    // 別の列を読む（＝全列が1つずつずれる）。
+    mocks.fetchSheetCsv.mockResolvedValue(
+      toBuffer("氏名,入社日\n田中,2024-04-01\n"),
+    );
+    const handler = await gsheetsRoute();
+
+    const err = await handler(
+      gsheetsReq({
+        url: "https://docs.google.com/spreadsheets/d/abc/edit",
+        sheets: [{ sheetName: "", fields: staffFields() }],
+      }),
+      ctx(),
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(409);
+    expect(err.message).toContain("部署");
+    expect(mocks.db.collection.create).not.toHaveBeenCalled();
+    expect(mocks.db.record.create).not.toHaveBeenCalled();
+  });
+
+  it("列が増えていても、対応済みの列は正しい値を読む", async () => {
+    mocks.fetchSheetCsv.mockResolvedValue(
+      toBuffer("備考,氏名,部署,入社日\n新規,田中,営業部,2024-04-01\n"),
+    );
+    const handler = await gsheetsRoute();
+
+    const res = await handler(
+      gsheetsReq({
+        url: "https://docs.google.com/spreadsheets/d/abc/edit",
+        sheets: [{ sheetName: "", fields: staffFields() }],
+      }),
+      ctx(),
+    );
+
+    expect(res.ok).toBe(true);
+    // 先頭に列が挿入されても、氏名に「新規」が入らないこと。
+    expect(writtenRecords()[0]).toEqual({
+      shimei: "田中",
+      busho: "営業部",
+      nyushabi: "2024-04-01",
+    });
+  });
+
+  it("列名を空にした取り込みは400で止まる", async () => {
+    mocks.fetchSheetCsv.mockResolvedValue(toBuffer(STAFF_CSV));
+    const fields = staffFields();
+    fields[2].name = "   ";
+    const handler = await gsheetsRoute();
+
+    const err = await handler(
+      gsheetsReq({
+        url: "https://docs.google.com/spreadsheets/d/abc/edit",
+        sheets: [{ sheetName: "", fields }],
+      }),
+      ctx(),
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+    expect(mocks.db.collection.create).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1-6 / P1-12 — 打ち切りと未変換セルの申告
+// ---------------------------------------------------------------------------
+
+describe("打ち切りと未変換セルの申告", () => {
+  it("パーサ自身が読み取り上限に当たったことを申告する", async () => {
+    // ルートが頼っている信号そのものの確認（本物のパーサ）。
+    const csv = "値\n1\n2\n3\n4\n5\n";
+    const capped = actualExcel.readSheet(toBuffer(csv), undefined, 2);
+    expect(capped.rows).toHaveLength(2);
+    expect(capped.truncated).toBe(true);
+
+    const whole = actualExcel.readSheet(toBuffer(csv), undefined, 50);
+    expect(whole.rows).toHaveLength(5);
+    expect(whole.truncated).toBe(false);
+  });
+
+  it("打ち切られたら truncated と warning を返し、操作ログにも残す", async () => {
+    // 5万行のファイルを作らずに「打ち切られた解析結果」を注入する。
+    const base = actualExcel.readSheet(toBuffer(STAFF_CSV));
+    mocks.readSheet.mockReturnValue({ ...base, truncated: true, rowLimit: 50000 });
+    const handler = await importRoute();
+
+    const res = await handler(
+      fileReq(STAFF_CSV, [{ sheetName: "", fields: staffFields() }]),
+      ctx("pro"),
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.data.truncated).toBe(true);
+    // 「50,000行取り込めました」で終わらせず、残りが無いことを明言する。
+    expect(String(res.data.warning)).toContain("50,000");
+    expect(String(res.data.warning)).toContain("取り込まれていません");
+
+    const logged = mocks.logActivity.mock.calls.find(
+      (call) => call[1] === "import.completed",
+    );
+    expect(logged?.[2].truncated).toBe(true);
+    expect(String(logged?.[2].truncationMessage)).toContain("50,000");
+  });
+
+  it("型に合わなかったセル数を skipped と warning と操作ログに載せる", async () => {
+    // 数値列に「未定」。以前は skipped を返してはいたが画面が読まず、
+    // 空欄になったセルに誰も気づけなかった。
+    const csv = "金額\n1000\n未定\n未定\n";
+    const fields: SentField[] = [
+      { name: "金額", key: "kingaku", type: "number", sourceHeader: "金額" },
+    ];
+    const handler = await importRoute();
+
+    const res = await handler(fileReq(csv, [{ sheetName: "", fields }]), ctx());
+
+    expect(res.data.skipped).toBe(2);
+    expect(res.data.imported).toBe(3);
+    expect(String(res.data.warning)).toContain("2 件");
+    expect(String(res.data.warning)).toContain("空欄");
+    expect(writtenRecords()).toEqual([
+      { kingaku: 1000 },
+      { kingaku: null },
+      { kingaku: null },
+    ]);
+
+    const logged = mocks.logActivity.mock.calls.find(
+      (call) => call[1] === "import.completed",
+    );
+    expect(logged?.[2].skipped).toBe(2);
+  });
+
+  it("問題なく取り込めたときは warning を出さない", async () => {
+    const handler = await importRoute();
+
+    const res = await handler(
+      fileReq(STAFF_CSV, [{ sheetName: "", fields: staffFields() }]),
+      ctx(),
+    );
+
+    expect(res.data.warning).toBeNull();
+    expect(res.data.skipped).toBe(0);
+    expect(res.data.truncated).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P2 — ロールバック
+// ---------------------------------------------------------------------------
+
+describe("失敗時のロールバック — POST /api/import", () => {
+  it("行の書き込みに失敗したら collection.created を記録しない", async () => {
+    // 以前は try の中で記録していたため、取り消された取り込みでも /logs に
+    // 記録が残り、既に削除されたスプレッドシートへのリンクになっていた。
+    mocks.db.$transaction.mockRejectedValue(new Error("db is gone"));
+    const handler = await importRoute();
+
+    const err = await handler(
+      fileReq(STAFF_CSV, [{ sheetName: "", fields: staffFields() }]),
+      ctx(),
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(
+      mocks.logActivity.mock.calls.some((c) => c[1] === "collection.created"),
+    ).toBe(false);
+    expect(
+      mocks.logActivity.mock.calls.some((c) => c[1] === "import.completed"),
+    ).toBe(false);
+    // Collection を消してから Workbook を消す（順序が逆だと孤児が残る）。
+    expect(mocks.db.collection.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ["col-1"] } },
+    });
+    expect(mocks.db.workbook.delete).toHaveBeenCalledWith({ where: { id: "wb-1" } });
+  });
+
+  it("Collection を消せなかったら Workbook は消さず、残骸を伝える", async () => {
+    // Collection.workbookId は SetNull。Collection が残ったまま Workbook を
+    // 消すと、中途半端なシートが親のないままシート一覧に現れる。
+    mocks.db.$transaction.mockRejectedValue(new Error("db is gone"));
+    mocks.db.collection.deleteMany.mockRejectedValue(new Error("delete failed"));
+    const handler = await importRoute();
+
+    const err = await handler(
+      fileReq(STAFF_CSV, [{ sheetName: "", fields: staffFields() }]),
+      ctx(),
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(mocks.db.workbook.delete).not.toHaveBeenCalled();
+    expect(err.message).toContain("スプレッドシート一覧");
+  });
+
+  it("Workbook だけ消せなかったときは「空のファイル」と案内する", async () => {
+    mocks.db.$transaction.mockRejectedValue(new Error("db is gone"));
+    mocks.db.workbook.delete.mockRejectedValue(new Error("delete failed"));
+    const handler = await importRoute();
+
+    const err = await handler(
+      fileReq(STAFF_CSV, [{ sheetName: "", fields: staffFields() }]),
+      ctx(),
+    ).catch((e) => e);
+
+    expect(err.message).toContain("空のファイル");
+    expect(err.message).not.toContain("スプレッドシート一覧");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ImportWizard — 画面側の歯止め
+// ---------------------------------------------------------------------------
+
+/** マッピング画面まで進める。返り値は fetch モック。 */
+async function renderAtMapStep(
+  sheets: Array<Record<string, unknown>>,
+): Promise<ReturnType<typeof vi.fn>> {
+  const fetchMock = vi.fn((input: unknown) => {
+    const url = String(input);
+    if (url.includes("/api/import/preview")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ ok: true, data: { sheets } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          data: { collectionId: "col-1", sheetsImported: 1, skipped: 0, warning: null },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  });
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  const { container } = render(createElement(ImportWizard));
+  const input = container.querySelector('input[type="file"]');
+  fireEvent.change(input as HTMLInputElement, {
+    target: { files: [new File([STAFF_CSV], "社員名簿.csv", { type: "text/csv" })] },
+  });
+  await screen.findByText("スプレッドシート名");
+  return fetchMock;
+}
+
+function sheetPreview(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    sheetName: "社員",
+    headers: ["氏名", "部署", "入社日"],
+    rowCount: 2,
+    previewRows: [],
+    empty: false,
+    hidden: false,
+    warnings: [],
+    inferredFields: [
+      { name: "氏名", key: "shimei", type: "text" },
+      { name: "部署", key: "busho", type: "text" },
+      { name: "入社日", key: "nyushabi", type: "date" },
+    ],
+    ...over,
+  };
+}
+
+describe("ImportWizard — マッピング画面", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("列名を空にすると取り込みを止め、送信しない", async () => {
+    const fetchMock = await renderAtMapStep([sheetPreview()]);
+
+    const nameInput = screen.getByLabelText("部署 の列名");
+    fireEvent.change(nameInput, { target: { value: "" } });
+
+    const runButton = screen.getByRole("button", { name: "取り込む" });
+    await waitFor(() => expect(runButton).toBeDisabled());
+    expect(nameInput).toHaveAttribute("aria-invalid", "true");
+    // 何が起きているかと、直し方（元の列名）まで伝えていること。
+    expect(screen.getByRole("alert").textContent).toContain("部署");
+
+    fireEvent.click(runButton);
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]).endsWith("/api/import")),
+    ).toBe(false);
+
+    // 戻せば取り込める。
+    fireEvent.change(nameInput, { target: { value: "所属" } });
+    await waitFor(() => expect(runButton).not.toBeDisabled());
+  });
+
+  it("元の列名を保ったまま送るので、改名しても列がずれない", async () => {
+    const fetchMock = await renderAtMapStep([sheetPreview()]);
+
+    fireEvent.change(screen.getByLabelText("部署 の列名"), {
+      target: { value: "所属" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "取り込む" }));
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]).endsWith("/api/import")),
+      ).toBe(true),
+    );
+    const call = fetchMock.mock.calls.find((c) =>
+      String(c[0]).endsWith("/api/import"),
+    );
+    const body = (call?.[1] as { body: FormData }).body;
+    const sent = JSON.parse(String(body.get("sheets"))) as Array<{
+      fields: SentField[];
+    }>;
+    expect(sent[0].fields[1]).toMatchObject({
+      name: "所属",
+      sourceHeader: "部署",
+    });
+  });
+
+  it("非表示シートは既定で選択しない", async () => {
+    await renderAtMapStep([
+      sheetPreview(),
+      sheetPreview({ sheetName: "作業用", hidden: true }),
+    ]);
+
+    expect(screen.getByRole("checkbox", { name: /社員/ })).toBeChecked();
+    // 「作業用」タブが勝手にスプレッドシート化され、プラン枠を消費していた。
+    expect(screen.getByRole("checkbox", { name: /作業用/ })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "取り込む" })).not.toBeDisabled();
+  });
+
+  it("打ち切られたシートは、取り込む前に警告を出す", async () => {
+    await renderAtMapStep([
+      sheetPreview({ warnings: ["行数が1回の取り込みの上限（50,000行）を超えたため…"] }),
+    ]);
+
+    expect(screen.getByRole("status").textContent).toContain("50,000行");
+    // 「2 行」とだけ出すと、それが全部だと読めてしまう。
+    expect(screen.getByText(/先頭/)).toBeInTheDocument();
+  });
+
+  it("未変換セルがあるときは自動遷移せず、警告を出す", async () => {
+    const fetchMock = vi.fn((input: unknown) => {
+      const url = String(input);
+      const payload = url.includes("/api/import/preview")
+        ? { ok: true, data: { sheets: [sheetPreview()] } }
+        : {
+            ok: true,
+            data: {
+              collectionId: "col-1",
+              sheetsImported: 1,
+              skipped: 200,
+              warning: "200 件のセルが列の型に合わず、空欄として取り込まれました。",
+            },
+          };
+      return Promise.resolve(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { container } = render(createElement(ImportWizard));
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [new File([STAFF_CSV], "売上台帳.csv", { type: "text/csv" })] },
+    });
+    await screen.findByText("スプレッドシート名");
+
+    const runButton = screen.getByRole("button", { name: "取り込む" });
+    fireEvent.click(runButton);
+
+    // 自動遷移すると、空欄になった200セルに誰も気づけない。
+    const warning = await screen.findByRole("status");
+    expect(warning.textContent).toContain("200 件");
+    expect(mocks.push).not.toHaveBeenCalled();
+
+    // 再実行は同じシートを増やすだけなので塞ぐ。
+    await waitFor(() => expect(runButton).toBeDisabled());
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "取り込んだスプレッドシートを開く" }),
+    );
+    expect(mocks.push).toHaveBeenCalledWith("/c/col-1");
+  });
+});

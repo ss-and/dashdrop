@@ -1,27 +1,20 @@
 /**
- * Scheduled reports collection endpoint.
- * GET  — list this workspace's ReportSchedules, joined with their dashboard name.
- * POST — create a schedule for a dashboard the caller owns.
+ * 定期レポートのコレクション エンドポイント。
+ * GET  — このワークスペースのレポート一覧（ダッシュボード名を添えて）。
+ * POST — 自分のダッシュボードに対してレポートを作る。
+ *
+ * 宛先メールは受け取らない。この製品にメールを送る経路が無いためで、
+ * 送れない宛先を預かって「送信しました」と言わないための線引き。
+ * 配信はアプリ内通知（＋印刷 / PDF ページ）で行う。
  */
 import { z } from "zod";
 import { withAuth, ok, readJson, ApiError } from "@/lib/api";
-import { db, toJson } from "@/lib/db";
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import { db } from "@/lib/db";
+import { REPORT_FREQUENCIES, scheduledNextRun } from "./schedule";
 
 const createReportSchema = z.object({
   dashboardId: z.string().trim().min(1, "ダッシュボードを選択してください"),
-  frequency: z.enum(["daily", "weekly", "monthly"]),
-  recipients: z
-    .array(
-      z
-        .string()
-        .trim()
-        .refine((v) => EMAIL_RE.test(v), {
-          message: "メールアドレスの形式が正しくありません",
-        }),
-    )
-    .optional(),
+  frequency: z.enum(REPORT_FREQUENCIES),
 });
 
 export const GET = withAuth(async (_req, { user }) => {
@@ -43,21 +36,16 @@ export const GET = withAuth(async (_req, { user }) => {
     : [];
   const nameById = new Map(dashboards.map((d) => [d.id, d.name]));
 
-  const rows = schedules.map((s) => {
-    const recipients = Array.isArray(s.recipients)
-      ? (s.recipients as unknown[]).filter((r): r is string => typeof r === "string")
-      : [];
-    return {
-      id: s.id,
-      dashboardId: s.dashboardId,
-      dashboardName: nameById.get(s.dashboardId) ?? "(削除されたダッシュボード)",
-      frequency: s.frequency,
-      recipients,
-      enabled: s.enabled,
-      lastSentAt: s.lastSentAt,
-      createdAt: s.createdAt,
-    };
-  });
+  const rows = schedules.map((s) => ({
+    id: s.id,
+    dashboardId: s.dashboardId,
+    dashboardName: nameById.get(s.dashboardId) ?? "(削除されたダッシュボード)",
+    frequency: s.frequency,
+    enabled: s.enabled,
+    lastSentAt: s.lastSentAt,
+    nextRunAt: scheduledNextRun(s),
+    createdAt: s.createdAt,
+  }));
 
   return ok(rows);
 });
@@ -72,14 +60,11 @@ export const POST = withAuth(async (req, { user }) => {
   });
   if (!dashboard) throw new ApiError("ダッシュボードが見つかりません", 404);
 
-  const recipients = input.recipients ?? [];
-
   const schedule = await db.reportSchedule.create({
     data: {
       workspaceId,
       dashboardId: dashboard.id,
       frequency: input.frequency,
-      recipients: recipients.length ? toJson(recipients) : undefined,
       enabled: true,
     },
   });
@@ -89,9 +74,9 @@ export const POST = withAuth(async (req, { user }) => {
     dashboardId: schedule.dashboardId,
     dashboardName: dashboard.name,
     frequency: schedule.frequency,
-    recipients,
     enabled: schedule.enabled,
     lastSentAt: schedule.lastSentAt,
+    nextRunAt: scheduledNextRun(schedule),
     createdAt: schedule.createdAt,
   });
 });

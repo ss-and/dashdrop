@@ -192,8 +192,18 @@ export interface CellEditorProps {
   field: GridField;
   value: unknown;
   onChange: (value: unknown) => void;
-  onCommit: () => void;
+  /**
+   * 編集値を確定する。
+   *
+   * `focusBack` はキーボードで閉じたときだけ true にする。入力欄が消えると
+   * フォーカスが <body> に落ちるので、グリッド側で元のセルへ戻してもらう。
+   * blur（クリックで他所へ移った）ときは、ユーザーが選んだ移動先を奪わない
+   * よう付けない。
+   */
+  onCommit: (opts?: { focusBack?: boolean }) => void;
   onCancel: () => void;
+  /** Tab / Shift+Tab：確定して隣のセルの編集へ移る。 */
+  onMove?: (delta: 1 | -1) => void;
   /** For relation cells: map of linked record id -> human label (initial chips). */
   relationLabels?: Record<string, string>;
 }
@@ -227,15 +237,27 @@ export function CellEditor(props: CellEditorProps) {
   }
 }
 
-/** Enter commits, Escape cancels — the spreadsheet keyboard contract. */
-function keyHandler(onCommit: () => void, onCancel: () => void) {
+/**
+ * Enter で確定、Esc で取消、Tab で確定して隣のセルへ — 表計算の作法。
+ * Tab は既定の動作（フォーカスがどこかへ飛ぶ）を止めて、グリッドに次の
+ * セルを開いてもらう。onMove が無ければ確定だけして元のセルへ戻す。
+ */
+function keyHandler(
+  onCommit: (opts?: { focusBack?: boolean }) => void,
+  onCancel: () => void,
+  onMove?: (delta: 1 | -1) => void,
+) {
   return (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      onCommit();
+      onCommit({ focusBack: true });
     } else if (e.key === "Escape") {
       e.preventDefault();
       onCancel();
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      if (onMove) onMove(e.shiftKey ? -1 : 1);
+      else onCommit({ focusBack: true });
     }
   };
 }
@@ -249,6 +271,7 @@ function SimpleInputEditor({
   onChange,
   onCommit,
   onCancel,
+  onMove,
   inputType,
 }: CellEditorProps & { inputType: string }) {
   return (
@@ -258,13 +281,19 @@ function SimpleInputEditor({
       className={EDITOR_INPUT}
       value={value == null ? "" : String(value)}
       onChange={(e) => onChange(e.target.value)}
-      onKeyDown={keyHandler(onCommit, onCancel)}
-      onBlur={onCommit}
+      onKeyDown={keyHandler(onCommit, onCancel, onMove)}
+      onBlur={() => onCommit()}
     />
   );
 }
 
-function NumberEditor({ value, onChange, onCommit, onCancel }: CellEditorProps) {
+function NumberEditor({
+  value,
+  onChange,
+  onCommit,
+  onCancel,
+  onMove,
+}: CellEditorProps) {
   return (
     <Input
       autoFocus
@@ -273,8 +302,8 @@ function NumberEditor({ value, onChange, onCommit, onCancel }: CellEditorProps) 
       className={cn(EDITOR_INPUT, "text-right tabular-nums")}
       value={value == null ? "" : String(value)}
       onChange={(e) => onChange(e.target.value)}
-      onKeyDown={keyHandler(onCommit, onCancel)}
-      onBlur={onCommit}
+      onKeyDown={keyHandler(onCommit, onCancel, onMove)}
+      onBlur={() => onCommit()}
     />
   );
 }
@@ -284,6 +313,7 @@ function LongTextEditor({
   onChange,
   onCommit,
   onCancel,
+  onMove,
 }: CellEditorProps) {
   return (
     <Textarea
@@ -296,13 +326,17 @@ function LongTextEditor({
         // Enter+Cmd/Ctrl commits; plain Enter inserts newlines.
         if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
           e.preventDefault();
-          onCommit();
+          onCommit({ focusBack: true });
         } else if (e.key === "Escape") {
           e.preventDefault();
           onCancel();
+        } else if (e.key === "Tab") {
+          e.preventDefault();
+          if (onMove) onMove(e.shiftKey ? -1 : 1);
+          else onCommit({ focusBack: true });
         }
       }}
-      onBlur={onCommit}
+      onBlur={() => onCommit()}
     />
   );
 }
@@ -317,8 +351,9 @@ function CheckboxEditor({ value, onChange, onCommit }: CellEditorProps) {
         checked={Boolean(value)}
         onChange={(e) => {
           onChange(e.target.checked);
-          // Checkboxes commit instantly on toggle.
-          queueMicrotask(onCommit);
+          // Checkboxes commit instantly on toggle. チェックを付けた直後に
+          // 入力欄が消えるので、フォーカスはセルへ戻す。
+          queueMicrotask(() => onCommit({ focusBack: true }));
         }}
       />
     </div>
@@ -331,6 +366,7 @@ function SelectEditor({
   onChange,
   onCommit,
   onCancel,
+  onMove,
 }: CellEditorProps) {
   return (
     <Select
@@ -339,10 +375,10 @@ function SelectEditor({
       value={value == null ? "" : String(value)}
       onChange={(e) => {
         onChange(e.target.value || null);
-        queueMicrotask(onCommit);
+        queueMicrotask(() => onCommit({ focusBack: true }));
       }}
-      onKeyDown={keyHandler(onCommit, onCancel)}
-      onBlur={onCommit}
+      onKeyDown={keyHandler(onCommit, onCancel, onMove)}
+      onBlur={() => onCommit()}
     >
       <option value="">—</option>
       {field.options?.map((o) => (
@@ -360,6 +396,7 @@ function MultiSelectEditor({
   onChange,
   onCommit,
   onCancel,
+  onMove,
 }: CellEditorProps) {
   const ref = useRef<HTMLDivElement>(null);
   const selected: string[] = Array.isArray(value) ? (value as string[]) : [];
@@ -384,10 +421,14 @@ function MultiSelectEditor({
       onKeyDown={(e) => {
         if (e.key === "Enter") {
           e.preventDefault();
-          onCommit();
+          onCommit({ focusBack: true });
         } else if (e.key === "Escape") {
           e.preventDefault();
           onCancel();
+        } else if (e.key === "Tab") {
+          e.preventDefault();
+          if (onMove) onMove(e.shiftKey ? -1 : 1);
+          else onCommit({ focusBack: true });
         }
       }}
       onBlur={(e) => {
@@ -494,7 +535,8 @@ function RelationEditor({
 
   function commitWith(ids: string[]) {
     onChange(ids);
-    onCommit();
+    // モーダルが閉じるとフォーカスの行き先が無くなるので、セルへ戻す。
+    onCommit({ focusBack: true });
   }
 
   function choose(id: string) {

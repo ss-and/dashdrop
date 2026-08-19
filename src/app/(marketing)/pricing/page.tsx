@@ -1,16 +1,30 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { PLANS, PLAN_ORDER, formatPrice, getPlan } from "@/lib/plans";
-import { billingEnabled } from "@/lib/env";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { cn } from "@/lib/utils";
 
+/**
+ * 料金ページ。
+ *
+ * 前提: このアプリに有料プランへ移る手段は無い（決済も、Webhookも、
+ * アップグレードのAPIも、管理画面からの変更も存在しない。`Workspace.plan` を
+ * 書くのはサインアップの "free" だけ）。以前はここに「Proで始める」→
+ * `/signup?plan=pro` というボタンが並んでいたが、サインアップ画面は
+ * `searchParams` を一切読まないため、押した人は黙って Free のワークスペースを
+ * 受け取っていた。「次回の請求サイクルから反映されます」と書かれた請求
+ * サイクルも存在しない。
+ *
+ * そこで、価格表は残しつつ（値付けは伝える価値がある）、今使えるものと
+ * 準備中のものを `Plan.available` / `features` / `planned` で厳密に分ける。
+ */
+
 export const metadata: Metadata = {
   title: "料金プラン",
   description:
-    "DashDrop の料金プラン。個人から本格運用まで、わかりやすい3プラン。",
+    "DashDrop の料金プラン。現在ご利用いただけるのは無料の Free プランです。",
 };
 
 /** Small khaki check used in each feature list. */
@@ -31,28 +45,49 @@ function CheckIcon() {
   );
 }
 
-const CTA: Record<string, { label: string; href: string }> = {
-  free: { label: "無料で始める", href: "/signup" },
-  pro: { label: "Proで始める", href: "/signup?plan=pro" },
-  business: { label: "Businessで始める", href: "/signup?plan=business" },
-};
+/** 予定の項目に添える印。チェックと同じ形にすると「使える」と誤読される。 */
+function PlannedIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="mt-0.5 h-4 w-4 flex-none text-ink-faint"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 8v4l2.5 2.5" />
+    </svg>
+  );
+}
 
 const FAQ = [
   {
+    q: "今すぐ使えるのはどのプランですか？",
+    a: "Free プランのみです。サインアップすると必ず Free のワークスペースが作られ、料金は一切かかりません。Pro・Business は準備中で、まだお申し込みいただけません。",
+  },
+  {
     q: "支払い方法は何がありますか？",
-    a: "クレジットカードでのお支払いに対応予定です（Stripe を利用）。現在はベータ提供中のため、有料プランの決済は順次開始します。",
+    a: "現在、有料プランの提供とお支払いの受付は行っていません。決済の仕組み自体がまだ実装されていないため、ご請求が発生することはありません。",
   },
   {
     q: "途中でプランを変更できますか？",
-    a: "はい。いつでもアップグレード・ダウングレードが可能です。変更は次回の請求サイクルから反映されます。",
+    a: "現時点では変更できません。アップグレード・ダウングレードの機能も、請求サイクルもまだありません。提供を開始する際は、このページでご案内します。",
   },
   {
-    q: "解約はできますか？",
-    a: "いつでも解約できます。最低利用期間の縛りはありません。解約後も、期間終了まではご利用いただけます。",
+    q: "Free プランの上限はどれくらいですか？",
+    a: "スプレッドシートは 10個まで、1シートあたり 500行までです（顧客データベース・人事データベースは上限の対象外です）。上限を超える取り込みは、その場で理由を表示してお断りします。",
+  },
+  {
+    q: "複数人で使えますか？",
+    a: "現在は1ワークスペースにつきお一人でのご利用です。メンバーの招待と権限管理は提供予定で、まだ実装されていません。",
   },
   {
     q: "データのエクスポートはできますか？",
-    a: "すべてのプランで、テーブルを Excel / CSV にエクスポートできます。データの所有権はお客様にあり、いつでも持ち出せます。",
+    a: "はい。すべてのシートを Excel（.xlsx）ファイルとして書き出せます。データの所有権はお客様にあり、いつでも持ち出せます。",
   },
 ];
 
@@ -65,8 +100,8 @@ export default function PricingPage() {
           シンプルで、わかりやすい料金
         </h1>
         <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-ink-soft">
-          小さく始めて、必要になったら広げる。すべてのプランに Excel / CSV
-          連携と週間ダッシュボードが含まれます。
+          今ご利用いただけるのは、無料の Free プランです。Pro・Business
+          は準備中で、お申し込みの受付はまだ行っていません。
         </p>
       </section>
 
@@ -75,7 +110,6 @@ export default function PricingPage() {
         <div className="grid gap-5 md:grid-cols-3">
           {PLAN_ORDER.map((id) => {
             const plan = getPlan(id);
-            const cta = CTA[id] ?? CTA.free;
             const highlighted = Boolean(PLANS[id].highlighted);
             return (
               <Card
@@ -84,15 +118,17 @@ export default function PricingPage() {
                   "relative flex h-full flex-col",
                   highlighted &&
                     "border-khaki-400 shadow-raised ring-1 ring-khaki-300 md:-translate-y-1",
+                  !plan.available && "opacity-95",
                 )}
               >
-                {highlighted && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <Badge tone="khaki" variant="soft">
-                      おすすめ
-                    </Badge>
-                  </div>
-                )}
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                  <Badge
+                    tone={plan.available ? "khaki" : "neutral"}
+                    variant="soft"
+                  >
+                    {plan.available ? "提供中" : "準備中"}
+                  </Badge>
+                </div>
                 <CardBody className="flex flex-1 flex-col">
                   <h2 className="text-lg font-semibold text-ink">
                     {plan.name}
@@ -100,11 +136,19 @@ export default function PricingPage() {
                   <p className="mt-1 text-sm text-ink-muted">{plan.tagline}</p>
 
                   <div className="mt-5 flex items-baseline gap-1">
-                    <span className="text-3xl font-semibold tracking-tight text-ink">
+                    <span
+                      className={cn(
+                        "text-3xl font-semibold tracking-tight",
+                        plan.available ? "text-ink" : "text-ink-muted",
+                      )}
+                    >
                       {formatPrice(plan)}
                     </span>
                     {plan.priceMonthly !== null && (
                       <span className="text-sm text-ink-muted">/ 月</span>
+                    )}
+                    {!plan.available && plan.priceMonthly !== null && (
+                      <span className="text-2xs text-ink-faint">（予定価格）</span>
                     )}
                   </div>
 
@@ -118,18 +162,42 @@ export default function PricingPage() {
                         <span>{f}</span>
                       </li>
                     ))}
+                    {plan.planned.map((f) => (
+                      <li
+                        key={f}
+                        className="flex gap-2 text-sm leading-relaxed text-ink-muted"
+                      >
+                        <PlannedIcon />
+                        <span>
+                          {f}
+                          <span className="ml-1 text-2xs text-ink-faint">
+                            （予定）
+                          </span>
+                        </span>
+                      </li>
+                    ))}
                   </ul>
 
                   <div className="mt-8">
-                    <Link href={cta.href} className="block">
-                      <Button
-                        variant={highlighted ? "primary" : "outline"}
-                        size="lg"
-                        className="w-full"
-                      >
-                        {cta.label}
-                      </Button>
-                    </Link>
+                    {plan.available ? (
+                      <Link href="/signup" className="block">
+                        <Button
+                          variant={highlighted ? "primary" : "outline"}
+                          size="lg"
+                          className="w-full"
+                        >
+                          無料で始める
+                        </Button>
+                      </Link>
+                    ) : (
+                      // 押せるボタンは置かない。申し込みを受け付ける先が
+                      // どこにも無いのに、押せば何か起きると思わせないため。
+                      <p className="rounded border border-dashed border-ink-line px-3 py-2.5 text-center text-xs leading-relaxed text-ink-muted">
+                        現在お申し込みいただけません。
+                        <br />
+                        提供開始まではFreeプランをご利用ください。
+                      </p>
+                    )}
                   </div>
                 </CardBody>
               </Card>
@@ -137,12 +205,10 @@ export default function PricingPage() {
           })}
         </div>
 
-        {/* Beta / billing note */}
-        {!billingEnabled && (
-          <p className="mt-6 text-center text-sm text-ink-muted">
-            現在はベータ提供中です。決済は順次開始予定（Stripe対応予定）。
-          </p>
-        )}
+        <p className="mt-6 text-center text-sm text-ink-muted">
+          Pro・Business
+          の内容と価格は提供開始時に変わる場合があります。現時点で課金が発生することはありません。
+        </p>
       </section>
 
       {/* FAQ */}

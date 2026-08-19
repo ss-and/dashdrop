@@ -147,15 +147,26 @@ class Parser {
     return node;
   }
 
-  /** Entry point of every nesting level — this is where depth is enforced. */
+  /**
+   * Entry point of every nesting level — this is where depth is enforced.
+   *
+   * `depth` is the nesting level of the expression ABOUT to be parsed, so the
+   * top-level expression is level 0 and MAX_DEPTH counts exactly what its
+   * message promises: 32 nested levels are accepted, the 33rd is rejected.
+   *
+   * Regression: the check used to increment first, so parseProgram consumed a
+   * level of its own and 32 nested parentheses were rejected by a message that
+   * said 「最大32段」. MAX_ARGS and MAX_SOURCE_LENGTH were already exact; this
+   * makes the third bound agree with its own error text too.
+   */
   private parseExpr(): AstNode {
-    this.depth++;
     if (this.depth > MAX_DEPTH) {
       this.fail(
         `式のネストが深すぎます（最大${MAX_DEPTH}段）`,
         this.peek(),
       );
     }
+    this.depth++;
     const node = this.parseOr();
     this.depth--;
     return node;

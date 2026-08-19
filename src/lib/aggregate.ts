@@ -15,6 +15,7 @@ import type {
   PivotWidget,
   Unit,
 } from "./widgets";
+import { foldWidthVariants } from "./formula";
 
 export interface AggRecord {
   id: string;
@@ -39,11 +40,36 @@ export type CollectionMap = Map<string, AggCollection>;
 
 /* ------------------------------ primitives ------------------------------ */
 
+/**
+ * 10進の数値リテラルだけを受け付ける。
+ *
+ * `Number()` は "0x10" を 16、"0b11" を 3、"Infinity" を ∞ と読んでしまう。
+ * 業務データでその形の文字列は商品コードや型番であって数値ではないので、
+ * 黙って別の数字に化けるより弾く。指数表記（"1e3" → 1000）は表計算ソフトが
+ * 実際にそう書き出すため受け付ける。
+ */
+const NUMERIC_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/**
+ * 値を数値に変換する。数値として読めなければ null。
+ *
+ * 回帰: 以前は `Number("")` が 0 で `Number.isFinite` を通ってしまい、空文字・
+ * 空白のみ・「¥」だけのセルが 0 として集計されていた。結果、100 / "" / "  " /
+ * "¥" の4行で 最小 0（正しくは 100）・平均 25（正しくは 100）になっていた。
+ * 「数値でない値は 0 ではなく“寄与しない”」は formula エンジン
+ * （src/lib/formula/functions.ts の toNumber）と同じ規則で、集計側もそれに揃える。
+ */
 function toNumber(v: unknown): number | null {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
   if (typeof v === "boolean") return v ? 1 : 0;
   if (typeof v === "string") {
-    const n = Number(v.replace(/[,\s¥$€£]/g, ""));
+    // 桁区切り・通貨記号・空白（全角含む）は数値の飾りなので落とす。
+    // 全角も畳む。ここだけ畳まないと「１２３」が数式と vlookup では 123、
+  // 集計では null になり、同じセルが画面によって別の数字になる。
+  // 文字列全体の NFKC は使わないこと（「①」を 1 と読んでしまう）。
+  const stripped = foldWidthVariants(v).replace(/[,\s¥$€£]/g, "");
+    if (stripped === "" || !NUMERIC_RE.test(stripped)) return null;
+    const n = Number(stripped);
     return Number.isFinite(n) ? n : null;
   }
   return null;
@@ -64,6 +90,11 @@ function recordDate(rec: AggRecord, dateField?: string): Date | null {
     if (d) return d;
   }
   return toDate(rec.createdAt);
+}
+
+/** 表示用の丸め（小数2桁）。全ウィジェットで同じ規則を使う。 */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 /** ISO-ish date string: "2026-07-19" or "2026-07-19T09:00:00Z". */
@@ -93,12 +124,17 @@ function matchFilter(rec: AggRecord, f: Filter): boolean {
       return String(v ?? "") === String(f.value ?? "");
     case "neq":
       return String(v ?? "") !== String(f.value ?? "");
-    case "in":
-      return Array.isArray(f.value)
-        ? f.value.map(String).includes(String(v ?? ""))
-        : Array.isArray(v)
-          ? v.map(String).includes(String(f.value ?? ""))
-          : false;
+    case "in": {
+      // 回帰: 両辺が配列のとき、レコード側を String() で潰して "x,y" という
+      // 1個の文字列にしていたため、複数選択・リレーションのセル（["x","y"]）は
+      // ["x"] に一度も一致せず 0 件になっていた。どちらの辺が配列でも
+      // 「共通する要素があれば真」で判定する（"in" の素直な読み方）。
+      const wanted = Array.isArray(f.value)
+        ? f.value.map(String)
+        : [String(f.value ?? "")];
+      const actual = Array.isArray(v) ? v.map(String) : [String(v ?? "")];
+      return actual.some((a) => wanted.includes(a));
+    }
     case "gt":
     case "gte":
     case "lt":
@@ -125,58 +161,220 @@ function applyFilters(records: AggRecord[], filters?: Filter[]): AggRecord[] {
   return records.filter((r) => filters.every((f) => matchFilter(r, f)));
 }
 
-function computeMeasure(records: AggRecord[], m: Measure): number {
-  if (m.kind === "count") return records.length;
-  const nums = records
-    .map((r) => toNumber(r.data[m.field]))
-    .filter((n): n is number => n !== null);
-  if (nums.length === 0) return 0;
-  switch (m.kind) {
-    case "sum":
-      return nums.reduce((a, b) => a + b, 0);
-    case "avg":
-      return nums.reduce((a, b) => a + b, 0) / nums.length;
-    case "min":
-      return Math.min(...nums);
-    case "max":
-      return Math.max(...nums);
+/* --------------------------- measure accumulator ------------------------ */
+
+/**
+ * すべてのウィジェットが共有する集計バケット。
+ *
+ * 合計だけを貯めると 最小/最大 が合計を表示し、平均が同条件の KPI とずれる
+ * （クロス集計とカテゴリ内訳の両方で実際に起きた不具合）。件数・最小・最大を
+ * 別々に持ち、取り出し方だけを measure の種類で切り替えることで、KPI・推移・
+ * 内訳・クロス集計が必ず同じ答えを返す。
+ */
+interface MeasureBucket {
+  sum: number;
+  count: number;
+  min: number | null;
+  max: number | null;
+}
+
+function emptyBucket(): MeasureBucket {
+  return { sum: 0, count: 0, min: null, max: null };
+}
+
+function addValue(b: MeasureBucket, v: number): void {
+  b.sum += v;
+  b.count += 1;
+  b.min = b.min === null || v < b.min ? v : b.min;
+  b.max = b.max === null || v > b.max ? v : b.max;
+}
+
+/**
+ * 1レコードがこの measure に寄与する値。数値として読めなければ null＝まったく
+ * 寄与しない。0 として数えると平均が下がり、最小が 0 に化けるため。
+ */
+function contributionOf(rec: AggRecord, m: Measure): number | null {
+  if (m.kind === "count") return 1;
+  return toNumber(rec.data[m.field]);
+}
+
+/**
+ * バケットを合成する。合計は「集計済みのセル」ではなく元の値から計算する必要
+ * がある（平均の合計は平均ではないし、最小の合計は最小ではない）。
+ */
+function mergeBuckets(
+  parts: Array<MeasureBucket | undefined>,
+): MeasureBucket | undefined {
+  let found = false;
+  const out = emptyBucket();
+  for (const b of parts) {
+    if (!b) continue;
+    found = true;
+    out.sum += b.sum;
+    out.count += b.count;
+    if (b.min !== null) out.min = out.min === null ? b.min : Math.min(out.min, b.min);
+    if (b.max !== null) out.max = out.max === null ? b.max : Math.max(out.max, b.max);
   }
+  return found ? out : undefined;
+}
+
+/** バケットから measure の値を取り出す。寄与が無ければ null（「0」とは別物）。 */
+function bucketValue(
+  b: MeasureBucket | undefined,
+  kind: Measure["kind"],
+): number | null {
+  if (!b || b.count === 0) return null;
+  switch (kind) {
+    case "avg":
+      return b.sum / b.count;
+    case "min":
+      return b.min ?? 0;
+    case "max":
+      return b.max ?? 0;
+    default: // count / sum
+      return b.sum;
+  }
+}
+
+function collectBucket(records: AggRecord[], m: Measure): MeasureBucket {
+  const b = emptyBucket();
+  for (const r of records) {
+    const v = contributionOf(r, m);
+    if (v === null) continue;
+    addValue(b, v);
+  }
+  return b;
+}
+
+/**
+ * 単一の measure を計算する。
+ *
+ * 回帰: 最小/最大 は `Math.min(...nums)` で求めていたが、引数の展開はレコード
+ * 数ぶんのスタックを使うため 13万行で RangeError になり、ダッシュボード
+ * （公開共有ページ含む）が丸ごと 500 になっていた。Business プランは 100万行
+ * まで許可しているので、行数に依存しない逐次比較で積む。
+ */
+function computeMeasure(records: AggRecord[], m: Measure): number {
+  return bucketValue(collectBucket(records, m), m.kind) ?? 0;
 }
 
 /* ------------------------------ bucketing ------------------------------- */
 
-function startOfDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+/**
+ * 集計に使うタイムゾーンは日本時間に固定する。
+ *
+ * 検証: 2026-08-08 07:00 JST に作られたレコードが 08/07 のバケットに入って
+ * いた。ローカル時刻（getFullYear など）で日付を切っていて、デプロイ先の
+ * サーバーは UTC のため、9時前に作られたレコードが丸ごと前日に落ち、今週/今月
+ * の KPI も 9 時間遅れで切り替わっていた。DashDrop は日本の事業者向けで、JST は
+ * 夏時間を持たない＝固定オフセットで正しく切れるため、ワークスペースごとの
+ * 設定は持たずここで +09:00 に固定する。
+ * （日付「フィールド」は "YYYY-MM-DD" で保存されており影響しない。影響するのは
+ * createdAt を軸にしたとき＝日付列を持たないシートの既定軸。）
+ */
+const TZ_OFFSET_MS = 9 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** UTC ゲッターで JST の暦要素を読むためのシフト済み Date。 */
+function zoned(t: number): Date {
+  return new Date(t + TZ_OFFSET_MS);
 }
-function startOfWeek(d: Date): Date {
-  const s = startOfDay(d);
-  const day = (s.getDay() + 6) % 7; // Monday = 0
-  s.setDate(s.getDate() - day);
-  return s;
+
+function startOfDayMs(t: number): number {
+  return Math.floor((t + TZ_OFFSET_MS) / DAY_MS) * DAY_MS - TZ_OFFSET_MS;
 }
-function startOfMonth(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), 1);
+
+function startOfWeekMs(t: number): number {
+  const day = startOfDayMs(t);
+  // 1970-01-01（epoch day 0）は木曜。0=日曜に正規化してから月曜起点にする。
+  const epochDay = Math.floor((day + TZ_OFFSET_MS) / DAY_MS);
+  const dow = ((((epochDay % 7) + 4) % 7) + 7) % 7;
+  return day - ((dow + 6) % 7) * DAY_MS;
+}
+
+function startOfMonthMs(t: number): number {
+  const z = zoned(t);
+  return Date.UTC(z.getUTCFullYear(), z.getUTCMonth(), 1) - TZ_OFFSET_MS;
+}
+
+function bucketStartMs(d: Date, bucket: "day" | "week" | "month"): number {
+  const t = d.getTime();
+  if (bucket === "week") return startOfWeekMs(t);
+  if (bucket === "month") return startOfMonthMs(t);
+  return startOfDayMs(t);
 }
 
 function bucketStart(d: Date, bucket: "day" | "week" | "month"): Date {
-  if (bucket === "week") return startOfWeek(d);
-  if (bucket === "month") return startOfMonth(d);
-  return startOfDay(d);
+  return new Date(bucketStartMs(d, bucket));
 }
 
 function addBucket(d: Date, bucket: "day" | "week" | "month", n: number): Date {
-  const c = new Date(d);
-  if (bucket === "week") c.setDate(c.getDate() + n * 7);
-  else if (bucket === "month") c.setMonth(c.getMonth() + n);
-  else c.setDate(c.getDate() + n);
-  return c;
+  if (bucket === "month") {
+    const z = zoned(d.getTime());
+    return new Date(
+      Date.UTC(
+        z.getUTCFullYear(),
+        z.getUTCMonth() + n,
+        z.getUTCDate(),
+        z.getUTCHours(),
+        z.getUTCMinutes(),
+        z.getUTCSeconds(),
+        z.getUTCMilliseconds(),
+      ) - TZ_OFFSET_MS,
+    );
+  }
+  // JST は夏時間を持たないので、日・週は素の加算で正しい。
+  return new Date(d.getTime() + n * (bucket === "week" ? 7 : 1) * DAY_MS);
 }
 
 function bucketLabel(d: Date, bucket: "day" | "week" | "month"): string {
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  if (bucket === "month") return `${d.getFullYear()}/${mm}`;
+  const z = zoned(d.getTime());
+  const mm = String(z.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(z.getUTCDate()).padStart(2, "0");
+  if (bucket === "month") return `${z.getUTCFullYear()}/${mm}`;
   return `${mm}/${dd}`;
+}
+
+/* ------------------------------ 「その他」 ------------------------------- */
+
+/**
+ * 上限を超えた分をまとめる残余バケットのキー。
+ *
+ * 回帰: 以前は素の文字列 "その他" を番兵に使っていた。「その他」は日本語の
+ * 業務データではごく普通のカテゴリ値で、DashDrop 自身のサンプルシートや
+ * テンプレートも { label: "その他", value: "other" } を持っている。実データの
+ * 「その他」と残余が同じキーになると、その行が二重に並び（React の key も重複）、
+ * 列合計は rowKeys を舐めるので同じ行を二度足していた——同じ表の中で列合計と
+ * 総計が食い違う（rowLimit:2 で colTotals [232] / grandTotal 116）。
+ * U+FFFF は Unicode の非文字でテキストとしては出現し得ないため、実データの
+ * どの値とも衝突しないキーとして使う。
+ */
+const OTHER_KEY = "\uFFFF__other__";
+const OTHER_LABEL = "その他";
+
+/**
+ * 残余の表示名。実データ由来のラベルに「その他」がいるときだけ言い換える。
+ * 衝突しない限り従来どおり「その他」のままにして、画面の見え方は変えない。
+ */
+function otherLabelFor(taken: Set<string>): string {
+  if (!taken.has(OTHER_LABEL)) return OTHER_LABEL;
+  const alt = `${OTHER_LABEL}（上位以外）`;
+  if (!taken.has(alt)) return alt;
+  // 「その他（上位以外）」まで実データに居る場合の保険。候補数は taken より
+  // 多いので必ずどこかで空きが見つかる。
+  for (let n = 2; n <= taken.size + 2; n++) {
+    const candidate = `${OTHER_LABEL}（上位以外${n}）`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${OTHER_LABEL}（上位以外${taken.size + 3}）`;
+}
+
+/** グルーピング対象の値をバケットキー列にする（複数選択は全バケットに入る）。 */
+function bucketKeys(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.length ? raw.map((v) => String(v)) : ["—"];
+  }
+  return [raw === null || raw === undefined || raw === "" ? "—" : String(raw)];
 }
 
 /* ------------------------------- widgets -------------------------------- */
@@ -222,38 +420,82 @@ function computeKpi(w: KpiWidget, col: AggCollection, now: Date): WidgetData {
 
   return {
     type: "kpi",
-    value: Math.round(value * 100) / 100,
+    value: round2(value),
     unit,
     deltaPercent,
     target: w.target,
   };
 }
 
+/** points の中で横軸が使う予約キー。系列名がこれと衝突すると軸が消える。 */
+const X_KEY = "x";
+
+/**
+ * 系列の表示名を一意にする。
+ *
+ * 回帰: points は 1 バケット 1 オブジェクトで、系列の値は系列名をキーにして
+ * 同じオブジェクトへ詰めている。ラベルが同じ measure が2つあると後勝ちで
+ * 上書きされ、2本の線がまったく同じ値を描いていた。ラベルが "x" のときは
+ * 横軸のキーを潰してしまい、軸ラベルが消えて measure の値がカテゴリとして
+ * 並んでいた。SeriesData の series[].label はレンダラーで dataKey 兼 凡例名
+ * なので、ここで一意化した名前をそのまま表示名として返す。
+ */
+function uniqueSeriesLabels(labels: string[]): string[] {
+  const used = new Set<string>([X_KEY]);
+  return labels.map((label) => {
+    let candidate = label;
+    for (let n = 2; used.has(candidate); n++) candidate = `${label}（${n}）`;
+    used.add(candidate);
+    return candidate;
+  });
+}
+
+/**
+ * 時系列（折れ線 / エリア / 棒）。
+ *
+ * 性能: 以前は「バケット × measure」ごとに全レコードを filter し直し、その
+ * たびに new Date を作っていた（50,000行・60バケット・2系列で 1.3 秒、同じ
+ * ウィジェット6枚で 8 秒）。レコードを1回だけ舐め、日付から所属バケットを
+ * 直接引いて積む形に変える。結果は同じ。
+ */
 function computeSeries(w: SeriesWidget, col: AggCollection, now: Date): WidgetData {
   const bucket = w.bucket;
-  const count = w.rangeCount;
   const currentStart = bucketStart(now, bucket);
 
   // Build the ordered list of bucket starts (oldest → newest).
-  const starts: Date[] = [];
-  for (let i = count - 1; i >= 0; i--) {
-    starts.push(addBucket(currentStart, bucket, -i));
+  const starts: number[] = [];
+  for (let i = w.rangeCount - 1; i >= 0; i--) {
+    starts.push(addBucket(currentStart, bucket, -i).getTime());
+  }
+  const indexOfStart = new Map<number, number>();
+  starts.forEach((ms, i) => indexOfStart.set(ms, i));
+
+  const labels = uniqueSeriesLabels(w.measures.map((sm) => sm.label));
+  // acc[バケット][measure]
+  const acc: MeasureBucket[][] = starts.map(() =>
+    w.measures.map(() => emptyBucket()),
+  );
+
+  for (const r of applyFilters(col.records, w.filters)) {
+    const d = recordDate(r, w.dateField);
+    if (!d) continue;
+    const bi = indexOfStart.get(bucketStartMs(d, bucket));
+    if (bi === undefined) continue;
+    for (let mi = 0; mi < w.measures.length; mi++) {
+      const sm = w.measures[mi];
+      if (sm.filters && !sm.filters.every((f) => matchFilter(r, f))) continue;
+      const v = contributionOf(r, sm.measure);
+      if (v === null) continue;
+      addValue(acc[bi][mi], v);
+    }
   }
 
-  const filtered = applyFilters(col.records, w.filters);
-
-  const points = starts.map((start) => {
-    const end = addBucket(start, bucket, 1);
-    const inBucket = filtered.filter((r) => {
-      const d = recordDate(r, w.dateField);
-      return d ? d >= start && d < end : false;
-    });
+  const points = starts.map((ms, bi) => {
     const row: Record<string, string | number> = {
-      x: bucketLabel(start, bucket),
+      [X_KEY]: bucketLabel(new Date(ms), bucket),
     };
-    w.measures.forEach((sm) => {
-      const recs = applyFilters(inBucket, sm.filters);
-      row[sm.label] = Math.round(computeMeasure(recs, sm.measure) * 100) / 100;
+    w.measures.forEach((sm, mi) => {
+      row[labels[mi]] = round2(bucketValue(acc[bi][mi], sm.measure.kind) ?? 0);
     });
     return row;
   });
@@ -263,58 +505,75 @@ function computeSeries(w: SeriesWidget, col: AggCollection, now: Date): WidgetDa
     points,
     stacked: w.stacked,
     series: w.measures.map((sm, i) => ({
-      label: sm.label,
+      label: labels[i],
       color: sm.color ?? COLOR_CYCLE[i % COLOR_CYCLE.length],
     })),
   };
 }
 
-function computeBreakdown(
-  w: BreakdownWidget,
-  col: AggCollection,
-): WidgetData {
+/**
+ * カテゴリ内訳（ドーナツ / 横棒）。
+ *
+ * 回帰: measure の種類を一切見ずに合計だけを積んでいたため、ビルダーで
+ * 平均・最小・最大 を選んでも常に合計が出ていた（A に 100/200 で 平均 300、
+ * 最小 300、最大 300）。クロス集計と同じ MeasureBucket に積み、取り出しだけを
+ * 種類で切り替えるので、同条件の KPI タイルと必ず一致する。
+ */
+function computeBreakdown(w: BreakdownWidget, col: AggCollection): WidgetData {
   const filtered = applyFilters(col.records, w.filters);
   const field = col.fields.find((f) => f.key === w.groupBy);
-  const optionMeta = new Map(
-    (field?.options ?? []).map((o) => [o.value, o]),
-  );
+  const optionMeta = new Map((field?.options ?? []).map((o) => [o.value, o]));
 
-  const groups = new Map<string, number>();
+  const groups = new Map<string, MeasureBucket>();
   for (const r of filtered) {
-    const raw = r.data[w.groupBy];
-    const keys = Array.isArray(raw)
-      ? raw.map((v) => String(v))
-      : [raw === null || raw === undefined || raw === "" ? "—" : String(raw)];
-    const contribution =
-      w.measure.kind === "count"
-        ? 1
-        : (toNumber(r.data[w.measure.field]) ?? 0);
-    for (const k of keys) {
-      groups.set(k, (groups.get(k) ?? 0) + contribution);
+    const v = contributionOf(r, w.measure);
+    if (v === null) continue;
+    for (const k of bucketKeys(r.data[w.groupBy])) {
+      let b = groups.get(k);
+      if (!b) {
+        b = emptyBucket();
+        groups.set(k, b);
+      }
+      addValue(b, v);
     }
   }
 
-  let slices = Array.from(groups.entries())
-    .map(([key, value]) => {
-      const meta = optionMeta.get(key);
-      return {
-        label: meta?.label ?? key,
-        value: Math.round(value * 100) / 100,
-        color: meta?.color,
-      };
-    })
+  const entries = Array.from(groups.entries())
+    .map(([key, bucket]) => ({
+      key,
+      bucket,
+      value: round2(bucketValue(bucket, w.measure.kind) ?? 0),
+    }))
     .sort((a, b) => b.value - a.value);
 
-  // Collapse the long tail into "その他".
-  if (slices.length > w.limit) {
-    const head = slices.slice(0, w.limit - 1);
-    const tail = slices.slice(w.limit - 1);
-    head.push({
-      label: "その他",
-      value: tail.reduce((a, s) => a + s.value, 0),
+  // 上限を超えた分は残余にまとめる。合計値ではなく元の値を合成するので、
+  // 平均の残余は平均のまま、最小の残余は最小のままになる。
+  const overflow = entries.length > w.limit;
+  const head = overflow ? entries.slice(0, w.limit - 1) : entries;
+  const tail = overflow ? entries.slice(w.limit - 1) : [];
+
+  const slices: Array<{
+    label: string;
+    value: number;
+    color?: string;
+    synthetic?: boolean;
+  }> = head.map(
+    (e) => {
+      const meta = optionMeta.get(e.key);
+      return { label: meta?.label ?? e.key, value: e.value, color: meta?.color };
+    },
+  );
+
+  if (tail.length > 0) {
+    slices.push({
+      // 実データに「その他」が居るときだけ言い換えて、残余と取り違えないようにする。
+      label: otherLabelFor(new Set(slices.map((s) => s.label))),
+      value: round2(bucketValue(mergeBuckets(tail.map((e) => e.bucket)), w.measure.kind) ?? 0),
       color: "neutral",
+      // 合成した残余であることを構造で示す。表示側がラベル文字列で判定すると、
+      // 本物の「その他」項目まで巻き添えにする。
+      synthetic: true,
     });
-    slices = head;
   }
 
   slices.forEach((s, i) => {
@@ -324,8 +583,29 @@ function computeBreakdown(
   return {
     type: w.type,
     slices,
-    total: slices.reduce((a, s) => a + s.value, 0),
+    // 合計もスライスの足し算ではなく元の値から出す（平均の合計は平均ではない）。
+    total: round2(
+      bucketValue(mergeBuckets(entries.map((e) => e.bucket)), w.measure.kind) ?? 0,
+    ),
   };
+}
+
+/**
+ * 並べ替えのための比較。全順序（推移律）を保証する。
+ *
+ * 回帰: 「両方数値なら引き算、それ以外は localeCompare」は推移律を満たさない。
+ * 数値としては 9 < 10 なのに文字列としては "10" < "3x" < "9" なので、100 と
+ * N/A が混ざった列は入力順しだいで並びが変わっていた（同じ4値で5通りの結果）。
+ * 数値として読める値をすべて前に置き、読めない値はその後ろで文字列比較する。
+ */
+function compareValues(av: unknown, bv: unknown): number {
+  const an = toNumber(av);
+  const bn = toNumber(bv);
+  if (an !== null && bn !== null) return an - bn;
+  if (an !== null) return -1;
+  if (bn !== null) return 1;
+  // ロケールを固定しないと実行環境で並びが変わるため "ja" を明示する。
+  return String(av ?? "").localeCompare(String(bv ?? ""), "ja");
 }
 
 function computeTable(w: TableWidget, col: AggCollection): WidgetData {
@@ -333,13 +613,7 @@ function computeTable(w: TableWidget, col: AggCollection): WidgetData {
   if (w.sort) {
     const { field, dir } = w.sort;
     rows.sort((a, b) => {
-      const av = a.data[field];
-      const bv = b.data[field];
-      const an = toNumber(av);
-      const bn = toNumber(bv);
-      let cmp: number;
-      if (an !== null && bn !== null) cmp = an - bn;
-      else cmp = String(av ?? "").localeCompare(String(bv ?? ""));
+      const cmp = compareValues(a.data[field], b.data[field]);
       return dir === "asc" ? cmp : -cmp;
     });
   } else {
@@ -373,10 +647,6 @@ function computeTable(w: TableWidget, col: AggCollection): WidgetData {
 }
 
 /**
- * Compute a single widget. Returns a null-ish empty WidgetData when the source
- * collection is missing so the renderer can show a graceful empty state.
- */
-/**
  * Cross-tab: group down the side by `rowField`, across the top by `colField`,
  * and aggregate `measure` in each cell.
  *
@@ -392,54 +662,20 @@ function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
   const labelOf = (f: typeof rowField, key: string) =>
     (f?.options ?? []).find((o) => o.value === key)?.label ?? key;
 
-  /**
-   * One bucket per (row, col) pair.
-   *
-   * `count` only counts records that actually contributed a value, and min/max
-   * are tracked separately — matching computeMeasure, which drops records whose
-   * measure field isn't numeric. Accumulating only a sum made 最小/最大 print the
-   * sum, and made 平均 disagree with the identical KPI tile.
-   */
-  interface Bucket {
-    sum: number;
-    count: number;
-    min: number | null;
-    max: number | null;
-  }
-  const add = (b: Bucket, v: number): void => {
-    b.sum += v;
-    b.count += 1;
-    b.min = b.min === null || v < b.min ? v : b.min;
-    b.max = b.max === null || v > b.max ? v : b.max;
-  };
-  const emptyBucket = (): Bucket => ({ sum: 0, count: 0, min: null, max: null });
-
-  const cells = new Map<string, Bucket>();
+  const cells = new Map<string, MeasureBucket>();
   const rowWeight = new Map<string, number>();
   const colWeight = new Map<string, number>();
-
-  const bucketKeys = (raw: unknown): string[] => {
-    if (Array.isArray(raw)) {
-      return raw.length ? raw.map((v) => String(v)) : ["—"];
-    }
-    return [raw === null || raw === undefined || raw === "" ? "—" : String(raw)];
-  };
 
   for (const r of filtered) {
     // A record with a non-numeric measure value contributes nothing at all —
     // not a zero, which would drag averages down and fake a min of 0.
-    let contribution: number | null;
-    if (w.measure.kind === "count") {
-      contribution = 1;
-    } else {
-      contribution = toNumber(r.data[w.measure.field]);
-      if (contribution === null) continue;
-    }
+    const contribution = contributionOf(r, w.measure);
+    if (contribution === null) continue;
     for (const rk of bucketKeys(r.data[w.rowField])) {
       for (const ck of bucketKeys(r.data[w.colField])) {
         const k = `${rk}\u0000${ck}`;
         const cur = cells.get(k) ?? emptyBucket();
-        add(cur, contribution);
+        addValue(cur, contribution);
         cells.set(k, cur);
         // Axis weight ranks which rows/columns survive the limit. Absolute
         // value, so a column of large negatives isn't ranked as the smallest.
@@ -449,46 +685,32 @@ function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
     }
   }
 
-  /** Keep the heaviest N keys; everything else becomes 「その他」. */
+  /** 重い順に N 本だけ残し、あふれた分は残余キーにまとめる。 */
   const trim = (weights: Map<string, number>, limit: number): string[] => {
     const sorted = Array.from(weights.entries())
       .sort((a, b) => b[1] - a[1])
       .map(([k]) => k);
     if (sorted.length <= limit) return sorted;
-    return [...sorted.slice(0, limit - 1), OTHER];
+    return [...sorted.slice(0, limit - 1), OTHER_KEY];
   };
   const rowKeys = trim(rowWeight, w.rowLimit);
   const colKeys = trim(colWeight, w.colLimit);
   const rowSet = new Set(rowKeys);
   const colSet = new Set(colKeys);
   const bucketOf = (key: string, keep: Set<string>) =>
-    keep.has(key) ? key : OTHER;
+    keep.has(key) ? key : OTHER_KEY;
 
-  // Re-bin into the trimmed axes, folding the tail into 「その他」.
-  const grid = new Map<string, Bucket>();
+  // Re-bin into the trimmed axes, folding the tail into the remainder bucket.
+  const grid = new Map<string, MeasureBucket>();
   for (const [k, v] of cells) {
     const [rk, ck] = k.split("\u0000");
     const gk = `${bucketOf(rk, rowSet)}\u0000${bucketOf(ck, colSet)}`;
     grid.set(gk, mergeBuckets([grid.get(gk), v]) ?? emptyBucket());
   }
 
-  const value = (b: Bucket | undefined): number | null => {
-    if (!b || b.count === 0) return null;
-    let v: number;
-    switch (w.measure.kind) {
-      case "avg":
-        v = b.sum / b.count;
-        break;
-      case "min":
-        v = b.min ?? 0;
-        break;
-      case "max":
-        v = b.max ?? 0;
-        break;
-      default: // count / sum
-        v = b.sum;
-    }
-    return Math.round(v * 100) / 100;
+  const value = (b: MeasureBucket | undefined): number | null => {
+    const v = bucketValue(b, w.measure.kind);
+    return v === null ? null : round2(v);
   };
 
   const matrix = rowKeys.map((rk) =>
@@ -502,12 +724,20 @@ function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
   );
   const grandTotal = value(mergeBuckets(Array.from(grid.values()))) ?? 0;
 
+  /** 見出し。実データのラベルはそのまま、残余だけ衝突しない名前にする。 */
+  const headers = (keys: string[], f: typeof rowField): string[] => {
+    const real = keys.filter((k) => k !== OTHER_KEY).map((k) => labelOf(f, k));
+    const other = otherLabelFor(new Set(real));
+    let i = 0;
+    return keys.map((k) => (k === OTHER_KEY ? other : real[i++]));
+  };
+
   return {
     type: "pivot",
     rowLabel: rowField?.name ?? w.rowField,
     colLabel: colField?.name ?? w.colField,
-    rows: rowKeys.map((k) => (k === OTHER ? OTHER : labelOf(rowField, k))),
-    cols: colKeys.map((k) => (k === OTHER ? OTHER : labelOf(colField, k))),
+    rows: headers(rowKeys, rowField),
+    cols: headers(colKeys, colField),
     cells: matrix,
     rowTotals,
     colTotals,
@@ -518,34 +748,9 @@ function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
 }
 
 /**
- * Combine buckets so a total is computed from the underlying values, not from
- * the already-aggregated cells (a total of averages is not an average, and a
- * total of minimums is not the minimum).
+ * Compute a single widget. Returns a null-ish empty WidgetData when the source
+ * collection is missing so the renderer can show a graceful empty state.
  */
-function mergeBuckets(
-  parts: Array<{ sum: number; count: number; min: number | null; max: number | null } | undefined>,
-): { sum: number; count: number; min: number | null; max: number | null } | undefined {
-  const present = parts.filter(
-    (b): b is { sum: number; count: number; min: number | null; max: number | null } =>
-      Boolean(b),
-  );
-  if (present.length === 0) return undefined;
-  return present.reduce(
-    (a, b) => ({
-      sum: a.sum + b.sum,
-      count: a.count + b.count,
-      min:
-        a.min === null ? b.min : b.min === null ? a.min : Math.min(a.min, b.min),
-      max:
-        a.max === null ? b.max : b.max === null ? a.max : Math.max(a.max, b.max),
-    }),
-    { sum: 0, count: 0, min: null as number | null, max: null as number | null },
-  );
-}
-
-const OTHER = "その他";
-
-
 export function computeWidget(
   widget: WidgetSpec,
   collections: CollectionMap,

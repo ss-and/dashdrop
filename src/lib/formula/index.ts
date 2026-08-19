@@ -6,7 +6,8 @@
  * Function constructor, no dynamic import, no user-built RegExp.
  * Formulas are untrusted, tenant-supplied text
  * that we evaluate server-side, so the engine is bounded on every axis
- * (2,000 source characters, 32 nesting levels, 256 arguments per call) and
+ * (2,000 source characters, 32 nesting levels, 256 arguments per call,
+ * 100,000 evaluation steps and 10,000 characters per VALUE) and
  * neither `parseFormula` nor `evaluateFormula` ever throws.
  *
  *   const parsed = parseFormula("{sales} - {cost}");
@@ -15,7 +16,17 @@
  * Coercion rules are documented in ./functions.ts.
  */
 export type { FormulaValue } from "./functions";
-export { FORMULA_FUNCTIONS } from "./functions";
+export {
+  FORMULA_FUNCTIONS,
+  MAX_TEXT_LENGTH,
+  TEXT_TRUNCATION_NOTE,
+  capText,
+  capValue,
+  foldWidthVariants,
+  sanitize,
+  toNumber,
+  todayInJst,
+} from "./functions";
 
 export type {
   FormulaAst,

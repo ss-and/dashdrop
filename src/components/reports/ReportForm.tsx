@@ -3,12 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { Select, Textarea, Label } from "@/components/ui/Input";
+import { Select, Label } from "@/components/ui/Input";
 
 /**
- * Create-a-report form: pick a dashboard, a frequency, and optional recipient
- * emails (comma / newline separated). Submits to POST /api/reports and refreshes
- * the list. API errors are surfaced inline.
+ * レポート作成フォーム: ダッシュボードと頻度を選ぶだけ。POST /api/reports に
+ * 送って一覧を更新する。APIのエラーはその場に出す。
+ *
+ * 宛先メールの入力欄は置かない。メールを送る経路が製品に無く、預かった
+ * アドレスは一度も使われないため（配信はアプリ内通知＋印刷 / PDF）。
  */
 export function ReportForm({
   dashboards,
@@ -18,16 +20,8 @@ export function ReportForm({
   const router = useRouter();
   const [dashboardId, setDashboardId] = useState(dashboards[0]?.id ?? "");
   const [frequency, setFrequency] = useState("weekly");
-  const [recipientsText, setRecipientsText] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  function parseRecipients(): string[] {
-    return recipientsText
-      .split(/[\s,]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,20 +32,14 @@ export function ReportForm({
     setSaving(true);
     setError(null);
     try {
-      const recipients = parseRecipients();
       const res = await fetch("/api/reports", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          dashboardId,
-          frequency,
-          recipients: recipients.length ? recipients : undefined,
-        }),
+        body: JSON.stringify({ dashboardId, frequency }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok)
         throw new Error(json.error ?? "レポートの作成に失敗しました");
-      setRecipientsText("");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "レポートの作成に失敗しました");
@@ -96,19 +84,6 @@ export function ReportForm({
           <option value="weekly">週次</option>
           <option value="monthly">月次</option>
         </Select>
-      </div>
-
-      <div>
-        <Label htmlFor="rf-recipients">宛先メール（任意）</Label>
-        <Textarea
-          id="rf-recipients"
-          value={recipientsText}
-          onChange={(e) => setRecipientsText(e.target.value)}
-          placeholder={"例: taro@example.com, hanako@example.com"}
-        />
-        <p className="mt-1 text-2xs text-ink-faint">
-          カンマまたは改行で区切って複数指定できます。
-        </p>
       </div>
 
       {error && (
