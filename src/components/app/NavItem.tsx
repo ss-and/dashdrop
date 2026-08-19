@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -33,8 +34,40 @@ export function NavItem({
     ? pathname === href
     : pathname === href || pathname.startsWith(`${href}/`);
 
+  /*
+   * The nav's lists are capped in height and scroll independently, so the row
+   * for the page you are actually on can sit outside its list's visible box —
+   * it rendered clipped in half behind the next section, which read as a broken
+   * layout.
+   *
+   * Scrolling is done by hand rather than with `scrollIntoView`, which walks
+   * every scrollable ancestor: it also scrolled the sidebar as a whole and took
+   * the logo and ホーム off the top. This adjusts exactly one container — the
+   * nearest scrollable one — and only when the row is genuinely outside it.
+   */
+  const ref = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    if (!active) return;
+    const el = ref.current;
+    if (!el) return;
+
+    let box: HTMLElement | null = el.parentElement;
+    while (box && box !== document.body) {
+      const overflowY = getComputedStyle(box).overflowY;
+      if (/auto|scroll/.test(overflowY) && box.scrollHeight > box.clientHeight) break;
+      box = box.parentElement;
+    }
+    if (!box || box === document.body) return;
+
+    const row = el.getBoundingClientRect();
+    const view = box.getBoundingClientRect();
+    if (row.top < view.top) box.scrollTop -= view.top - row.top;
+    else if (row.bottom > view.bottom) box.scrollTop += row.bottom - view.bottom;
+  }, [active]);
+
   return (
     <Link
+      ref={ref}
       href={href}
       aria-current={active ? "page" : undefined}
       className={cn(

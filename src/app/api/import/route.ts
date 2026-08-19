@@ -34,6 +34,7 @@ import {
 } from "@/lib/field-types";
 import {
   readSheet,
+  parseWorkbook,
   inferFields,
   sheetWarnings,
   MAX_IMPORT_BYTES,
@@ -197,7 +198,15 @@ export const POST = withAuth(async (req, { user }) => {
   const buffer = await file.arrayBuffer();
   const plan = getPlan(user.workspace.plan);
 
-  // Back-compat single-sheet path.
+  // No explicit `sheets` list. Two very different callers land here:
+  //
+  //   a) a caller that names one sheet's collection/fields — honour that and
+  //      import exactly that one sheet (the original back-compat contract), and
+  //   b) a bare "here is a file" upload, which is what the home drop zone
+  //      sends. That one used to import ONLY THE FIRST TAB and silently throw
+  //      the rest away: drop a 3-tab workbook, get one table, no warning. For
+  //      a product whose front door is "put your Excel here" that is data loss,
+  //      so a bare upload now means every sheet in the file.
   if (selections.length === 0) {
     const nameInput = form.get("collectionName");
     const fieldsInput = form.get("fields");
@@ -209,14 +218,26 @@ export const POST = withAuth(async (req, { user }) => {
         fields = undefined;
       }
     }
-    selections = [
-      {
-        sheetName: "", // first sheet
-        collectionName:
-          typeof nameInput === "string" ? nameInput : undefined,
-        fields,
-      },
-    ];
+    const named = typeof nameInput === "string" && nameInput.trim().length > 0;
+
+    if (named || fields !== undefined) {
+      selections = [
+        {
+          sheetName: "", // first sheet
+          collectionName: typeof nameInput === "string" ? nameInput : undefined,
+          fields,
+        },
+      ];
+    } else {
+      // `parseWorkbook` returns [] for anything it cannot open (and for CSV,
+      // one pseudo-sheet). Falling back to the single unnamed sheet keeps the
+      // existing error handling — an unreadable file still reports properly.
+      const { sheets } = parseWorkbook(buffer);
+      selections =
+        sheets.length > 0
+          ? sheets.map((sheetName) => ({ sheetName }))
+          : [{ sheetName: "" }];
+    }
   }
 
   // Existing slugs for uniqueness across the whole batch.
@@ -228,6 +249,10 @@ export const POST = withAuth(async (req, { user }) => {
   const takenSlugs = takenSlugsWithReserved(existing);
 
   // --- Prepare + validate every selected sheet BEFORE any write ---
+
+  // 拡張子を落としたファイル名。ファイル（ブック）の名前であり、タブが1枚しか
+  // 無いときはシートの名前にもなる。
+  const fileBase = fileName.replace(/\.[^.]+$/, "").trim() || "インポート";
 
   const jobs: PreparedJob[] = [];
   for (const sel of selections) {
@@ -253,8 +278,17 @@ export const POST = withAuth(async (req, { user }) => {
         // 推定フィールドは列そのものなので、名前がそのまま元の列。
         sourceHeader: f.name,
       }));
+    /*
+     * CSV にはタブが無く、SheetJS は読み込んだ内容に "Sheet1" という既定名を
+     * 付ける。それをそのまま使うと、サイドバーに ファイル「売上台帳」→
+     * シート「Sheet1」と並び、利用者が付けた名前がどこにも出なかった。
+     * タブが1枚しか無いときは、ファイル名の方が中身を表している。
+     */
+    const isPlaceholderName = /^sheet\s*\d*$/i.test(sheetName.trim());
     const collectionName =
-      (sel.collectionName && sel.collectionName.trim()) || sheetName || "インポート";
+      (sel.collectionName && sel.collectionName.trim()) ||
+      (selections.length === 1 && isPlaceholderName ? fileBase : sheetName) ||
+      fileBase;
     const slug = uniqueName(slugify(collectionName), takenSlugs);
     takenSlugs.add(slug);
     jobs.push({
@@ -278,7 +312,6 @@ export const POST = withAuth(async (req, { user }) => {
   assertWithinCollectionLimit(plan, existing, jobs.length);
 
   // --- Group all sheets under one Workbook (the file) ---
-  const fileBase = fileName.replace(/\.[^.]+$/, "").trim() || "インポート";
   const workbook = await db.workbook.create({
     data: {
       workspaceId: user.workspace.id,

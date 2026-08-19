@@ -180,6 +180,15 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const URL_RE = /^https?:\/\/[^\s]+$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * Date を「その日付」として YYYY-MM-DD にする。ローカルの年月日をそのまま使うため、
+ * UTC 変換による前後1日のずれが起きない。
+ */
+function toCalendarDate(d: Date): string {
+  const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 export interface CoerceResult {
   ok: boolean;
   value: unknown;
@@ -294,14 +303,24 @@ export function coerceValue(
     }
     case "date": {
       // Accept ISO, Date, or Excel-style already-parsed dates.
+      //
+      // 【回帰防止】ここでは toISOString() を使わない。カレンダー上の日付に
+      // タイムゾーンは無いのに、toISOString() は UTC に変換してから切り出すため、
+      // JST（UTC+9）では「2024/04/01」がローカル0時 → UTC で前日15時となり、
+      // "2024-03-31" として保存されていた（1日ずれ）。年月日はローカル値から
+      // 直接組み立てる。
       if (raw instanceof Date) {
-        return { ok: true, value: raw.toISOString().slice(0, 10) };
+        return { ok: true, value: toCalendarDate(raw) };
       }
       const s = String(raw).trim();
       if (DATE_RE.test(s)) return { ok: true, value: s };
+      // "2024-04-01 09:00:00" のような日付＋時刻は、日付部分がそのまま答え。
+      // 文字列のまま切り出せば、パースのタイムゾーン解釈をまたがずに済む。
+      const iso = s.match(/^(\d{4}-\d{2}-\d{2})[T ]/);
+      if (iso) return { ok: true, value: iso[1] };
       const d = new Date(s);
       if (Number.isNaN(d.getTime())) return { ok: false, value: raw, error: "Invalid date" };
-      return { ok: true, value: d.toISOString().slice(0, 10) };
+      return { ok: true, value: toCalendarDate(d) };
     }
     case "select": {
       const s = String(raw).trim();

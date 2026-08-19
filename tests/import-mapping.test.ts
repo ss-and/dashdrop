@@ -16,6 +16,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createElement } from "react";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import * as XLSX from "xlsx";
 import { ImportWizard } from "@/components/import/ImportWizard";
 import { ApiError } from "@/lib/errors";
 
@@ -696,5 +697,90 @@ describe("ImportWizard — マッピング画面", () => {
       screen.getByRole("button", { name: "取り込んだスプレッドシートを開く" }),
     );
     expect(mocks.push).toHaveBeenCalledWith("/c/col-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ホームにファイルを置いただけの取り込み（シート指定なし）
+// ---------------------------------------------------------------------------
+
+/** 複数タブの .xlsx を組み立てて、ルートが読む分だけの FormData に包む。 */
+function workbookReq(
+  sheets: Record<string, unknown[][]>,
+  extra: Record<string, unknown> = {},
+): { formData: () => Promise<FakeForm> } {
+  const wb = XLSX.utils.book_new();
+  for (const [name, rows] of Object.entries(sheets)) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name);
+  }
+  const out = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+  const file = {
+    name: "受注データ.xlsx",
+    size: out.byteLength,
+    arrayBuffer: async () => out,
+  };
+  const entries: Record<string, unknown> = { file, ...extra };
+  return {
+    formData: async () => ({ get: (key: string) => entries[key] ?? null }),
+  };
+}
+
+/** 作られたスプレッドシートの名前。 */
+function createdCollectionNames(): string[] {
+  return mocks.db.collection.create.mock.calls.map(
+    (call) => (call[0] as { data: { name: string } }).data.name,
+  );
+}
+
+describe("シート指定なしの取り込み — POST /api/import", () => {
+  const TWO_TABS = {
+    受注一覧: [
+      ["日付", "取引先", "金額"],
+      ["2026-01-01", "山田商事", 12000],
+    ],
+    月次サマリー: [
+      ["月", "売上"],
+      ["2026-01", 3000000],
+    ],
+  };
+
+  it("ホームにファイルを置いただけでも、全タブが取り込まれる", async () => {
+    // 元のバグ: sheets が無い＝「1枚目だけ」という後方互換パスに落ち、
+    // 2枚目以降が警告も無く捨てられていた。ホームの入口がまさにこの
+    // 送り方をするので、複数タブのファイルは静かに欠けたまま取り込まれていた。
+    const handler = await importRoute();
+
+    const res = await handler(workbookReq(TWO_TABS), ctx());
+
+    expect(res.ok).toBe(true);
+    expect(createdCollectionNames()).toEqual(["受注一覧", "月次サマリー"]);
+  });
+
+  it("シート名を明示した呼び出しは、そのシートだけを取り込む", async () => {
+    const handler = await importRoute();
+
+    const res = await handler(
+      workbookReq(TWO_TABS, {
+        sheets: JSON.stringify([{ sheetName: "月次サマリー" }]),
+      }),
+      ctx(),
+    );
+
+    expect(res.ok).toBe(true);
+    expect(createdCollectionNames()).toEqual(["月次サマリー"]);
+  });
+
+  it("名前を指定した1枚だけの取り込み（従来の契約）は変わらない", async () => {
+    // collectionName / fields を送る呼び出しは「1枚目を、この名前で」という
+    // 意味なので、全タブ取り込みに巻き込まない。
+    const handler = await importRoute();
+
+    const res = await handler(
+      workbookReq(TWO_TABS, { collectionName: "受注データ" }),
+      ctx(),
+    );
+
+    expect(res.ok).toBe(true);
+    expect(createdCollectionNames()).toEqual(["受注データ"]);
   });
 });

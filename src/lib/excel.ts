@@ -209,7 +209,21 @@ function toWorkbook(
     const { text } = decodeDelimitedText(data);
     return XLSX.read(text, {
       type: "string",
-      cellDates: true,
+      /*
+       * 【回帰防止】CSV はセルを解釈させず、書かれたままの文字列で受け取る。
+       *
+       * SheetJS の CSV パスは日付文字列を JS の `new Date(...)` に渡すため、
+       * 仕様どおり「日付のみ」は UTC、「日付＋時刻」はローカルとして解釈される。
+       * JST では 2024-04-01 が UTC 0時＝ローカル 9時になり、取り込み結果が
+       * "2024-04-01 09:00:00" に化けていた（日本の実務CSVで最も多い形が壊れる）。
+       * しかも Date になった時点で "2024-04-01" と "2024-04-01 09:00:00" は
+       * 同じ値になり、後段では区別できない。
+       *
+       * `cellDates: false` にすると今度は日付シリアル＋既定書式に落ちて
+       * "4/1/24" が復活するので、`raw` で文字列のまま止めるのが唯一の正解。
+       * カレンダー上の日付にタイムゾーンは無い。正規化は coerceValue に任せる。
+       */
+      raw: true,
       sheetRows,
     });
   }
@@ -263,10 +277,44 @@ function canonicalDate(d: Date): string {
  * 1セルを取り込み用の値にする。日付セルだけは書式に依らず正規化し、それ以外は
  * 従来どおり表示書式（`raw:false` 相当）を使う。
  */
+/**
+ * 日付「らしい」テキストを YYYY-MM-DD（時刻があれば + HH:mm:ss）に揃える。
+ *
+ * CSV は `raw: true` で読むので、セルは書かれたままの文字列で届く。ここで
+ * 文字列のまま整えることで、`2026/04/01` も `2026.4.1` も同じ正規形になり、
+ * Date を経由しないのでタイムゾーンによるずれが原理的に起きない。
+ *
+ * 判定は完全一致のみ。「2024-01-01〜2024-03-31」のような文章や、日付を含む
+ * ただのテキストには触れない。
+ */
+function normalizeDateText(s: string): string | null {
+  const m = s.match(
+    /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/,
+  );
+  if (!m) return null;
+
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+
+  const date = `${y}-${pad2(mo)}-${pad2(d)}`;
+  if (m[4] === undefined) return date;
+
+  const [h, mi, sec] = [Number(m[4]), Number(m[5]), Number(m[6] ?? 0)];
+  if (h > 23 || mi > 59 || sec > 59) return null;
+  if (h === 0 && mi === 0 && sec === 0) return date;
+  return `${date} ${pad2(h)}:${pad2(mi)}:${pad2(sec)}`;
+}
+
 function cellValue(cell: XLSX.CellObject | undefined): unknown {
   if (!cell || cell.t === "z") return null;
   if (cell.v === undefined || cell.v === null) return null;
   if (cell.v instanceof Date) return canonicalDate(cell.v);
+  // CSV（raw 読み）の文字列セル。日付表記だけ正規形に揃える。
+  if (typeof cell.v === "string") {
+    const trimmed = cell.v.trim();
+    if (trimmed === "") return null;
+    return normalizeDateText(trimmed) ?? trimmed;
+  }
   const formatted = XLSX.utils.format_cell(cell);
   return formatted === "" ? null : formatted;
 }
