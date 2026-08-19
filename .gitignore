@@ -41,5 +41,9 @@ yarn-error.log*
 tests/_*.test.ts
 tests/_*.test.tsx
 
+# 使い捨ての再現スクリプト（実DB相手に挙動を確かめるためのもの）
+.probe*.ts
+.probe*.mts
+
 # throwaway E2E scripts
 _*.mjs
