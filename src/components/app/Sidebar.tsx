@@ -3,16 +3,18 @@ import { db } from "@/lib/db";
 import { Logo } from "@/components/ui/Logo";
 import type { CurrentUser } from "@/lib/auth";
 import { CRM_SLUGS } from "@/lib/crm-objects";
+import { HR_SLUGS } from "@/lib/hr-objects";
 import { CollectionIcon, NavIcon } from "./icons";
 import { NavItem } from "./NavItem";
 import { CreateCrmButton } from "./CreateCrmButton";
+import { CreateHrButton } from "./CreateHrButton";
 
 /**
  * Left navigation. Server component: reads the workspace's collections directly
  * so it never depends on a client fetch. Shared by every /(app) page.
  *
  * Shape: ホーム → スプレッドシート（ファイル＞シートの入れ子）→ ダッシュボード、
- * 最下段に顧客データベース、その下に 設定 / プラン。
+ * 最下段に顧客データベースと人事データベース、その下に 設定 / プラン。
  * Top-level links are deliberately kept to a
  * single item so the sidebar reads as a few calm groups instead of a long list;
  * secondary destinations (取り込み / ギャラリー) live in their section header.
@@ -51,8 +53,13 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
   const crmSheets = collections
     .filter((c) => crmOrder.has(c.slug))
     .sort((a, b) => (crmOrder.get(a.slug) ?? 0) - (crmOrder.get(b.slug) ?? 0));
-  const crmIds = new Set(crmSheets.map((c) => c.id));
-  const rest = collections.filter((c) => !crmIds.has(c.id));
+  const hrOrder = new Map<string, number>(HR_SLUGS.map((s, i) => [s, i]));
+  const hrSheets = collections
+    .filter((c) => hrOrder.has(c.slug))
+    .sort((a, b) => (hrOrder.get(a.slug) ?? 0) - (hrOrder.get(b.slug) ?? 0));
+
+  const masterIds = new Set([...crmSheets, ...hrSheets].map((c) => c.id));
+  const rest = collections.filter((c) => !masterIds.has(c.id));
 
   // Group sheets under their workbook (file); loose sheets have no workbook.
   const byWorkbook = new Map<string, typeof collections>();
@@ -193,34 +200,17 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
       </nav>
 
       {/*
-        顧客データベース — the master records, pinned to the bottom of the rail
-        (Salesforce keeps its objects reachable at a fixed spot rather than
-        scrolling with the file tree). Clicking an object name opens that DB.
+        Master databases — pinned to the bottom of the rail (Salesforce keeps its
+        objects at a fixed spot rather than scrolling with the file tree).
+        Clicking an object name opens that database.
       */}
-      <div className="shrink-0 border-t border-ink-line px-2 py-2">
-        <div className="flex items-center px-3 pb-1.5">
-          <span className="text-2xs font-semibold uppercase tracking-wider text-ink-muted">
-            顧客データベース
-          </span>
-        </div>
-
-        {crmSheets.length > 0 ? (
-          <ul className="max-h-56 space-y-0.5 overflow-y-auto">
-            {crmSheets.map((c) => (
-              <SheetLink
-                key={c.id}
-                id={c.id}
-                icon={c.icon}
-                name={c.name}
-                count={c._count.records}
-              />
-            ))}
-          </ul>
-        ) : (
-          <div className="px-1 pb-1">
-            <CreateCrmButton />
-          </div>
-        )}
+      <div className="max-h-72 shrink-0 space-y-2 overflow-y-auto border-t border-ink-line px-2 py-2">
+        <MasterGroup label="顧客データベース" sheets={crmSheets}>
+          <CreateCrmButton />
+        </MasterGroup>
+        <MasterGroup label="人事データベース" sheets={hrSheets}>
+          <CreateHrButton />
+        </MasterGroup>
       </div>
 
       <div className="border-t border-ink-line p-2">
@@ -228,6 +218,46 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
         <NavLink href="/pricing" icon="sparkles" label="プラン" />
       </div>
     </aside>
+  );
+}
+
+/**
+ * One master database in the pinned bottom rail: its objects as rows, or the
+ * button that creates them when the workspace hasn't set it up yet.
+ */
+function MasterGroup({
+  label,
+  sheets,
+  children,
+}: {
+  label: string;
+  sheets: { id: string; icon: string; name: string; _count: { records: number } }[];
+  /** The "create this database" action, shown only when it's missing. */
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="flex items-center px-3 pb-1.5">
+        <span className="text-2xs font-semibold uppercase tracking-wider text-ink-muted">
+          {label}
+        </span>
+      </div>
+      {sheets.length > 0 ? (
+        <ul className="space-y-0.5">
+          {sheets.map((c) => (
+            <SheetLink
+              key={c.id}
+              id={c.id}
+              icon={c.icon}
+              name={c.name}
+              count={c._count.records}
+            />
+          ))}
+        </ul>
+      ) : (
+        <div className="px-1 pb-1">{children}</div>
+      )}
+    </div>
   );
 }
 

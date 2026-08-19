@@ -9,9 +9,9 @@ import { cn } from "@/lib/utils";
  * Salesforce-style app launcher (the waffle button in the far-left of the topbar).
  *
  * DashDrop is the master customer database, so the launcher is the single place
- * that lists every "object": the CRM core (顧客/担当者/商談/活動), the sheets of
- * each imported file, loose spreadsheets and saved dashboards — with ホーム
- * pinned at the very top.
+ * that lists every "object": the CRM core (顧客/担当者/商談/請求書/活動), the HR
+ * core (部署/社員/勤怠/休暇申請/評価), the sheets of each imported file, loose
+ * spreadsheets and saved dashboards — with ホーム pinned at the very top.
  *
  * The nav payload is fetched once by the Topbar and handed down as props so the
  * launcher and the object tab strip never double-fetch /api/nav.
@@ -39,6 +39,7 @@ export interface NavDashboard {
 
 export interface NavData {
   crm: NavSheet[];
+  hr: NavSheet[];
   workbooks: NavWorkbook[];
   looseSheets: NavSheet[];
   dashboards: NavDashboard[];
@@ -162,7 +163,8 @@ export function AppLauncher({
     if (!data) return null;
     const q = query.trim();
     return {
-      crm: data.crm.filter((c) => matches(c.name, q)),
+      crm: (data.crm ?? []).filter((c) => matches(c.name, q)),
+      hr: (data.hr ?? []).filter((c) => matches(c.name, q)),
       workbooks: data.workbooks
         .map((w) => ({
           ...w,
@@ -182,6 +184,7 @@ export function AppLauncher({
     filtered !== null &&
     !homeVisible &&
     filtered.crm.length === 0 &&
+    filtered.hr.length === 0 &&
     filtered.workbooks.length === 0 &&
     filtered.looseSheets.length === 0 &&
     filtered.dashboards.length === 0;
@@ -273,6 +276,25 @@ export function AppLauncher({
                       ホームで設定する
                     </Link>
                   </div>
+                )}
+
+                {/* 人事データベース（HRコア） */}
+                {filtered.hr.length > 0 && (
+                  <>
+                    <SectionTitle>人事データベース</SectionTitle>
+                    <div className="grid grid-cols-2 gap-1">
+                      {filtered.hr.map((c) => (
+                        <Tile
+                          key={c.id}
+                          href={`/c/${c.id}`}
+                          icon={c.icon}
+                          name={c.name}
+                          meta={`${c.recordCount} 件`}
+                          onClick={close}
+                        />
+                      ))}
+                    </div>
+                  </>
                 )}
 
                 {/* 取り込んだファイル（ワークブック単位） */}

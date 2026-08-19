@@ -43,6 +43,12 @@ interface SheetState {
   selected: boolean;
 }
 
+interface NotionDatabase {
+  id: string;
+  title: string;
+  url: string;
+}
+
 const ALLOWED = ".xlsx,.xls,.csv";
 
 function renderCell(value: unknown): string {
@@ -63,10 +69,20 @@ export function ImportWizard() {
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Import source: a local file, or a public/link-shared Google Sheets URL.
-  const [source, setSource] = useState<"file" | "gsheets">("file");
+  // Import source: a local file, a public/link-shared Google Sheets URL, or a
+  // Notion database read through the workspace's stored integration token.
+  const [source, setSource] = useState<"file" | "gsheets" | "notion">("file");
   const [gsheetsUrl, setGsheetsUrl] = useState("");
   const [gsheetsLoading, setGsheetsLoading] = useState(false);
+
+  // Notion has no mapping step: the database schema already carries the types,
+  // so picking a database commits the import directly.
+  const [notionDbs, setNotionDbs] = useState<NotionDatabase[] | null>(null);
+  const [notionDbId, setNotionDbId] = useState("");
+  const [notionName, setNotionName] = useState("");
+  const [notionLoading, setNotionLoading] = useState(false);
+  const [notionImporting, setNotionImporting] = useState(false);
+  const [notionNotConnected, setNotionNotConnected] = useState(false);
 
   const step: "upload" | "map" = sheets ? "map" : "upload";
   const selectedCount = sheets?.filter((s) => s.selected).length ?? 0;
@@ -77,6 +93,10 @@ export function ImportWizard() {
     setError(null);
     setSource("file");
     setGsheetsUrl("");
+    setNotionDbs(null);
+    setNotionDbId("");
+    setNotionName("");
+    setNotionNotConnected(false);
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -152,6 +172,63 @@ export function ImportWizard() {
       setError("通信エラーが発生しました。しばらくして再度お試しください。");
     } finally {
       setGsheetsLoading(false);
+    }
+  }
+
+  /** Load the databases the workspace's Notion token can see. */
+  async function loadNotionDatabases() {
+    setError(null);
+    setNotionNotConnected(false);
+    setNotionLoading(true);
+    try {
+      const res = await fetch("/api/integrations/notion/databases");
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.ok) {
+        // 400 means "no token stored" — offer the settings link instead of an
+        // error the user cannot act on here.
+        if (res.status === 400) setNotionNotConnected(true);
+        else setError(body?.error ?? "Notionのデータベース一覧を取得できませんでした");
+        return;
+      }
+      const list = (body.data.databases ?? []) as NotionDatabase[];
+      setNotionDbs(list);
+      if (list.length > 0) {
+        setNotionDbId(list[0].id);
+        setNotionName(list[0].title);
+      }
+    } catch {
+      setError("通信エラーが発生しました。しばらくして再度お試しください。");
+    } finally {
+      setNotionLoading(false);
+    }
+  }
+
+  /** Commit a Notion database as a new spreadsheet. */
+  async function runNotionImport() {
+    if (!notionDbId) return;
+    setError(null);
+    setSource("notion");
+    setNotionImporting(true);
+    try {
+      const res = await fetch("/api/import/notion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          databaseId: notionDbId,
+          collectionName: notionName.trim() || undefined,
+        }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.ok) {
+        setError(body?.error ?? "Notionからの取り込みに失敗しました");
+        return;
+      }
+      router.push(`/c/${body.data.collectionId}`);
+      router.refresh();
+    } catch {
+      setError("通信エラーが発生しました。しばらくして再度お試しください。");
+    } finally {
+      setNotionImporting(false);
     }
   }
 
@@ -306,6 +383,86 @@ export function ImportWizard() {
                 共有設定を『リンクを知っている全員（閲覧者）』にしてください。
               </p>
             </div>
+
+            <div className="mt-4 rounded-lg border border-ink-line bg-paper-raised p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-khaki-100 text-khaki-700">
+                  <NavIcon name="folder" className="h-4 w-4" />
+                </span>
+                <div>
+                  <p className="text-sm font-medium text-ink">Notionから取り込み</p>
+                  <p className="text-xs text-ink-muted">
+                    データベースを選ぶだけ（列の型はNotionの設定を引き継ぎます）
+                  </p>
+                </div>
+              </div>
+
+              {notionNotConnected ? (
+                <p className="text-sm text-ink-muted">
+                  <a
+                    href="/settings"
+                    className="text-khaki-700 underline underline-offset-2 hover:text-khaki-800"
+                  >
+                    Notionを接続してください
+                  </a>
+                  （設定画面でインテグレーション トークンを登録します）
+                </p>
+              ) : notionDbs === null ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => void loadNotionDatabases()}
+                  disabled={notionLoading}
+                >
+                  {notionLoading ? "読み込み中…" : "データベースを読み込む"}
+                </Button>
+              ) : notionDbs.length === 0 ? (
+                <p className="text-sm text-ink-muted">
+                  表示できるデータベースがありません。Notionでページを開き、「…」→「接続」からインテグレーションに共有してください。
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <Label htmlFor="notion-db">データベース</Label>
+                    <Select
+                      id="notion-db"
+                      value={notionDbId}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        setNotionDbId(id);
+                        const hit = notionDbs.find((d) => d.id === id);
+                        setNotionName(hit ? hit.title : "");
+                      }}
+                      disabled={notionImporting}
+                    >
+                      {notionDbs.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.title}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="notion-name">スプレッドシート名</Label>
+                    <Input
+                      id="notion-name"
+                      value={notionName}
+                      onChange={(e) => setNotionName(e.target.value)}
+                      placeholder="スプレッドシート名を入力"
+                      disabled={notionImporting}
+                    />
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      onClick={() => void runNotionImport()}
+                      disabled={notionImporting || !notionDbId}
+                    >
+                      <NavIcon name="download" className="h-4 w-4" />
+                      {notionImporting ? "取り込み中…" : "取り込む"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
           </CardBody>
         </Card>
       )}
@@ -433,7 +590,7 @@ export function ImportWizard() {
 
           <div className="flex items-center justify-between">
             <Button variant="ghost" onClick={reset} disabled={importing}>
-              {source === "gsheets" ? "別のソースを選ぶ" : "別のファイルを選ぶ"}
+              {source === "file" ? "別のファイルを選ぶ" : "別のソースを選ぶ"}
             </Button>
             <Button onClick={runImport} disabled={importing || selectedCount === 0}>
               <NavIcon name="download" className="h-4 w-4" />

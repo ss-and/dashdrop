@@ -12,10 +12,16 @@ import { GlobalSearch } from "@/components/search/GlobalSearch";
 import type { CurrentUser } from "@/lib/auth";
 
 /** How many extra (non-CRM) sheets appear as object tabs. */
+/** マスター（顧客+人事）でタブ列を埋め尽くさないための上限。 */
+const MAX_MASTER_TABS = 6;
+/** マスターの後ろに並べる、取り込んだシートの上限。 */
 const EXTRA_TABS = 4;
 
 /**
- * Builds the object tab strip: ホーム + CRM objects + a few more sheets.
+ * Builds the object tab strip: ホーム + マスター（顧客→人事）+ a few more sheets.
+ *
+ * タブが多いと迷子になる、という指摘を受けて上限を設けている。全部を見るのは
+ * ランチャー（ワッフル）と左のサイドバーの役目なので、ここは増やしすぎないこと。
  *
  * アラート and レポート are intentionally NOT emitted here — they were dropped
  * from the navigation on purpose, so do not add tabs for them back.
@@ -24,14 +30,23 @@ function buildNavItems(data: NavData | null): ObjectNavItem[] {
   const items: ObjectNavItem[] = [{ href: "/home", label: "ホーム" }];
   if (!data) return items;
 
-  for (const c of data.crm) {
+  // 顧客 → 人事 の順。合計 MAX_MASTER_TABS 件まで。
+  const masters = [...(data.crm ?? []), ...(data.hr ?? [])].slice(
+    0,
+    MAX_MASTER_TABS,
+  );
+  for (const c of masters) {
     items.push({ href: `/c/${c.id}`, label: c.name });
   }
+
+  const masterIds = new Set(masters.map((c) => c.id));
 
   const extras = [
     ...data.workbooks.flatMap((w) => w.sheets),
     ...data.looseSheets,
-  ].slice(0, EXTRA_TABS);
+  ]
+    .filter((s) => !masterIds.has(s.id))
+    .slice(0, EXTRA_TABS);
   for (const s of extras) {
     items.push({ href: `/c/${s.id}`, label: s.name });
   }

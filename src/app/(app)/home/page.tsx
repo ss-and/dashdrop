@@ -12,6 +12,7 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { CRM_OBJECTS, CRM_SLUGS } from "@/lib/crm-objects";
+import { HR_OBJECTS, HR_SLUGS } from "@/lib/hr-objects";
 import type { SelectOption } from "@/lib/field-types";
 import { Topbar } from "@/components/app/Topbar";
 import { GettingStarted } from "@/components/help/GettingStarted";
@@ -48,19 +49,22 @@ export default async function HomePage() {
 
   const workspaceId = user.workspace.id;
 
+  /** 顧客データベース + 人事データベース — ホームでは「マスター」として一括で扱う。 */
+  const MASTER_SLUGS: string[] = [...CRM_SLUGS, ...HR_SLUGS];
+
   /* ------------------------------ base loading ----------------------------- */
 
-  const [crmCollections, otherCollections, dashboards, workbooks] =
+  const [masterCollections, otherCollections, dashboards, workbooks] =
     await Promise.all([
       db.collection.findMany({
-        where: { workspaceId, slug: { in: CRM_SLUGS } },
+        where: { workspaceId, slug: { in: MASTER_SLUGS } },
         include: {
           fields: { orderBy: { position: "asc" } },
           _count: { select: { records: true } },
         },
       }),
       db.collection.findMany({
-        where: { workspaceId, slug: { notIn: CRM_SLUGS } },
+        where: { workspaceId, slug: { notIn: MASTER_SLUGS } },
         orderBy: { position: "asc" },
         select: {
           id: true,
@@ -86,9 +90,9 @@ export default async function HomePage() {
       }),
     ]);
 
-  type CrmCollection = (typeof crmCollections)[number];
-  const bySlug = new Map<string, CrmCollection>(
-    crmCollections.map((c) => [c.slug, c]),
+  type MasterCollection = (typeof masterCollections)[number];
+  const bySlug = new Map<string, MasterCollection>(
+    masterCollections.map((c) => [c.slug, c]),
   );
 
   const accounts = bySlug.get("accounts");
@@ -268,6 +272,20 @@ export default async function HomePage() {
     folder: true,
   }));
 
+  const hrEntries: SheetEntry[] = HR_OBJECTS.flatMap((obj) => {
+    const c = bySlug.get(obj.slug);
+    if (!c) return [];
+    return [
+      {
+        id: c.id,
+        name: c.name,
+        icon: c.icon,
+        meta: `${c._count.records.toLocaleString()} 件`,
+        href: `/c/${c.id}`,
+      },
+    ];
+  });
+
   const looseEntries: SheetEntry[] = otherCollections
     .filter((c) => !c.workbookId)
     .map((c) => ({
@@ -280,6 +298,7 @@ export default async function HomePage() {
 
   const groups: SheetGroup[] = [
     { key: "crm", label: "顧客データベース", entries: crmEntries },
+    { key: "hr", label: "人事データベース", entries: hrEntries },
     { key: "files", label: "取り込んだファイル", entries: fileEntries },
     { key: "loose", label: "その他", entries: looseEntries },
   ];
@@ -287,13 +306,15 @@ export default async function HomePage() {
   /* --------------------------------- render -------------------------------- */
 
   const crmHref = accounts ? `/c/${accounts.id}` : null;
-  const crmRecords = crmCollections.reduce(
+  const masterRecords = masterCollections.reduce(
     (sum, c) => sum + c._count.records,
     0,
   );
-  /** 本当に新しいワークスペース — CRM のデータも、取り込んだファイルも無い。 */
+  /** 本当に新しいワークスペース — マスターのデータも、取り込んだファイルも無い。 */
   const isNewWorkspace =
-    crmRecords === 0 && workbooks.length === 0 && otherCollections.length === 0;
+    masterRecords === 0 &&
+    workbooks.length === 0 &&
+    otherCollections.length === 0;
 
   return (
     <>

@@ -13,7 +13,7 @@ import {
   resolveCollectionRecords,
   type EngineCollection,
 } from "./relations";
-import { createNotification, sendSlack, emailConfigured } from "./notify";
+import { createNotification, sendWorkspaceSlack, emailConfigured } from "./notify";
 import { displayValue } from "./field-types";
 import type { Measure, Filter, WidgetSpec, KpiData } from "./widgets";
 
@@ -140,7 +140,16 @@ export async function evaluateWorkspaceAlerts(
       });
 
       if (rule.channel === "slack") {
-        await sendSlack(`:rotating_light: ${body}`);
+        // Goes to the channel this workspace connected in 設定 → 連携.
+        await sendWorkspaceSlack(workspaceId, {
+          title: `🚨 アラート: ${rule.name}`,
+          body,
+          url: `/c/${rule.collectionId}`,
+          fields: [
+            { label: "現在の値", value: valLabel },
+            { label: "しきい値", value: `${rule.threshold}${unit}` },
+          ],
+        });
       }
       // email channel: delivered in-app for now; real SMTP send when configured.
       void emailConfigured;

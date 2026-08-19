@@ -7,6 +7,9 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardHeader, CardTitle, CardBody } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { NavIcon } from "@/components/app/icons";
+import { SlackCard } from "@/components/settings/SlackCard";
+import { NotionCard } from "@/components/settings/NotionCard";
+import { getIntegration } from "@/lib/integrations";
 
 export const metadata = { title: "設定" };
 
@@ -32,6 +35,9 @@ export default async function SettingsPage() {
   if (!user) redirect("/login");
 
   const plan = getPlan(user.workspace.plan);
+  // Masked summary only — the sealed webhook URL never reaches the client.
+  const slack = await getIntegration(user.workspace.id, "slack");
+  const notion = await getIntegration(user.workspace.id, "notion");
 
   return (
     <>
@@ -83,6 +89,13 @@ export default async function SettingsPage() {
               </div>
             </CardBody>
           </Card>
+
+          {/* Integrations */}
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-ink-muted">連携</h2>
+            <SlackCard initial={slack} />
+            <NotionCard initial={notion} />
+          </section>
 
           {/* Session */}
           <Card>
