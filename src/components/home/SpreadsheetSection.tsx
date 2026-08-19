@@ -16,6 +16,11 @@ export interface SheetEntry {
   icon?: string;
   /** 「128 件」「3 シート」 — already formatted. */
   meta?: string;
+  /**
+   * 中身の件数（シートなら行数、ファイルならシート数）。ホームは「中身のある
+   * ものだけ」を出すのに使う。表示には meta を使う。
+   */
+  recordCount?: number;
   href: string;
   folder?: boolean;
 }

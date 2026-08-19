@@ -13,6 +13,11 @@ export interface SummaryTile {
   value: string;
   /** Small caption under the value. */
   hint?: string;
+  /**
+   * 表示前の生の数値。ホームが「この帯を出す意味があるか」を判断するのに使う
+   * （全部ゼロの帯は情報ではなく雑音なので出さない）。表示には value を使う。
+   */
+  rawValue: number;
   href: string;
 }
 

@@ -1,11 +1,23 @@
 /**
- * ホーム — the workspace's front door, in three blocks:
+ * ホーム — Excel を置く場所。
  *
- *   1. 今日の数字 — at most four KPIs, the first one the band's subject,
- *   2. スプレッドシート — 顧客データベース と 取り込んだファイル を、同じ「行」で,
- *   3. ダッシュボード — 保存済みダッシュボードへのリンク一覧。
+ * 利用者の指摘でここまで削った:
+ * 「文字や見る機能が多すぎて、わかりづらくなっている気がするし、
+ *   結局Excelをもっと複雑化したみたいな印象かな」
+ * 「最初のホームはExcelをドロップしよう！みたいなのでもいいのかな」
  *
- * 中身（表・分析）はすべて 1 クリック先にあるので、ホームは入口に徹する。
+ * 以前は「今日の数字 / 売上サマリー / スプレッドシート / ダッシュボード」の
+ * 4段積みで、この製品の入口である「Excelを入れる」がどこにも無かった。
+ * 数字もシート一覧も、中身がある人には要るが、無い人には空の枠でしかない。
+ *
+ * 今の構成:
+ *   1. Excel を置く場所（常に最上段・常に主役）
+ *   2. 以下は「中身があるときだけ」出す — 無いものは枠ごと出さない
+ *        ダッシュボード → スプレッドシート → 今日の数字
+ *
+ * 順番も入れ替えてある。取り込んだ人がまず見たいのはグラフで、数字の帯は
+ * 顧客データベースを使っている人にしか意味が無いため最後に置く。
+ *
  * Server component: everything is loaded with workspace-scoped Prisma queries.
  */
 import { redirect } from "next/navigation";
@@ -16,7 +28,7 @@ import { HR_OBJECTS } from "@/lib/hr-objects";
 import { MASTER_SLUGS } from "@/lib/master-objects";
 import type { SelectOption } from "@/lib/field-types";
 import { Topbar } from "@/components/app/Topbar";
-import { GettingStarted } from "@/components/help/GettingStarted";
+import { ExcelDropZone } from "@/components/home/ExcelDropZone";
 import { SummaryBand, type SummaryTile } from "@/components/home/SummaryBand";
 import {
   RevenueSummary,
@@ -29,8 +41,6 @@ import {
   type SheetGroup,
 } from "@/components/home/SpreadsheetSection";
 import { DashboardSection } from "@/components/home/DashboardSection";
-import { SetupMasterButton } from "@/components/home/SetupMasterButton";
-import { SetupCrmButton } from "@/components/home/SetupCrmButton";
 
 function toNumber(v: unknown): number {
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
@@ -214,6 +224,7 @@ export default async function HomePage() {
       key: "pipeline",
       label: "進行中の商談金額",
       value: yen(openAmount),
+      rawValue: openAmount,
       hint: `${openCount.toLocaleString()} 件`,
       href: `/c/${opportunities.id}`,
     });
@@ -221,6 +232,7 @@ export default async function HomePage() {
       key: "won",
       label: "受注金額",
       value: yen(wonAmount),
+      rawValue: wonAmount,
       hint: `${wonCount.toLocaleString()} 件`,
       href: `/c/${opportunities.id}`,
     });
@@ -230,6 +242,7 @@ export default async function HomePage() {
       key: "unpaid",
       label: "未入金",
       value: yen(unpaidAmount),
+      rawValue: unpaidAmount,
       hint:
         overdueStat.count > 0
           ? `うち期限超過 ${overdueStat.count.toLocaleString()} 件`
@@ -242,10 +255,14 @@ export default async function HomePage() {
       key: "accounts",
       label: "顧客数",
       value: accounts._count.records.toLocaleString(),
+      rawValue: accounts._count.records,
       href: `/c/${accounts.id}`,
     });
   }
+  // ゼロばかりの数字は情報ではなく雑音。1つでも中身のある数字があるときだけ
+  // 帯ごと出す（新規ワークスペースで ¥0 ¥0 ¥0 0 が並ぶのを避ける）。
   const tiles = candidates.slice(0, 4);
+  const hasRealNumbers = candidates.some((t) => t.rawValue > 0);
 
   /* --------------------------- B) スプレッドシート -------------------------- */
 
@@ -258,6 +275,7 @@ export default async function HomePage() {
         name: c.name,
         icon: c.icon,
         meta: `${c._count.records.toLocaleString()} 件`,
+        recordCount: c._count.records,
         href: `/c/${c.id}`,
       },
     ];
@@ -267,6 +285,7 @@ export default async function HomePage() {
     id: w.id,
     name: w.name,
     meta: `${w._count.collections.toLocaleString()} シート`,
+    recordCount: w._count.collections,
     href: `/f/${w.id}`,
     folder: true,
   }));
@@ -280,6 +299,7 @@ export default async function HomePage() {
         name: c.name,
         icon: c.icon,
         meta: `${c._count.records.toLocaleString()} 件`,
+        recordCount: c._count.records,
         href: `/c/${c.id}`,
       },
     ];
@@ -292,58 +312,52 @@ export default async function HomePage() {
       name: c.name,
       icon: c.icon,
       meta: `${c._count.records.toLocaleString()} 件`,
+      recordCount: c._count.records,
       href: `/c/${c.id}`,
     }));
 
   /**
-   * まだ入れていないマスターDB。「はじめかた」は本当に空のワークスペースにしか
-   * 出ないので、片方だけ入れた状態でもう片方を作る導線がここに要る（人事だけ
-   * 入れた瞬間に顧客DBの作成手段が画面から消えていた）。
+   * ホームに出すのは「中身のあるシート」だけ。
+   *
+   * 登録直後は 顧客/担当者/商談/請求書/活動 と、初期作成の 顧客問い合わせ/タスク
+   * が 0 件のまま並び、7 行の「0 件」が最初に見えるものになっていた。
+   * ここは一覧ではなく要約なので、空のものは出さない。すべてのシートは
+   * 左のサイドバーとランチャーから今までどおり辿れる。
    */
-  const missingMasters = [
-    crmEntries.length === 0
-      ? { kind: "crm" as const, label: "顧客データベース", note: "顧客・担当者・商談・請求書・活動" }
-      : null,
-    hrEntries.length === 0
-      ? { kind: "hr" as const, label: "人事データベース", note: "部署・社員・勤怠・休暇申請・評価" }
-      : null,
-  ].filter((m): m is NonNullable<typeof m> => m !== null);
+  const withRows = (entries: SheetEntry[]) =>
+    entries.filter((e) => (e.recordCount ?? 0) > 0);
 
   const groups: SheetGroup[] = [
-    { key: "crm", label: "顧客データベース", entries: crmEntries },
-    { key: "hr", label: "人事データベース", entries: hrEntries },
+    { key: "crm", label: "顧客データベース", entries: withRows(crmEntries) },
+    { key: "hr", label: "人事データベース", entries: withRows(hrEntries) },
     { key: "files", label: "取り込んだファイル", entries: fileEntries },
-    { key: "loose", label: "その他", entries: looseEntries },
+    { key: "loose", label: "その他", entries: withRows(looseEntries) },
   ];
 
   /* --------------------------------- render -------------------------------- */
-
-  const crmHref = accounts ? `/c/${accounts.id}` : null;
-  const masterRecords = masterCollections.reduce(
-    (sum, c) => sum + c._count.records,
-    0,
-  );
-  /** 本当に新しいワークスペース — マスターのデータも、取り込んだファイルも無い。 */
-  const isNewWorkspace =
-    masterRecords === 0 &&
-    workbooks.length === 0 &&
-    otherCollections.length === 0;
 
   return (
     <>
       <Topbar user={user} title="ホーム" />
       <main className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto max-w-6xl space-y-8">
-          <h2 className="text-xl font-semibold text-ink">
-            {user.workspace.name}
-          </h2>
+        <div className="mx-auto max-w-4xl space-y-8">
+          {/* 1) 主役。中身の有無に関わらず、常にここ。 */}
+          <ExcelDropZone />
 
-          {/* A) 今日の数字 */}
-          {tiles.length > 0 && (
+          {/* 2) 以下は「あるときだけ」。空の枠は、それ自体が雑音になる。 */}
+          {dashboards.length > 0 && (
+            <DashboardSection dashboards={dashboards} />
+          )}
+
+          {groups.some((g) => g.entries.length > 0) && (
+            <SpreadsheetSection groups={groups} />
+          )}
+
+          {hasRealNumbers && tiles.length > 0 && (
             <div className="space-y-3">
               <h2 className="section-title">今日の数字</h2>
               <SummaryBand tiles={tiles} />
-              {/* 売上サマリーは、請求書に実データがあるときだけ。空の枠は置かない。 */}
+              {/* 売上サマリーは、請求書に実データがあるときだけ。 */}
               {invoices && invoiceRecords.length > 0 && (
                 <RevenueSummary
                   steps={revenueSteps}
@@ -352,37 +366,6 @@ export default async function HomePage() {
                 />
               )}
             </div>
-          )}
-
-          {/* B) スプレッドシート */}
-          <SpreadsheetSection groups={groups}>
-            {missingMasters.length > 0 && !isNewWorkspace && (
-              <div className="flex flex-wrap items-start gap-6 rounded-md border border-ink-line bg-paper-sunken px-4 py-3">
-                {missingMasters.map((m) => (
-                  <div key={m.kind} className="space-y-1.5">
-                    <p className="text-sm font-medium text-ink">{m.label}</p>
-                    <p className="text-xs text-ink-muted">{m.note}</p>
-                    <SetupMasterButton
-                      kind={m.kind}
-                      label={`${m.label}を作成`}
-                      variant="secondary"
-                      size="sm"
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-          </SpreadsheetSection>
-
-          {/* C) ダッシュボード */}
-          <DashboardSection dashboards={dashboards} />
-
-          {/* はじめかた — 何も無いワークスペースのときだけ。 */}
-          {isNewWorkspace && (
-            <GettingStarted
-              crmHref={crmHref}
-              crmAction={<SetupCrmButton size="sm" variant="secondary" />}
-            />
           )}
         </div>
       </main>

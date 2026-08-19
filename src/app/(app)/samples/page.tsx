@@ -5,6 +5,16 @@
  *
  * Server component: reads the workspace's existing collection names so sheets
  * that are already present can be marked 追加済み (re-adding stays allowed).
+ *
+ * ---------------------------------------------------------------------------
+ * 意図的に「文字を出さない」ページ。
+ *
+ * 「文字や見る機能が多すぎて、わかりづらくなっている気がする」という指摘を
+ * 受けて、1枚あたり 5 行あった説明（説明文・利用シーン・「N 項目 ・ N 行」・
+ * 列名のプレビュー）と、カテゴリ見出しの補足文、冒頭の 3 文のリード文を
+ * すべて外した。このページの用途は "読む" ことではなく、近いものを 1 つ選んで
+ * 「追加」を押すこと。カードに説明文を戻さないこと。
+ * ---------------------------------------------------------------------------
  */
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -23,16 +33,9 @@ import { CollectionIcon } from "@/components/app/icons";
 import { AddSampleButton } from "@/components/samples/AddSampleButton";
 import { AddCategoryButton } from "@/components/samples/AddCategoryButton";
 
-/** First few column labels, as a hint of what the sheet looks like. */
-function columnPreview(sheet: SampleSheet, max = 4): string {
-  const names = sheet.listColumns
-    .map((key) => sheet.fields.find((f) => f.key === key)?.name)
-    .filter((n): n is string => Boolean(n))
-    .slice(0, max);
-  const rest = sheet.listColumns.length - names.length;
-  return rest > 0 ? `${names.join(" ・ ")} …他${rest}列` : names.join(" ・ ");
-}
-
+/**
+ * 1枚のカード。名前と行数、そして「追加」だけ。選ぶのに要らないものは載せない。
+ */
 function SampleCard({
   sheet,
   installed,
@@ -41,34 +44,15 @@ function SampleCard({
   installed: boolean;
 }) {
   return (
-    <div className="flex flex-col rounded-md border border-ink-line bg-paper-raised p-4">
-      <div className="flex items-center gap-2">
-        <CollectionIcon name={sheet.icon} className="h-4 w-4 shrink-0 text-khaki-500" />
-        <h3 className="truncate font-medium text-ink">{sheet.name}</h3>
-        {installed && (
-          <span className="ml-auto shrink-0 rounded border border-ink-line px-1.5 py-0.5 text-2xs text-ink-faint">
-            追加済み
-          </span>
-        )}
+    <div className="flex items-center gap-3 rounded-md border border-ink-line bg-paper-raised p-3">
+      <CollectionIcon name={sheet.icon} className="h-4 w-4 shrink-0 text-khaki-500" />
+      <div className="min-w-0 flex-1">
+        <h3 className="truncate text-sm font-medium text-ink">{sheet.name}</h3>
+        <p className="text-2xs tabular-nums text-ink-faint">
+          {sheet.rows.length} 行{installed && " ・ 追加済み"}
+        </p>
       </div>
-
-      <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-ink-muted">
-        {sheet.description}
-      </p>
-      <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-ink-soft">
-        {sheet.useCase}
-      </p>
-
-      <p className="mt-3 text-2xs tabular-nums text-ink-faint">
-        {sheet.fields.length} 項目 ・ {sheet.rows.length} 行
-      </p>
-      <p className="mt-1 line-clamp-2 text-2xs leading-relaxed text-ink-faint">
-        {columnPreview(sheet)}
-      </p>
-
-      <div className="mt-4 flex items-end justify-between gap-3">
-        <AddSampleButton sampleKey={sheet.key} />
-      </div>
+      <AddSampleButton sampleKey={sheet.key} />
     </div>
   );
 }
@@ -109,17 +93,6 @@ export default async function SamplesPage({
       <Topbar user={user} title="参考スプレッドシート" />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-6xl space-y-6">
-          <section className="space-y-1">
-            <h2 className="text-lg font-semibold text-ink">
-              よくある業務のスプレッドシートを、そのまま試す
-            </h2>
-            <p className="text-sm leading-relaxed text-ink-muted">
-              中小企業が実際にExcelで持っている台帳を、サンプルデータ入りで用意しました。
-              追加するとご自身のワークスペースにコピーされ、項目も中身も自由に編集できます。
-              まずは近いものを1つ追加して、自社のデータに置き換えてみてください。
-            </p>
-          </section>
-
           {/* Category filter (calm tabs) */}
           <nav className="flex flex-wrap gap-1 border-b border-ink-line pb-2">
             <Link href="/samples" className={tab(!activeCat)}>
@@ -144,11 +117,9 @@ export default async function SamplesPage({
             <div className="space-y-8">
               {sections.map(({ category, sheets }) => (
                 <section key={category.id} className="space-y-3">
+                  {/* 見出しはカテゴリ名だけ。補足文は読まれないまま場所を取っていた。 */}
                   <div className="flex flex-wrap items-end justify-between gap-3">
-                    <div className="flex items-baseline gap-2">
-                      <h3 className="text-sm font-semibold text-ink">{category.label}</h3>
-                      <span className="text-xs text-ink-faint">{category.description}</span>
-                    </div>
+                    <h3 className="text-sm font-semibold text-ink">{category.label}</h3>
                     <AddCategoryButton sampleKeys={sheets.map((s) => s.key)} />
                   </div>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
