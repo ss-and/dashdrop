@@ -23,14 +23,22 @@ export const FIELD_TYPES = [
   "relation", // link to record(s) in another spreadsheet; value = target record id(s)
   "lookup", // pull a field from linked records (computed, read-only)
   "rollup", // aggregate a field across linked records (computed, read-only)
+  // Analysis types (computed on read):
+  "formula", // an expression over this row's other fields — 粗利 = 売上 - 原価
+  "vlookup", // pull/aggregate a value from another sheet matched on a key column
 ] as const;
 
 export type FieldType = (typeof FIELD_TYPES)[number];
 
-/** Field types whose value is computed from links and never written directly. */
-export const COMPUTED_FIELD_TYPES: readonly FieldType[] = ["lookup", "rollup"];
+/** Field types derived from other data and never written directly. */
+export const COMPUTED_FIELD_TYPES: readonly FieldType[] = [
+  "lookup",
+  "rollup",
+  "formula",
+  "vlookup",
+];
 export function isComputedField(type: string): boolean {
-  return type === "lookup" || type === "rollup";
+  return (COMPUTED_FIELD_TYPES as readonly string[]).includes(type);
 }
 
 export interface SelectOption {
@@ -146,6 +154,20 @@ export const FIELD_TYPE_META: Record<FieldType, FieldTypeMeta> = {
     label: "ロールアップ（集計）",
     description: "リンク先の値を合計/件数などで集計（自動）",
     numeric: true,
+    optioned: false,
+  },
+  formula: {
+    type: "formula",
+    label: "Formula",
+    description: "この行の他の項目から計算（粗利＝売上−原価 など）",
+    numeric: true,
+    optioned: false,
+  },
+  vlookup: {
+    type: "vlookup",
+    label: "Sheet lookup",
+    description: "別シートをキーで突合して値を引く（VLOOKUP相当）",
+    numeric: false,
     optioned: false,
   },
 };

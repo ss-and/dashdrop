@@ -12,6 +12,7 @@ import type {
   SeriesWidget,
   BreakdownWidget,
   TableWidget,
+  PivotWidget,
   Unit,
 } from "./widgets";
 
@@ -375,6 +376,127 @@ function computeTable(w: TableWidget, col: AggCollection): WidgetData {
  * Compute a single widget. Returns a null-ish empty WidgetData when the source
  * collection is missing so the renderer can show a graceful empty state.
  */
+/**
+ * Cross-tab: group down the side by `rowField`, across the top by `colField`,
+ * and aggregate `measure` in each cell.
+ *
+ * The long tail on both axes collapses into 「その他」 so a high-cardinality
+ * column can't produce a 500-wide table. Cells with no matching records stay
+ * `null` (rendered as 「—」) rather than 0 — "no data" and "zero" are different
+ * answers and conflating them misleads.
+ */
+function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
+  const filtered = applyFilters(col.records, w.filters);
+  const rowField = col.fields.find((f) => f.key === w.rowField);
+  const colField = col.fields.find((f) => f.key === w.colField);
+  const labelOf = (f: typeof rowField, key: string) =>
+    (f?.options ?? []).find((o) => o.value === key)?.label ?? key;
+
+  /** One bucket per (row, col) pair: the running sum and the record count. */
+  const cells = new Map<string, { sum: number; count: number }>();
+  const rowWeight = new Map<string, number>();
+  const colWeight = new Map<string, number>();
+
+  const bucketKeys = (raw: unknown): string[] => {
+    if (Array.isArray(raw)) {
+      return raw.length ? raw.map((v) => String(v)) : ["—"];
+    }
+    return [raw === null || raw === undefined || raw === "" ? "—" : String(raw)];
+  };
+
+  for (const r of filtered) {
+    const contribution =
+      w.measure.kind === "count" ? 1 : (toNumber(r.data[w.measure.field]) ?? 0);
+    for (const rk of bucketKeys(r.data[w.rowField])) {
+      for (const ck of bucketKeys(r.data[w.colField])) {
+        const k = `${rk}\u0000${ck}`;
+        const cur = cells.get(k) ?? { sum: 0, count: 0 };
+        cur.sum += contribution;
+        cur.count += 1;
+        cells.set(k, cur);
+        rowWeight.set(rk, (rowWeight.get(rk) ?? 0) + contribution);
+        colWeight.set(ck, (colWeight.get(ck) ?? 0) + contribution);
+      }
+    }
+  }
+
+  /** Keep the heaviest N keys; everything else becomes 「その他」. */
+  const trim = (weights: Map<string, number>, limit: number): string[] => {
+    const sorted = Array.from(weights.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([k]) => k);
+    if (sorted.length <= limit) return sorted;
+    return [...sorted.slice(0, limit - 1), OTHER];
+  };
+  const rowKeys = trim(rowWeight, w.rowLimit);
+  const colKeys = trim(colWeight, w.colLimit);
+  const rowSet = new Set(rowKeys);
+  const colSet = new Set(colKeys);
+  const bucketOf = (key: string, keep: Set<string>) =>
+    keep.has(key) ? key : OTHER;
+
+  // Re-bin into the trimmed axes, folding the tail into 「その他」.
+  const grid = new Map<string, { sum: number; count: number }>();
+  for (const [k, v] of cells) {
+    const [rk, ck] = k.split("\u0000");
+    const gk = `${bucketOf(rk, rowSet)}\u0000${bucketOf(ck, colSet)}`;
+    const cur = grid.get(gk) ?? { sum: 0, count: 0 };
+    cur.sum += v.sum;
+    cur.count += v.count;
+    grid.set(gk, cur);
+  }
+
+  const value = (b: { sum: number; count: number } | undefined) => {
+    if (!b || b.count === 0) return null;
+    const v = w.measure.kind === "avg" ? b.sum / b.count : b.sum;
+    return Math.round(v * 100) / 100;
+  };
+
+  const matrix = rowKeys.map((rk) =>
+    colKeys.map((ck) => value(grid.get(`${rk}\u0000${ck}`))),
+  );
+  const rowTotals = rowKeys.map((rk) => {
+    const parts = colKeys
+      .map((ck) => grid.get(`${rk}\u0000${ck}`))
+      .filter((b): b is { sum: number; count: number } => Boolean(b));
+    return value(mergeBuckets(parts)) ?? 0;
+  });
+  const colTotals = colKeys.map((ck) => {
+    const parts = rowKeys
+      .map((rk) => grid.get(`${rk}\u0000${ck}`))
+      .filter((b): b is { sum: number; count: number } => Boolean(b));
+    return value(mergeBuckets(parts)) ?? 0;
+  });
+  const grandTotal = value(mergeBuckets(Array.from(grid.values()))) ?? 0;
+
+  return {
+    type: "pivot",
+    rowLabel: rowField?.name ?? w.rowField,
+    colLabel: colField?.name ?? w.colField,
+    rows: rowKeys.map((k) => (k === OTHER ? OTHER : labelOf(rowField, k))),
+    cols: colKeys.map((k) => (k === OTHER ? OTHER : labelOf(colField, k))),
+    cells: matrix,
+    rowTotals,
+    colTotals,
+    grandTotal,
+    unit: w.unit ?? "number",
+    showTotals: w.showTotals,
+  };
+}
+
+const OTHER = "その他";
+
+/** Sum a set of buckets so totals use the same avg/sum rule as the cells. */
+function mergeBuckets(
+  parts: Array<{ sum: number; count: number }>,
+): { sum: number; count: number } | undefined {
+  if (parts.length === 0) return undefined;
+  return parts.reduce(
+    (a, b) => ({ sum: a.sum + b.sum, count: a.count + b.count }),
+    { sum: 0, count: 0 },
+  );
+}
+
 export function computeWidget(
   widget: WidgetSpec,
   collections: CollectionMap,
@@ -395,6 +517,20 @@ export function computeWidget(
         return { type: widget.type, slices: [], total: 0 };
       case "table":
         return { type: "table", columns: [], rows: [] };
+      case "pivot":
+        return {
+          type: "pivot",
+          rowLabel: "",
+          colLabel: "",
+          rows: [],
+          cols: [],
+          cells: [],
+          rowTotals: [],
+          colTotals: [],
+          grandTotal: 0,
+          unit: "number",
+          showTotals: false,
+        };
     }
   }
 
@@ -410,6 +546,8 @@ export function computeWidget(
       return computeBreakdown(widget, col);
     case "table":
       return computeTable(widget, col);
+    case "pivot":
+      return computePivot(widget, col);
   }
 }
 

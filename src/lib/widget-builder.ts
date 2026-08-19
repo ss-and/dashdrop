@@ -17,6 +17,7 @@ export type BuilderWidgetType =
   | "area"
   | "donut"
   | "hbar"
+  | "pivot"
   | "table";
 
 /** A field as the builder sees it (subset of the DB Field). */
@@ -44,6 +45,7 @@ export const WIDGET_TYPES: BuilderWidgetType[] = [
   "area",
   "donut",
   "hbar",
+  "pivot",
   "table",
 ];
 
@@ -89,6 +91,13 @@ export const WIDGET_META: Record<BuilderWidgetType, WidgetMeta> = {
     hint: "項目別のランキング",
     defaultSpan: 2,
     group: "グラフ",
+  },
+  pivot: {
+    label: "クロス集計",
+    icon: "table",
+    hint: "行×列で数字を出す（ピボット）",
+    defaultSpan: 4,
+    group: "明細",
   },
   table: {
     label: "表",
@@ -140,6 +149,9 @@ export function canAddWidget(
   fields: BuilderField[],
 ): boolean {
   switch (type) {
+    case "pivot":
+      // Needs something to put down the side AND across the top.
+      return groupableFields(fields).length >= 2;
     case "donut":
     case "hbar":
     case "table":
@@ -215,6 +227,24 @@ export function newWidget(
           : { kind: "count" },
         limit: 6,
       };
+    case "pivot": {
+      const [rowF, colF] = groups;
+      return {
+        ...base,
+        type: "pivot",
+        title:
+          rowF && colF ? `${rowF.name} × ${colF.name}` : "クロス集計",
+        rowField: rowF?.key ?? fields[0]?.key ?? "",
+        colField: colF?.key ?? fields[1]?.key ?? "",
+        measure: nums[0]
+          ? { kind: "sum", field: nums[0].key }
+          : { kind: "count" },
+        unit: nums[0]?.type === "currency" ? "currency" : "number",
+        rowLimit: 12,
+        colLimit: 8,
+        showTotals: true,
+      };
+    }
     case "table":
       return {
         ...base,

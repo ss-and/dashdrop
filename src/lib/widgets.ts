@@ -107,6 +107,26 @@ export const tableWidgetSchema = baseWidget.extend({
 });
 export type TableWidget = z.infer<typeof tableWidgetSchema>;
 
+/**
+ * Cross-tab: one field down the side, one across the top, a measure in the
+ * cells. Modelled on the classic rows × cols × aggregator shape used by
+ * PivotTable.js (MIT) — implemented here from scratch against our own engine.
+ */
+export const pivotWidgetSchema = baseWidget.extend({
+  type: z.literal("pivot"),
+  /** Field key grouped down the side. */
+  rowField: z.string().min(1),
+  /** Field key grouped across the top. */
+  colField: z.string().min(1),
+  measure: measureSchema.default({ kind: "count" }),
+  unit: unitSchema.optional(),
+  /** Max distinct rows / columns kept; the rest collapse into 「その他」. */
+  rowLimit: z.number().int().min(2).max(50).default(12),
+  colLimit: z.number().int().min(2).max(20).default(8),
+  showTotals: z.boolean().default(true),
+});
+export type PivotWidget = z.infer<typeof pivotWidgetSchema>;
+
 export const widgetSchema = z.discriminatedUnion("type", [
   kpiWidgetSchema,
   seriesWidgetSchema.extend({ type: z.literal("line") }),
@@ -115,6 +135,7 @@ export const widgetSchema = z.discriminatedUnion("type", [
   breakdownWidgetSchema.extend({ type: z.literal("donut") }),
   breakdownWidgetSchema.extend({ type: z.literal("hbar") }),
   tableWidgetSchema,
+  pivotWidgetSchema,
 ]);
 export type WidgetSpec = z.infer<typeof widgetSchema>;
 
@@ -205,8 +226,25 @@ export interface TableData {
   }>;
   rows: Array<Record<string, unknown>>;
 }
+export interface PivotData {
+  type: "pivot";
+  rowLabel: string;
+  colLabel: string;
+  /** Distinct row headers, in display order. */
+  rows: string[];
+  /** Distinct column headers, in display order. */
+  cols: string[];
+  /** cells[rowIndex][colIndex] — null where no records matched. */
+  cells: Array<Array<number | null>>;
+  rowTotals: number[];
+  colTotals: number[];
+  grandTotal: number;
+  unit: Unit;
+  showTotals: boolean;
+}
 export type WidgetData =
   | KpiData
+  | PivotData
   | SeriesData
   | BreakdownData
   | TableData;
