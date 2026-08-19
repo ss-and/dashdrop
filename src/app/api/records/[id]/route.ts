@@ -29,15 +29,43 @@ function isResolved(template: string, data: Record<string, unknown>): boolean {
   return false;
 }
 
+/**
+ * 送られてきたキーがすべて実在する列か確かめる。
+ *
+ * 【不具合の再発防止】以前は列に対応しないキーを黙って捨てて 200 を返していた。
+ * 別タブで列が削除された状態で編集すると、入力が保存されていないのに画面上は
+ * 「保存済み」になり、打ち込んだ内容が消えていた。存在しない列を指定されたら
+ * 成功を装わず、どの列が無くなったのかを名指しで伝える。
+ */
+function assertKnownKeys(
+  fields: Array<{ key: string }>,
+  data: Record<string, unknown>,
+): void {
+  const known = new Set(fields.map((f) => f.key));
+  const unknown = Object.keys(data).filter((key) => !known.has(key));
+  if (unknown.length === 0) return;
+  // 409：入力そのものではなく、画面が持っている列構成が古いことが原因。
+  throw new ApiError(
+    `列「${unknown.join("」「")}」はこのスプレッドシートに存在しません（他の画面で削除された可能性があります）。画面を再読み込みしてから入力し直してください。`,
+    409,
+  );
+}
+
 export const PATCH = withAuth(async (req, { user, params }) => {
   const record = await getRecordForUser(user, params.id);
   const input = await readJson(req, updateRecordSchema);
 
+  const fields = record.collection.fields;
+  assertKnownKeys(fields, input.data);
+
   const existing = (record.data as Record<string, unknown>) ?? {};
   const merged: Record<string, unknown> = { ...existing };
+  // 今回の要求に含まれていたキーだけを集めた「差分」。リンク検証はこちらに
+  // 対して行う（下のコメント参照）。
+  const patch: Record<string, unknown> = {};
 
   // Only validate/coerce the fields present in the payload.
-  for (const field of record.collection.fields) {
+  for (const field of fields) {
     if (!(field.key in input.data)) continue;
     if (isComputedField(field.type)) continue; // lookup/rollup are read-only
     const options = (field.options as SelectOption[] | null) ?? undefined;
@@ -55,6 +83,7 @@ export const PATCH = withAuth(async (req, { user, params }) => {
     ) {
       throw new ApiError(`${field.name}は必須項目です`, 422);
     }
+    patch[field.key] = result.value;
     if (result.value === null || result.value === undefined) {
       delete merged[field.key];
     } else {
@@ -62,10 +91,15 @@ export const PATCH = withAuth(async (req, { user, params }) => {
     }
   }
 
+  // 【不具合の再発防止】以前はマージ後の行全体を検証していた。merged は
+  // 既存データのコピーから始まるため、保存済みのリンク値まで毎回検証され、
+  // リンク先の1件が削除されただけで（表示は空欄になるだけの設計なのに）
+  // その行の無関係なセルすら二度と保存できなくなっていた。今回の要求に
+  // 含まれるキーだけを検証する。
   await validateRelationWrites(
     user.workspace.id,
-    record.collection.fields as unknown as EngineField[],
-    merged,
+    fields as unknown as EngineField[],
+    patch,
   );
 
   const wasResolved = isResolved(record.collection.template, existing);

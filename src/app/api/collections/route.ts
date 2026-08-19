@@ -13,6 +13,7 @@ import {
   logActivity,
 } from "@/lib/workspace";
 import { FIELD_TYPES, isFieldType } from "@/lib/field-types";
+import { validateFieldConfig, type EngineField } from "@/lib/relations";
 
 export const GET = withAuth(async (_req, { user }) => {
   const collections = await db.collection.findMany({
@@ -49,7 +50,7 @@ export const POST = withAuth(async (req, { user }) => {
 
   // Derive fields — keep keys unique & stable within the collection.
   const takenKeys = new Set<string>();
-  const fields = (input.fields ?? []).map((f, index) => {
+  const derived = (input.fields ?? []).map((f, index) => {
     const rawKey = f.key?.trim() || toFieldKey(f.name);
     const key = uniqueName(rawKey, takenKeys);
     takenKeys.add(key);
@@ -59,11 +60,51 @@ export const POST = withAuth(async (req, { user }) => {
       name: f.name,
       type,
       required: f.required ?? false,
-      options: f.options ? toJson(f.options) : undefined,
-      config: f.config ? toJson(f.config) : undefined,
+      options: f.options,
+      config: f.config as Record<string, unknown> | undefined,
       position: typeof f.position === "number" ? f.position : index,
     };
   });
+
+  // 【不具合の再発防止】ここだけ config を無検証で保存していたため、項目追加
+  // 経由なら弾かれる設定（他ワークスペースのシートを指すリンク、構文の通らない
+  // 計算式など）が、シート新規作成の経路からはそのまま保存できてしまっていた。
+  // 検証はリンク列を先に済ませる — ルックアップ／ロールアップは、リンク列の
+  // 確定した config（リンク先シート）を見ないと検証できないため。
+  const siblings: EngineField[] = derived.map((f) => ({
+    key: f.key,
+    name: f.name,
+    type: f.type,
+    config: f.config,
+    options: f.options,
+  }));
+  const siblingByKey = new Map(siblings.map((s) => [s.key, s]));
+  for (const relationFirst of [true, false]) {
+    for (const f of derived) {
+      if ((f.type === "relation") !== relationFirst) continue;
+      const config = await validateFieldConfig(
+        user.workspace.id,
+        f.type,
+        f.config,
+        siblings,
+        undefined, // シートはまだ存在しないので自己参照はあり得ない
+        f.key,
+      );
+      f.config = config;
+      const sibling = siblingByKey.get(f.key);
+      if (sibling) sibling.config = config;
+    }
+  }
+
+  const fields = derived.map((f) => ({
+    key: f.key,
+    name: f.name,
+    type: f.type,
+    required: f.required,
+    options: f.options ? toJson(f.options) : undefined,
+    config: f.config ? toJson(f.config) : undefined,
+    position: f.position,
+  }));
 
   const collection = await db.collection.create({
     data: {

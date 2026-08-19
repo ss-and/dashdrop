@@ -72,6 +72,28 @@ export const GET = withAuth(async (req, { user, params }) => {
 });
 
 /**
+ * 送られてきたキーがすべて実在する列か確かめる。
+ *
+ * 【不具合の再発防止】以前は列に対応しないキーを黙って捨てて 200 を返していた。
+ * 別タブで列が削除された状態で入力すると、保存されていないのに画面上は
+ * 「保存済み」になり、打ち込んだ内容が消えていた。存在しない列を指定されたら
+ * 成功を装わず、どの列が無くなったのかを名指しで伝える。
+ */
+function assertKnownKeys(
+  fields: Array<{ key: string }>,
+  raw: Record<string, unknown>,
+): void {
+  const known = new Set(fields.map((f) => f.key));
+  const unknown = Object.keys(raw).filter((key) => !known.has(key));
+  if (unknown.length === 0) return;
+  // 409：入力そのものではなく、画面が持っている列構成が古いことが原因。
+  throw new ApiError(
+    `列「${unknown.join("」「")}」はこのスプレッドシートに存在しません（他の画面で削除された可能性があります）。画面を再読み込みしてから入力し直してください。`,
+    409,
+  );
+}
+
+/**
  * Validate & coerce a raw data payload against the collection's fields.
  * Returns a clean object keyed by Field.key. Throws ApiError(422) on the first
  * invalid or missing-required field.
@@ -80,6 +102,7 @@ function buildRecordData(
   fields: Field[],
   raw: Record<string, unknown>,
 ): Record<string, unknown> {
+  assertKnownKeys(fields, raw);
   const clean: Record<string, unknown> = {};
   for (const field of fields) {
     // Lookup/rollup are computed on read — never written or required.
