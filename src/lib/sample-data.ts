@@ -91,7 +91,6 @@ function genValue(
     case "longtext":
       return "";
     case "email": {
-      const pool = COMPANY;
       const idx = Math.floor(rng() * 900) + 100;
       return `contact${idx}@example.com`;
     }

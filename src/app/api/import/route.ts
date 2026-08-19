@@ -16,8 +16,8 @@
 import { withAuth, ok, ApiError } from "@/lib/api";
 import { db, toJson } from "@/lib/db";
 import { slugify, uniqueName, toFieldKey } from "@/lib/utils";
-import { assertCanCreateCollection, logActivity } from "@/lib/workspace";
 import { getPlan } from "@/lib/plans";
+import { logActivity } from "@/lib/workspace";
 import {
   isFieldType,
   coerceValue,

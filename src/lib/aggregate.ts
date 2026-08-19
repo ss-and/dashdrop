@@ -242,7 +242,7 @@ function computeSeries(w: SeriesWidget, col: AggCollection, now: Date): WidgetDa
 
   const filtered = applyFilters(col.records, w.filters);
 
-  const points = starts.map((start, idx) => {
+  const points = starts.map((start) => {
     const end = addBucket(start, bucket, 1);
     const inBucket = filtered.filter((r) => {
       const d = recordDate(r, w.dateField);

@@ -30,9 +30,8 @@ const COLOR_HEX: Record<string, string> = {
   danger: "#a24b3f",
   neutral: "#a8a493",
 };
-const EMPTY = "#e2ded1";
-const GRID = "#e2ded1";
 const TEXT = "#57544b";
+const GRID = "#e2ded1";
 const FALLBACK = ["khaki", "info", "success", "warning", "danger", "neutral"];
 
 function hexFor(color: string | undefined, i: number): string {

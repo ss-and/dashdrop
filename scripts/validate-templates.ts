@@ -25,11 +25,10 @@ for (const t of all) {
   }
   byCat[t.category] = (byCat[t.category] ?? 0) + 1;
 
-  // Cross-check: widget.collection slugs and field keys must exist.
+  // Cross-check that every widget points at a collection this template owns.
+  // The exhaustive field-key check (measure.field / groupBy / dateField /
+  // columns / sort / filters) lives in tests/dashboard-templates.test.ts.
   const slugs = new Set(t.collections.map((c) => c.slug));
-  const keysBySlug = new Map(
-    t.collections.map((c) => [c.slug, new Set(c.fields.map((f) => f.key))]),
-  );
   for (const w of t.widgets) {
     if (!slugs.has(w.collection)) {
       invalid++;

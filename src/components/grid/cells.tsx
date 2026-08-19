@@ -113,11 +113,17 @@ export function CellView({
   }
 
   if (field.type === "checkbox") {
+    // A bare ✓ with aria-label="true" announced "true" to a screen reader, and
+    // the false case announced nothing at all. Both states now read properly.
     return value ? (
-      <span className="text-success" aria-label="true">
+      <span className="text-success" role="img" aria-label="はい">
         ✓
       </span>
-    ) : null;
+    ) : (
+      <span className="text-ink-faint" role="img" aria-label="いいえ">
+        —
+      </span>
+    );
   }
 
   // Only turn a URL cell into a link when it is a safe http(s) URL. A value
