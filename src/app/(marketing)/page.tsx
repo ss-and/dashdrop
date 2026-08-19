@@ -207,9 +207,12 @@ export default function LandingPage() {
                   無料で始める
                 </Button>
               </Link>
-              <Link href="/login">
+              {/* 「デモを見る」はログイン画面に飛ばしていただけで、デモ口座の
+                  認証情報が画面に印刷されていたから成立していた導線だった。
+                  実体が無い誘い文句は出さない。 */}
+              <Link href="/pricing">
                 <Button variant="outline" size="lg" className="w-full sm:w-auto">
-                  デモを見る
+                  料金を見る
                 </Button>
               </Link>
             </div>

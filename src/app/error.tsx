@@ -41,10 +41,10 @@ export default function Error({
             もう一度試す
           </button>
           <Link
-            href="/dashboard"
+            href="/home"
             className="inline-flex h-10 items-center rounded border border-ink-line bg-paper-raised px-4 text-sm font-medium text-ink-soft hover:bg-paper-sunken"
           >
-            ダッシュボードへ
+            ホームへ
           </Link>
         </div>
 

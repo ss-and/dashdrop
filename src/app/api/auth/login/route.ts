@@ -30,6 +30,8 @@ export async function POST(req: Request) {
 
     const user = await db.user.findUnique({
       where: { email: email.toLowerCase() },
+      // 所属の有無まで見る（下の判定で使う）。1件あるかどうかだけで足りる。
+      include: { memberships: { select: { id: true }, take: 1 } },
     });
 
     // Always run a bcrypt comparison (against a dummy hash when the user is
@@ -42,8 +44,20 @@ export async function POST(req: Request) {
       return fail(GENERIC_401, 401);
     }
 
-    // A user without a membership still authenticates; the session layer will
-    // resolve their workspace later (or surface an appropriate empty state).
+    // 所属ワークスペースが無い利用者にはセッションを発行しない。
+    //
+    // 以前は「あとでセッション層が解決する（か、空の状態を出す）」として
+    // 通していたが、その空の状態はどこにも実装されていなかった。結果として
+    // getSession() が null → (app) の layout が /login へ、ミドルウェアは
+    // 署名の通る JWT を見て /home へ、と往復し続けて Cookie を消すまで
+    // 復帰できなくなる。入口で断り、理由を伝える。
+    if (user.memberships.length === 0) {
+      return fail(
+        "このアカウントには所属するワークスペースがありません。管理者にご確認ください。",
+        403,
+      );
+    }
+
     await setSessionCookie(user.id);
     return ok({ redirect: "/home" });
   } catch (err) {

@@ -17,10 +17,10 @@ export default function NotFound() {
         </p>
         <div className="pt-1">
           <Link
-            href="/dashboard"
+            href="/"
             className="inline-flex h-10 items-center rounded bg-khaki-500 px-4 text-sm font-medium text-white hover:bg-khaki-600"
           >
-            ダッシュボードへ戻る
+            トップへ戻る
           </Link>
         </div>
       </div>

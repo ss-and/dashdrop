@@ -24,6 +24,8 @@ const PROTECTED_PREFIXES = [
   "/alerts",
   "/reports",
   "/settings",
+  "/samples",
+  "/logs",
 ];
 const AUTH_PAGES = ["/login", "/signup"];
 
@@ -68,11 +70,36 @@ export async function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
+/**
+ * matcher は PROTECTED_PREFIXES と必ず一致させること。
+ *
+ * 以前はここに 6 本しか無く、`/home` `/dashboards` `/r` `/f` `/d` `/alerts`
+ * `/reports` ではミドルウェアが一度も動いていなかった。今は (app) グループの
+ * layout が getSession() で守っているので実害は無かったが、「このリストに
+ * 書いてあるから守られている」と読める状態のまま、グループ外にページを
+ * 1 枚足した瞬間に認証なしで公開される。多層防御が黙って抜けている状態を
+ * 残さない。
+ *
+ * 公開したままにするもの（意図的にここへ入れない）:
+ *   /                     … LP
+ *   /pricing              … 料金
+ *   /share/d/[token]      … 共有リンク。ログイン不要で開けるのが仕様
+ *   /api/**               … withAuth と CRON_SECRET が個別に守る
+ */
 export const config = {
   matcher: [
+    "/home/:path*",
     "/dashboard/:path*",
+    "/dashboards/:path*",
     "/c/:path*",
+    "/r/:path*",
+    "/f/:path*",
+    "/d/:path*",
     "/import/:path*",
+    "/samples/:path*",
+    "/logs/:path*",
+    "/alerts/:path*",
+    "/reports/:path*",
     "/settings/:path*",
     "/login",
     "/signup",
