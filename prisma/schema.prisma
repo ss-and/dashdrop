@@ -33,13 +33,13 @@ model User {
 }
 
 model Workspace {
-  id          String       @id @default(cuid())
-  name        String
-  slug        String       @unique
+  id              String           @id @default(cuid())
+  name            String
+  slug            String           @unique
   // Plan: "free" | "pro" | "business"
-  plan        String       @default("free")
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  plan            String           @default("free")
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
   memberships     Membership[]
   collections     Collection[]
   workbooks       Workbook[]
@@ -48,6 +48,7 @@ model Workspace {
   notifications   Notification[]
   alertRules      AlertRule[]
   reportSchedules ReportSchedule[]
+  integrations    Integration[]
 }
 
 model Membership {
@@ -234,6 +235,32 @@ model ReportSchedule {
   updatedAt   DateTime  @updatedAt
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
+  @@index([workspaceId])
+}
+
+// A third-party connection owned by ONE workspace (Slack, Notion, …).
+//
+// Credentials are per-workspace, never global: a single deployment-wide webhook
+// would post every tenant's notifications into the same channel. `secret` holds
+// the token/URL encrypted at rest (see src/lib/crypto.ts) so a database dump
+// does not hand over live credentials.
+model Integration {
+  id          String    @id @default(cuid())
+  workspaceId String
+  // Provider: "slack" | "notion"
+  provider    String
+  // Encrypted credential (Slack incoming-webhook URL, Notion integration token)
+  secret      String
+  // Non-secret settings, e.g. { channelHint } / { defaultDatabaseId }
+  config      Json?
+  enabled     Boolean   @default(true)
+  lastOkAt    DateTime?
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, provider])
   @@index([workspaceId])
 }
 
