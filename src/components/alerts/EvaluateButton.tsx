@@ -22,15 +22,28 @@ export function EvaluateButton() {
       const res = await fetch("/api/alerts/evaluate", { method: "POST" });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error ?? "評価に失敗しました");
-      const { triggered, evaluated } = json.data as {
+      const { triggered, evaluated, failed, errors } = json.data as {
         triggered: number;
         evaluated: number;
+        failed?: number;
+        errors?: { ruleName: string; message: string }[];
       };
-      setMsg(
+      const base =
         triggered > 0
           ? `${triggered}件のアラートが発火しました`
-          : `発火なし（${evaluated}件を評価）`,
-      );
+          : `発火なし（${evaluated}件を評価）`;
+      setMsg(base);
+      // 1件失敗しても他は評価される（隔離してある）ぶん、黙って落ちると
+      // 気づけない。失敗した分は理由つきでここに出す。
+      if (failed && failed > 0) {
+        const detail = (errors ?? [])
+          .slice(0, 3)
+          .map((e) => `${e.ruleName}: ${e.message}`)
+          .join(" / ");
+        setError(
+          `${failed}件のルールを評価できませんでした${detail ? `（${detail}）` : ""}`,
+        );
+      }
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "評価に失敗しました");
