@@ -55,6 +55,8 @@ export interface InstallMasterResult {
   created: Array<{ id: string; slug: string; name: string }>;
   skipped: string[];
   seededRows: number;
+  /** 指す先が消えていたため貼り直した relation 列の数。 */
+  repairedRelations: number;
 }
 
 export interface InstallMasterOptions {
@@ -64,6 +66,12 @@ export interface InstallMasterOptions {
   /** 「顧客データベース」— used verbatim in user-facing errors. */
   label: string;
 }
+
+/**
+ * 表示名の索引を作るときに読む行数の上限。デモ行の紐づけ先を引くだけなので、
+ * 巨大なマスターを丸ごとメモリに載せる必要はない。
+ */
+const PRELOAD_LIMIT = 5000;
 
 /** The field that labels a record of this object (first required field). */
 function primaryKeyOf(obj: MasterObject): string {
@@ -85,7 +93,20 @@ function primaryKeyOf(obj: MasterObject): string {
  * install matches trivially even after the owner deletes a few columns; an
  * unrelated sheet essentially never does.
  */
-function looksLikeOurObject(obj: MasterObject, fieldKeys: Set<string>): boolean {
+function looksLikeOurObject(
+  obj: MasterObject,
+  fields: Array<{ key: string; config: unknown }>,
+): boolean {
+  // 過去にこのインストーラが書いた config が残っていれば、それが動かぬ証拠。
+  // 列を削られていても（勤怠番号や申請番号は「要らない列」に見えるので実際に
+  // 消される）、これで確実に自分のものだと分かる。
+  const ourKeys = new Set(
+    obj.fields.filter((f) => f.relation || f.lookup || f.rollup || f.formula).map((f) => f.key),
+  );
+  if (fields.some((f) => ourKeys.has(f.key) && f.config !== null && f.config !== undefined)) {
+    return true;
+  }
+  const fieldKeys = new Set(fields.map((f) => f.key));
   if (!fieldKeys.has(primaryKeyOf(obj))) return false;
   const present = obj.fields.filter((f) => fieldKeys.has(f.key)).length;
   return present * 2 >= obj.fields.length;
@@ -113,7 +134,7 @@ export async function installMasterObjects(
       id: true,
       slug: true,
       name: true,
-      fields: { select: { key: true } },
+      fields: { select: { key: true, config: true } },
     },
   });
   const bySlug = new Map(existing.map((c) => [c.slug, c]));
@@ -123,10 +144,11 @@ export async function installMasterObjects(
   for (const obj of objects) {
     const clash = bySlug.get(obj.slug);
     if (!clash) continue;
-    const keys = new Set(clash.fields.map((f) => f.key));
-    if (!looksLikeOurObject(obj, keys)) {
+    if (!looksLikeOurObject(obj, clash.fields)) {
       throw new ApiError(
-        `「${clash.name}」というスプレッドシートが${opts.label}の「${obj.name}」と同じ名前で既にあるため、作成できません。そのスプレッドシートの名前を変えてから、もう一度お試しください。`,
+        // 名前を変えても slug は変わらない（PATCH は name/description/icon/color
+        // のみ）ので、「名前を変えてください」とは言わないこと。
+        `「${clash.name}」というスプレッドシートが${opts.label}の「${obj.name}」と内部名で衝突しているため、作成できません。中身を書き出してから「${clash.name}」を削除するか、サポートへご連絡ください。`,
         409,
       );
     }
@@ -143,6 +165,7 @@ export async function installMasterObjects(
       .map((o) => [o.slug, bySlug.get(o.slug)!.id]),
   );
   let seededRows = 0;
+  let repaired = 0;
   let position = existing.length;
 
   try {
@@ -175,6 +198,41 @@ export async function installMasterObjects(
     }
 
     /* --- Pass 2: wire relation / lookup / rollup / formula config ---------- */
+    // 既にあるオブジェクトのうち、relation の指す先が消えているものを貼り直す。
+    // 親（社員など）だけ削除して作り直すと、子（勤怠・休暇申請・評価）の
+    // targetCollectionId が消えた id を指したままになり、関連の列が黙って
+    // 空欄になるうえ、リンクの選択画面が 404 で開けなくなって手作業でも
+    // 直せなくなる。作成した分（下のループ）だけでは、この向きは直らない。
+    const liveIds = new Set(idBySlug.values());
+    for (const obj of objects) {
+      if (!bySlug.has(obj.slug)) continue; // 作る分は下のループが書く
+      const collectionId = idBySlug.get(obj.slug);
+      if (!collectionId) continue;
+      for (const f of obj.fields) {
+        if (!f.relation) continue;
+        const targetId = idBySlug.get(f.relation.to);
+        if (!targetId) continue;
+        const current = await db.field.findUnique({
+          where: { collectionId_key: { collectionId, key: f.key } },
+          select: { config: true },
+        });
+        if (!current) continue;
+        const cfg = (current.config ?? {}) as { targetCollectionId?: string };
+        if (cfg.targetCollectionId && liveIds.has(cfg.targetCollectionId)) continue;
+        await db.field.update({
+          where: { collectionId_key: { collectionId, key: f.key } },
+          data: {
+            config: toJson({
+              targetCollectionId: targetId,
+              displayFieldKey: f.relation.displayFieldKey,
+              multiple: f.relation.multiple ?? false,
+            }),
+          },
+        });
+        repaired += 1;
+      }
+    }
+
     for (const obj of toCreate) {
       const collectionId = idBySlug.get(obj.slug)!;
       for (const f of obj.fields) {
@@ -210,13 +268,29 @@ export async function installMasterObjects(
       // 既にあるオブジェクトの行も引けるようにしておく。ここを作成分だけで
       // 作ると、「一部のシートだけ消して作り直す」ときに relation が全部
       // 空のまま入ってしまう（勤怠 30 行が誰にも紐づかない、という状態）。
+      //
+      // 読むのは「これから作る分が指す先」だけ、かつ PRELOAD_LIMIT 件まで。
+      // 全オブジェクトを無条件に読むと、既にインストール済みのワークスペースで
+      // ボタンをもう一度押しただけで全行（Business なら最大500万行）を
+      // 読み込んでしまう。
+      const neededSlugs = new Set(
+        toCreate.flatMap((o) =>
+          o.fields.filter((f) => f.relation).map((f) => f.relation!.to),
+        ),
+      );
       for (const obj of objects) {
+        if (!neededSlugs.has(obj.slug)) continue;
         if (!bySlug.has(obj.slug)) continue;
         const collectionId = idBySlug.get(obj.slug);
         if (!collectionId) continue;
         const rows = await db.record.findMany({
           where: { collectionId },
+          // 表示名の索引しか作らないので、行全体ではなく id と data だけ。
           select: { id: true, data: true },
+          // 同じ表示名は先勝ちにしたいので、並びを固定する（無指定だと
+          // DB次第で実行ごとに紐づけ先が変わりうる）。
+          orderBy: { createdAt: "asc" },
+          take: PRELOAD_LIMIT,
         });
         const nameMap = new Map<string, string>();
         const labelKey = primaryKeyOf(obj);
@@ -286,7 +360,7 @@ export async function installMasterObjects(
       });
     }
 
-    return { created, skipped, seededRows };
+    return { created, skipped, seededRows, repairedRelations: repaired };
   } catch (err) {
     // Roll back what this call created, so a failure leaves no half-built DB.
     if (created.length > 0) {

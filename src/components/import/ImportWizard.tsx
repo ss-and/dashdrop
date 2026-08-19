@@ -93,11 +93,21 @@ export function ImportWizard() {
   // 部分的にしか取り込めなかったときの警告と、その結果できたシートのID。
   const [notionWarning, setNotionWarning] = useState<string | null>(null);
   const [notionResultId, setNotionResultId] = useState<string | null>(null);
+  // 打ち切られた取り込みの元データベース。同じデータベースをもう一度取り込んでも
+  // 取り込めなかった行は取得されず、同じ先頭N行のスプレッドシートがもう1つ増えて
+  // プランのシート数を消費するだけなので、再実行そのものを止める。
+  const [notionTruncatedDbId, setNotionTruncatedDbId] = useState<string | null>(null);
 
   // Notionの取り込み中は他のソースを触らせない。ファイルやGoogle Sheetsを
   // 開始するとmapステップへ移るが、そのあと解決したNotion取り込みが
   // router.pushで画面を奪い、入力内容が説明なく消えるため。
   const notionBusy = notionImporting;
+  // 逆向きも同じ。ファイル/Google Sheetsの解析中にNotion取り込みを走らせると、
+  // 先に終わったNotion側のrouter.pushが解析結果を奪って消してしまう。
+  const otherSourceBusy = loading || gsheetsLoading;
+  // 打ち切られた直後の同一データベースは、押せても重複を作るだけ。
+  const notionRerunBlocked =
+    notionTruncatedDbId !== null && notionTruncatedDbId === notionDbId;
 
   const step: "upload" | "map" = sheets ? "map" : "upload";
   const selectedCount = sheets?.filter((s) => s.selected).length ?? 0;
@@ -114,6 +124,7 @@ export function ImportWizard() {
     setNotionNotConnected(false);
     setNotionWarning(null);
     setNotionResultId(null);
+    setNotionTruncatedDbId(null);
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -225,6 +236,9 @@ export function ImportWizard() {
   /** Commit a Notion database as a new spreadsheet. */
   async function runNotionImport() {
     if (!notionDbId) return;
+    // 再実行が重複シートしか生まないケースと、他ソースの解析中は走らせない
+    // （ボタンのdisabledと同じ条件。Enterキーなど別経路からの実行も塞ぐ）。
+    if (notionImporting || otherSourceBusy || notionRerunBlocked) return;
     setError(null);
     setNotionWarning(null);
     setNotionResultId(null);
@@ -255,6 +269,9 @@ export function ImportWizard() {
         // 「全行入った」と誤解する。遷移するかどうかは本人に決めてもらう。
         setNotionWarning(data.warning);
         setNotionResultId(collectionId);
+        // 画面に留まる以上、同じデータベースの取り込みボタンは押せたままになる。
+        // 押しても続きは取得できず重複シートが増えるだけなので、ここで塞ぐ。
+        setNotionTruncatedDbId(notionDbId);
         router.refresh();
         return;
       }
@@ -444,6 +461,12 @@ export function ImportWizard() {
                   className="mb-3 rounded border border-warning/30 bg-warning-soft px-3 py-2 text-sm text-warning"
                 >
                   <p>{notionWarning}</p>
+                  {/* 「足りない」だけ伝えて再実行できると、同じ先頭N行の
+                      スプレッドシートがもう1つできるだけになる。何が起きるかを
+                      明示し、次にやるべきことまで書く。 */}
+                  <p className="mt-1">
+                    このデータベースをもう一度取り込んでも、取り込めなかった行は取得されません。同じ内容のスプレッドシートがもう1つ作成されるだけのため、再取り込みは停止しています。Notion側で不要な行を減らすか、別のデータベースを選んでください。
+                  </p>
                   {notionResultId && (
                     <Button
                       variant="secondary"
@@ -542,10 +565,23 @@ export function ImportWizard() {
                       disabled={notionImporting}
                     />
                   </div>
-                  <div className="flex justify-end">
+                  <div className="flex flex-col items-end gap-1">
+                    {otherSourceBusy && (
+                      <p className="text-xs text-ink-muted">
+                        他のファイルを読み込み中です。完了までNotionからの取り込みはお待ちください。
+                      </p>
+                    )}
                     <Button
                       onClick={() => void runNotionImport()}
-                      disabled={notionImporting || !notionDbId}
+                      // ファイル/Google Sheetsの解析中に押されると、先に終わった
+                      // こちらのrouter.pushが解析結果を消してしまう。打ち切り後の
+                      // 同一データベースは重複シートを作るだけなので同様に塞ぐ。
+                      disabled={
+                        notionImporting ||
+                        !notionDbId ||
+                        otherSourceBusy ||
+                        notionRerunBlocked
+                      }
                     >
                       <NavIcon name="download" className="h-4 w-4" />
                       {notionImporting ? "取り込み中…" : "取り込む"}

@@ -17,6 +17,10 @@ import { db, toJson } from "@/lib/db";
 import { slugify, uniqueName } from "@/lib/utils";
 import { assertCanCreateCollection, logActivity } from "@/lib/workspace";
 import { getPlan } from "@/lib/plans";
+import {
+  assertWithinCollectionLimit,
+  takenSlugsWithReserved,
+} from "@/lib/master-objects";
 import { coerceValue } from "@/lib/field-types";
 import { getSecret, recordResult } from "@/lib/integrations";
 import {
@@ -103,13 +107,10 @@ export const POST = withAuth(async (req, { user }) => {
     where: { workspaceId: user.workspace.id },
     select: { slug: true },
   });
-  if (existing.length + 1 > plan.limits.collections) {
-    throw new ApiError(
-      `プラン「${plan.name}」のスプレッドシート上限（${plan.limits.collections}）を超えます。`,
-      403,
-    );
-  }
-  const takenSlugs = new Set(existing.map((c) => c.slug));
+  assertWithinCollectionLimit(plan, existing, 1);
+
+  // マスターDBの slug は予約語 — 詳細は master-objects.ts。
+  const takenSlugs = takenSlugsWithReserved(existing);
 
   const collectionName =
     (body.collectionName && body.collectionName.trim()) ||
@@ -205,24 +206,28 @@ export const POST = withAuth(async (req, { user }) => {
     // 順序は「保証」でなければ意味がない。以前は両方 .catch(() => {}) で、
     // Workbook の削除も無条件に走っていた。Collection の削除だけ失敗すると
     // 「失敗しました」と伝えた裏で中途半端なシートが独立して残る。
-    let rolledBack = true;
+    // 何が残ってしまったか。案内先が変わるので「失敗した」だけでは足りない。
+    // sheet: 中途半端なスプレッドシート（＋その入れ物のファイル）。
+    // workbook: 中身のない空のファイルだけ。
+    let leftover: "sheet" | "workbook" | null = null;
     if (createdCollectionId) {
       try {
         await db.collection.delete({ where: { id: createdCollectionId } });
       } catch (cleanupErr) {
-        rolledBack = false;
+        leftover = "sheet";
         console.error(
           `Notion import rollback: collection ${createdCollectionId} could not be deleted; workbook ${workbook.id} kept so it is not orphaned`,
           cleanupErr,
         );
       }
     }
-    if (rolledBack) {
+    if (leftover === null) {
       try {
         await db.workbook.delete({ where: { id: workbook.id } });
       } catch (cleanupErr) {
-        // Collection は消えているので孤児は残らない。空の Workbook のみ。
-        rolledBack = false;
+        // Collection は消えている（または作られていない）ので孤児は残らない。
+        // 残るのは中身のない Workbook＝利用者から見て「空のファイル」だけ。
+        leftover = "workbook";
         console.error(
           `Notion import rollback: empty workbook ${workbook.id} could not be deleted`,
           cleanupErr,
@@ -230,13 +235,19 @@ export const POST = withAuth(async (req, { user }) => {
       }
     }
 
-    if (!rolledBack) {
+    if (leftover !== null) {
       // 片付けきれなかったことは黙らない。利用者にも管理者にも伝える。
+      // 探す場所が違うものを一律に「スプレッドシート一覧を確認」と案内すると、
+      // 存在しないシートを探させることになる。
       const base =
         err instanceof ApiError ? err.message : "インポート中にエラーが発生しました";
+      const hint =
+        leftover === "sheet"
+          ? "取り込み途中のスプレッドシートを削除できませんでした。スプレッドシート一覧をご確認のうえ削除してください"
+          : "中身のない空のファイルが残りました。行は取り込まれていません。ファイル一覧から削除してください";
       console.error("Notion import failed and rollback was incomplete:", err);
       throw new ApiError(
-        `${base}（取り込み途中のデータを削除できませんでした。スプレッドシート一覧をご確認ください）`,
+        `${base}（${hint}）`,
         err instanceof ApiError ? err.status : 500,
       );
     }

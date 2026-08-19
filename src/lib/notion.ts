@@ -35,6 +35,15 @@ export const MAX_QUERY_PAGES = 30;
  * ルート側の `maxDuration` はこの予算＋DB書き込み分を見込んだ値にする。
  */
 export const NOTION_IMPORT_BUDGET_MS = 40_000;
+/**
+ * 1ページ分の問い合わせを始めてよい最低限の残り時間。
+ *
+ * 残り時間が短いと `notionFetch` はその残り時間までタイムアウトを縮めるので、
+ * 締め切り直前に次のページを取りに行くと高確率で中断され、例外がそのまま上がって
+ * 「ここまでに読めた行」ごと捨てられる。それなら1ページ手前で打ち切り、
+ * 取り込めた行＋警告を返すほうが利用者にとって明らかに得。
+ */
+export const MIN_QUERY_SLICE_MS = 2_000;
 
 /** Placeholder for a database (or select option) with no name. */
 export const UNTITLED = "無題";
@@ -130,6 +139,14 @@ function budgetError(): ApiError {
   );
 }
 
+/** 行のページとして解釈できない応答が返ってきたときのエラー。 */
+function malformedPageError(): ApiError {
+  return new ApiError(
+    "Notionからの応答に行データが含まれていませんでした。時間をおいて再度お試しください。",
+    502,
+  );
+}
+
 /**
  * タイムアウト/中断由来か。`AbortSignal.timeout` は TimeoutError、明示的な
  * abort は AbortError を投げる。どちらも生のDOM例外として利用者に見せない。
@@ -148,6 +165,11 @@ function isAbortLike(err: unknown): boolean {
  * 切断は本文が途中までしか届いておらず、results が空に見えるだけ。ここを
  * `{}` にすると30ページ中5ページ目のタイムアウトが「完了した部分インポート」に
  * 化けるので、必ず例外として上げる。
+ *
+ * なお `{}` が安全なのは、それを「情報なし」として扱える呼び出し側
+ * （`fetchDatabase`＝422、`listDatabases`＝空一覧）に限る。行のページとしては
+ * `{}` は `results: []` かつ `has_more: false` と見分けがつかず「正常な終端」に
+ * 化けるため、`queryDatabase` 側で results の有無を必ず検証する。
  */
 function isJsonSyntaxError(err: unknown): boolean {
   return (
@@ -309,6 +331,10 @@ export interface NotionQueryResult {
  * 打ち切りを「エラー」ではなく「警告付きの成功」にしているのは、上限に当たった
  * 利用者が何も取り込めなくなるより、取り込めた分＋明示的な警告のほうが行動
  * できるため。ただし黙って成功にすることは許さない。
+ *
+ * 締め切りは「次のページに入る前」に見る。締め切り直前の1ページを始めてしまうと
+ * 中断され、例外で全行を失うため（MIN_QUERY_SLICE_MS）。それでも中断された場合は
+ * 締め切り由来のものに限り、読めた行＋`deadline` として返す。
  */
 export async function queryDatabase(
   token: string,
@@ -331,18 +357,57 @@ export async function queryDatabase(
   let truncated = true;
 
   for (let page = 0; page < MAX_QUERY_PAGES; page++) {
+    // 終わらせられないページは始めない。残りが数百msでも `notionFetch` は
+    // その残り時間で問い合わせてしまい、中断された例外がここまでに読めた行を
+    // 巻き添えにする（利用者は0行＋504）。1ページ手前で止めれば
+    // 「読めた分＋締め切り警告」を返せる。
+    if (opts.deadlineAt !== undefined) {
+      const remaining = opts.deadlineAt - Date.now();
+      if (remaining < MIN_QUERY_SLICE_MS) {
+        // 1行も読めていないなら「打ち切り」ではなく失敗。空のスプレッドシートを
+        // 作って成功と報告するくらいなら、制限時間超過として伝えたほうがよい。
+        if (pages.length === 0) throw budgetError();
+        stoppedBy = "deadline";
+        truncated = true;
+        break;
+      }
+    }
+
     const body: Record<string, unknown> = {
       page_size: Math.min(NOTION_PAGE_SIZE, maxRows - pages.length),
     };
     if (cursor) body.start_cursor = cursor;
 
-    const json: Record<string, unknown> = await notionFetch(
-      token,
-      `/databases/${encodeURIComponent(id)}/query`,
-      { method: "POST", body, deadlineAt: opts.deadlineAt },
-    );
+    let json: Record<string, unknown>;
+    try {
+      json = await notionFetch(token, `/databases/${encodeURIComponent(id)}/query`, {
+        method: "POST",
+        body,
+        deadlineAt: opts.deadlineAt,
+      });
+    } catch (err) {
+      // 締め切りぎりぎりで中断された（504）場合だけは、すでに読めた行を捨てない。
+      // 締め切りと無関係なタイムアウトはこれまでどおり例外にする——途中のページが
+      // 落ちたのに「完了」と報告するのが元のバグそのものだったため。
+      const atDeadline =
+        opts.deadlineAt !== undefined &&
+        Date.now() >= opts.deadlineAt - MIN_QUERY_SLICE_MS;
+      if (
+        atDeadline &&
+        pages.length > 0 &&
+        err instanceof ApiError &&
+        err.status === 504
+      ) {
+        return { pages, truncated: true, stoppedBy: "deadline", limit: maxRows };
+      }
+      throw err;
+    }
 
-    const results = asArray(json.results);
+    // 行のページに results 配列がないのは異常。`notionFetch` が本文を `{}` に
+    // 落とした場合（WAFのHTML応答など）もここに来る。黙って `[]` として扱うと
+    // 「has_more なし＝完了」になり、部分インポートが完了扱いで確定してしまう。
+    if (!Array.isArray(json.results)) throw malformedPageError();
+    const results = json.results;
     let consumed = 0;
     for (const row of results) {
       consumed += 1;
@@ -362,11 +427,6 @@ export async function queryDatabase(
     if (!hasMore) {
       stoppedBy = "complete";
       truncated = false;
-      break;
-    }
-    if (opts.deadlineAt !== undefined && Date.now() >= opts.deadlineAt) {
-      stoppedBy = "deadline";
-      truncated = true;
       break;
     }
     cursor = next;

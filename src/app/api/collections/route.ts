@@ -6,6 +6,7 @@
 import { withAuth, ok, readJson } from "@/lib/api";
 import { db, toJson } from "@/lib/db";
 import { slugify, toFieldKey, uniqueName } from "@/lib/utils";
+import { takenSlugsWithReserved } from "@/lib/master-objects";
 import { createCollectionSchema } from "@/lib/validation";
 import {
   assertCanCreateCollection,
@@ -40,7 +41,8 @@ export const POST = withAuth(async (req, { user }) => {
     where: { workspaceId: user.workspace.id },
     select: { slug: true },
   });
-  const takenSlugs = new Set(existing.map((c) => c.slug));
+  // マスターDBの slug は予約語 — 詳細は master-objects.ts。
+  const takenSlugs = takenSlugsWithReserved(existing);
   const slug = uniqueName(slugify(input.name), takenSlugs);
 
   const position = existing.length;

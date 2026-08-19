@@ -14,6 +14,10 @@ import { withAuth, ok, readJson } from "@/lib/api";
 import { ApiError } from "@/lib/errors";
 import { db, toJson } from "@/lib/db";
 import { getPlan } from "@/lib/plans";
+import {
+  assertWithinCollectionLimit,
+  takenSlugsWithReserved,
+} from "@/lib/master-objects";
 import { logActivity } from "@/lib/workspace";
 import { coerceValue } from "@/lib/field-types";
 import { slugify, uniqueName } from "@/lib/utils";
@@ -67,14 +71,10 @@ export const POST = withAuth(async (req, { user }) => {
     select: { slug: true, name: true },
   });
 
-  if (existing.length + sheets.length > plan.limits.collections) {
-    throw new ApiError(
-      `プラン「${plan.name}」のスプレッドシート上限（${plan.limits.collections}）を超えます。不要なスプレッドシートを削除するか、プランを変更してください。`,
-      403,
-    );
-  }
+  assertWithinCollectionLimit(plan, existing, sheets.length);
 
-  const takenSlugs = new Set(existing.map((c) => c.slug));
+  // マスターDBの slug は予約語 — 詳細は master-objects.ts。
+  const takenSlugs = takenSlugsWithReserved(existing);
   const takenNames = new Set(existing.map((c) => c.name));
 
   const created: Array<{ id: string; key: string; name: string }> = [];

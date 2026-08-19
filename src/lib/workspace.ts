@@ -8,7 +8,7 @@
 import { db, toJson } from "./db";
 import { ApiError } from "./errors";
 import { getPlan } from "./plans";
-import { MASTER_SLUGS } from "./master-objects";
+import { assertWithinCollectionLimit } from "./master-objects";
 import type { CurrentUser } from "./auth";
 import type { Collection, Field } from "@prisma/client";
 
@@ -37,16 +37,13 @@ export async function getRecordForUser(user: CurrentUser, recordId: string) {
 
 export async function assertCanCreateCollection(user: CurrentUser): Promise<void> {
   const plan = getPlan(user.workspace.plan);
-  // 組み込みのマスターDB（顧客・人事）は枠を消費しない — src/lib/master-objects.ts
-  const count = await db.collection.count({
-    where: { workspaceId: user.workspace.id, slug: { notIn: MASTER_SLUGS } },
+  // 数え方は必ず assertWithinCollectionLimit に集約する。ここだけ独自に数えると
+  // 「作れるのに取り込めない」といった噛み合わない状態が生まれる。
+  const existing = await db.collection.findMany({
+    where: { workspaceId: user.workspace.id },
+    select: { slug: true },
   });
-  if (count >= plan.limits.collections) {
-    throw new ApiError(
-      `プラン「${plan.name}」のテーブル上限（${plan.limits.collections}）に達しました。アップグレードしてください。`,
-      403,
-    );
-  }
+  assertWithinCollectionLimit(plan, existing, 1);
 }
 
 export async function assertCanAddRecords(

@@ -61,7 +61,13 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  await db.$disconnect().catch(() => {});
+  // beforeAll が落ちた場合 db は未定義。ここで TypeError を投げると一時DBの
+  // 削除まで到達せず、os.tmpdir() にゴミが残る。
+  try {
+    await db?.$disconnect();
+  } catch {
+    /* 後片付けは best-effort */
+  }
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -734,5 +740,104 @@ describe("顧客データベース", () => {
       }
     },
     45_000,
+  );
+});
+
+/* ---------------- 8. 親シートを消してから再インストールする ---------------- */
+
+describe("リレーションの参照先シートを削除してから再インストールする", () => {
+  it(
+    "子シートの参照先を貼り直し、選択画面が壊れたままにならない",
+    async () => {
+      // 【回帰】pass 2 は「これから作る分」しか config を書かなかったため、
+      // 親（社員）だけ削除して作り直すと、子（勤怠・休暇申請・評価）の
+      // targetCollectionId が消えた id を指したままになっていた。関連の列が
+      // 黙って空欄になるうえ、リンクの選択画面が 404 になり手作業でも直せない。
+      const user = await createUser();
+      await installHr(user);
+
+      const employees = await collectionBySlug(user, "hr-employees");
+      const attendance = await collectionBySlug(user, "hr-attendance");
+      const before = (
+        attendance.fields.find((f) => f.key === "employee")!.config as {
+          targetCollectionId: string;
+        }
+      ).targetCollectionId;
+      expect(before).toBe(employees.id);
+
+      await db.collection.delete({ where: { id: employees.id } });
+      const result = await installHr(user);
+
+      expect(result.created.map((c) => c.slug)).toEqual(["hr-employees"]);
+      expect(result.repairedRelations).toBeGreaterThan(0);
+
+      const rebuilt = await collectionBySlug(user, "hr-employees");
+      expect(rebuilt.id).not.toBe(employees.id);
+
+      // 子3つすべてが新しい社員シートを指していること。
+      for (const [slug, key] of [
+        ["hr-attendance", "employee"],
+        ["hr-leave-requests", "employee"],
+        ["hr-reviews", "employee"],
+      ] as const) {
+        const child = await collectionBySlug(user, slug);
+        const cfg = child.fields.find((f) => f.key === key)!.config as {
+          targetCollectionId: string;
+        };
+        expect(cfg.targetCollectionId, slug).toBe(rebuilt.id);
+      }
+
+      // 承認者（multiple: true）も同じく貼り直される。
+      const leave = await collectionBySlug(user, "hr-leave-requests");
+      const approvers = leave.fields.find((f) => f.key === "approvers")!
+        .config as { targetCollectionId: string; multiple: boolean };
+      expect(approvers.targetCollectionId).toBe(rebuilt.id);
+      expect(approvers.multiple).toBe(true);
+    },
+    30_000,
+  );
+
+  it(
+    "参照先が生きているときは config を書き換えない",
+    async () => {
+      const user = await createUser();
+      await installHr(user);
+      const before = await collectionBySlug(user, "hr-attendance");
+      const beforeCfg = before.fields.find((f) => f.key === "employee")!.config;
+
+      const result = await installHr(user);
+      expect(result.repairedRelations).toBe(0);
+
+      const after = await collectionBySlug(user, "hr-attendance");
+      expect(after.fields.find((f) => f.key === "employee")!.config).toEqual(
+        beforeCfg,
+      );
+    },
+    30_000,
+  );
+});
+
+/* ------------- 9. 列を削られた本物のシートを拒否しないこと ------------- */
+
+describe("列を削った本物のマスターシート", () => {
+  it(
+    "主キーの列を消しても、自分が書いた config があれば再インストールを拒否しない",
+    async () => {
+      // 【回帰】衝突の判定が「主キー + 列の半数」だけだったため、
+      // 「勤怠番号」「申請番号」のような“要らない列”に見えるものを消すと
+      // 自分のシートを他人のものと誤判定し、409 で永久に再インストール
+      // できなくなっていた（slug は改名では変えられないので回復不能）。
+      const user = await createUser();
+      await installHr(user);
+
+      const attendance = await collectionBySlug(user, "hr-attendance");
+      const recordNo = attendance.fields.find((f) => f.key === "recordNo")!;
+      await db.field.delete({ where: { id: recordNo.id } });
+
+      const result = await installHr(user);
+      expect(result.created).toEqual([]);
+      expect(result.skipped).toContain("hr-attendance");
+    },
+    30_000,
   );
 });

@@ -18,6 +18,10 @@ import { slugify, uniqueName, toFieldKey } from "@/lib/utils";
 import { assertCanCreateCollection, logActivity } from "@/lib/workspace";
 import { getPlan } from "@/lib/plans";
 import {
+  assertWithinCollectionLimit,
+  takenSlugsWithReserved,
+} from "@/lib/master-objects";
+import {
   isFieldType,
   coerceValue,
   type FieldType,
@@ -108,15 +112,11 @@ export const POST = withAuth(async (req, { user }) => {
     where: { workspaceId: user.workspace.id },
     select: { slug: true },
   });
-  const takenSlugs = new Set(existing.map((c) => c.slug));
+  // マスターDBの slug は予約語 — 詳細は master-objects.ts。
+  const takenSlugs = takenSlugsWithReserved(existing);
 
   // --- Prepare + validate every selected sheet BEFORE any write ---
-  if (existing.length + selections.length > plan.limits.collections) {
-    throw new ApiError(
-      `プラン「${plan.name}」のスプレッドシート上限（${plan.limits.collections}）を超えます。`,
-      403,
-    );
-  }
+  assertWithinCollectionLimit(plan, existing, selections.length);
 
   const jobs: PreparedJob[] = [];
   for (const sel of selections) {

@@ -175,6 +175,7 @@ export default async function CollectionPage({
               fields={collection.fields}
               initialRecords={gridData.resolved.records}
               relationLabels={gridData.resolved.relationLabels}
+              lookupLabels={gridData.resolved.lookupLabels}
               workspaceCollections={gridData.workspaceCollections}
             />
           ) : (

@@ -14,6 +14,7 @@ import { getSession } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getCollectionForUser } from "@/lib/workspace";
 import {
+  applyLookupLabels,
   pickDisplayField,
   resolveCollectionRecords,
   type EngineCollection,
@@ -137,6 +138,12 @@ export default async function RecordPage({
     computed: {} as Record<string, unknown>,
   };
 
+  // 画面に渡す computed。ルックアップがリンク先の select / multiselect を引いて
+  // いるときは、保存値（"parttime"）ではなく選択肢のラベル（「パート・アルバイト」）
+  // を見せる。集計・フィルタが読む resolved.records[].computed は生の値のままで、
+  // ここで作るのは表示用のコピーだけ。
+  const displayComputed = applyLookupLabels(row.computed, resolved.lookupLabels);
+
   const fields: RecordFieldDef[] = collection.fields.map(toFieldDef);
 
   /* ------------------------------- title ---------------------------------- */
@@ -238,7 +245,11 @@ export default async function RecordPage({
           : undefined,
       total: matches.length,
       columns,
-      rows: childResolved.records,
+      // 関連リストの行も同じ規則で、ルックアップはラベル表示にそろえる。
+      rows: childResolved.records.map((r) => ({
+        ...r,
+        computed: applyLookupLabels(r.computed, childResolved.lookupLabels),
+      })),
       relationLabels: childResolved.relationLabels,
     });
   }
@@ -256,14 +267,14 @@ export default async function RecordPage({
             workbook={workbook}
             highlights={highlights}
             data={row.data}
-            computed={row.computed}
+            computed={displayComputed}
             relationLabels={resolved.relationLabels}
           />
 
           <RecordFields
             fields={fields}
             data={row.data}
-            computed={row.computed}
+            computed={displayComputed}
             relationLabels={resolved.relationLabels}
           />
 

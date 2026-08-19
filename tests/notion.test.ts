@@ -24,6 +24,7 @@ import {
   MAX_QUERY_PAGES,
   DEFAULT_MAX_ROWS,
   NOTION_IMPORT_BUDGET_MS,
+  MIN_QUERY_SLICE_MS,
 } from "@/lib/notion";
 
 const TOKEN = "secret_test_token_0123456789";
@@ -560,21 +561,36 @@ describe("queryDatabase", () => {
     expect(result.pages).toHaveLength(MAX_QUERY_PAGES);
   });
 
-  it("survives hostile query bodies", async () => {
+  it("survives hostile query bodies that are still recognisable pages", async () => {
     const bodies: unknown[] = [
-      {},
-      { results: null, has_more: true, next_cursor: "x" },
-      { results: {}, has_more: "yes" },
+      { results: [], has_more: "yes" },
       { results: [null, "x", 1], has_more: false },
       { results: [{ id: "p1" }], has_more: true, next_cursor: null },
       { results: [{ id: "p1", properties: null }], has_more: false },
-      "<!doctype html>",
-      null,
     ];
     for (const body of bodies) {
       mockFetch(jsonResponse(body));
       const result = await queryDatabase(TOKEN, "db-1");
       expect(Array.isArray(result.pages)).toBe(true);
+    }
+  });
+
+  it("refuses a query page with no results array instead of calling it the end", async () => {
+    // results が配列でない応答を `[]` と同一視すると has_more も消え、
+    // 「きれいに読み切った」と誤って報告される。
+    const bodies: unknown[] = [
+      {},
+      { results: null, has_more: true, next_cursor: "x" },
+      { results: {}, has_more: true, next_cursor: "x" },
+      "<!doctype html>",
+      null,
+    ];
+    for (const body of bodies) {
+      mockFetch(jsonResponse(body));
+      const err = await queryDatabase(TOKEN, "db-1").catch((e) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err.status).toBe(502);
+      expect(err.message).toContain("行データ");
     }
   });
 });
@@ -631,27 +647,52 @@ describe("queryDatabase truncation reporting", () => {
 // F6 — an overall request budget
 // ---------------------------------------------------------------------------
 
+/** 中断されるまで永久に解決しないfetch（＝本当にタイムアウトする問い合わせ）。 */
+function abortingFetch(): ReturnType<typeof vi.fn> {
+  return vi.fn(
+    (_input: unknown, init?: { signal?: AbortSignal }): Promise<Response> =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) return;
+        signal.addEventListener("abort", () => {
+          // AbortSignal.timeout が投げるのと同じ形。
+          const err = new Error("The operation was aborted due to timeout");
+          err.name = "TimeoutError";
+          reject(err);
+        });
+      }),
+  );
+}
+
+/** 本文の生成に実時間を使うページ（締め切りを跨がせるため）。 */
+function slowQueryPage(delayMs: number): Response {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ "content-type": "application/json" }),
+    json: async () => {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return {
+        results: [{ object: "page", id: "p1", properties: {} }],
+        has_more: true,
+        next_cursor: "cursor-1",
+      };
+    },
+    text: async () => "",
+  } as unknown as Response;
+}
+
 describe("import budget", () => {
-  it("stops paginating once the deadline has passed, and says so", async () => {
-    // 1ページごとに実時間を消費させ、2ページ目に入る前に締め切りを跨がせる。
-    const slowPage = {
-      ok: true,
-      status: 200,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        return {
-          results: [{ object: "page", id: "p1", properties: {} }],
-          has_more: true,
-          next_cursor: "cursor-1",
-        };
-      },
-      text: async () => "",
-    } as unknown as Response;
-    const fetchMock = mockFetch(slowPage);
+  it("does not start a page it cannot finish, and reports the deadline", async () => {
+    // 残り時間がわずかなまま次のページを取りに行くと、`notionFetch` はその
+    // 残り時間でタイムアウトし、例外がここまでの行を巻き添えにする。
+    // 2ページ目は「絶対に返ってこない」応答にしてあり、始めた時点で全滅する。
+    const fetchMock = abortingFetch();
+    fetchMock.mockResolvedValueOnce(slowQueryPage(120));
+    global.fetch = fetchMock as unknown as typeof fetch;
 
     const result = await queryDatabase(TOKEN, "db-1", {
-      deadlineAt: Date.now() + 10,
+      deadlineAt: Date.now() + MIN_QUERY_SLICE_MS + 50,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -659,6 +700,37 @@ describe("import budget", () => {
     expect(result.truncated).toBe(true);
     expect(result.stoppedBy).toBe("deadline");
     expect(truncationMessage(result)).toContain("制限時間");
+  });
+
+  it("keeps the rows already read when a page is aborted at the deadline", async () => {
+    // 締め切りぎりぎりで始まったページが実際に中断されるケース。以前は
+    // TimeoutError がそのまま上がり、読めていた100行ごと捨てて504になった。
+    const fetchMock = abortingFetch();
+    fetchMock.mockResolvedValueOnce(queryPage(100, true, "cursor-1"));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await queryDatabase(TOKEN, "db-1", {
+      deadlineAt: Date.now() + MIN_QUERY_SLICE_MS + 400,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.pages).toHaveLength(100);
+    expect(result.truncated).toBe(true);
+    expect(result.stoppedBy).toBe("deadline");
+  });
+
+  it("fails instead of returning an empty success when no page fits the budget", async () => {
+    // 1行も読めていないのに「打ち切り」として成功を返すと、空のスプレッドシートが
+    // できてしまう。ここはエラーで伝える。
+    const fetchMock = mockFetch(queryPage(1, false, null));
+    const err = await queryDatabase(TOKEN, "db-1", {
+      deadlineAt: Date.now() + 5,
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(504);
+    expect(err.message).toContain("制限時間");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("refuses to start a request whose budget is already spent", async () => {
@@ -818,8 +890,31 @@ describe("notionFetch body reads", () => {
 
   it("still treats a genuine non-JSON body as an empty object", async () => {
     // 本文は最後まで届いており「JSONではない」と分かる。ここは従来どおり {}。
+    // ——ただし「情報なし」として扱える呼び出し側（422にする fetchDatabase、
+    // 空一覧にする listDatabases）に限る。
     mockFetch(brokenResponse(200));
     await expect(fetchDatabase(TOKEN, "db-1")).resolves.toEqual({});
+  });
+
+  it("still treats a genuine non-JSON body as an empty database list", async () => {
+    mockFetch(brokenResponse(200));
+    await expect(listDatabases(TOKEN)).resolves.toEqual([]);
+  });
+
+  it("never accepts that same empty object as a query page", async () => {
+    // WAF/Cloudflareの割り込みは「HTTP 200＋HTMLの本文」で来る。30ページ中の
+    // 5ページ目がこれになると、{} は results なし＝has_more なしと同じに見え、
+    // 400行だけの取り込みが truncated:false の「完了」として確定してしまう。
+    const fetchMock = mockFetch(
+      queryPage(100, true, "cursor-1"),
+      brokenResponse(200),
+    );
+
+    const err = await queryDatabase(TOKEN, "db-1").catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(502);
+    expect(err.message).toContain("行データ");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -916,6 +1011,19 @@ describe("POST /api/import/notion", () => {
     expect(mocks.recordResult).toHaveBeenCalledWith("ws-1", "notion", false, err.message);
   });
 
+  it("F1: an HTML interstitial on a later page fails the import instead of committing part of it", async () => {
+    // 200＋HTML本文。以前はこのページが「空の最終ページ」に化け、100行だけの
+    // 取り込みが warning なし・truncated:false で成功していた。
+    mockFetch(dbSchema(), queryPage(100, true, "cursor-1"), brokenResponse(200));
+    const { handler } = await loadRoute();
+
+    const err = await handler(routeReq, routeCtx("business")).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(mocks.db.workbook.create).not.toHaveBeenCalled();
+    expect(mocks.db.collection.create).not.toHaveBeenCalled();
+    expect(mocks.recordResult).toHaveBeenCalledWith("ws-1", "notion", false, err.message);
+  });
+
   it("F2: surfaces truncation in the response and in the activity log", async () => {
     // 常に has_more のデータベース → 2,000行で打ち切られる。
     mockFetch(dbSchema(), queryPage(100, true, "cursor-1"));
@@ -960,7 +1068,39 @@ describe("POST /api/import/notion", () => {
     // Workbook を消すと中途半端なシートが独立して残る。
     expect(mocks.db.collection.delete).toHaveBeenCalledTimes(1);
     expect(mocks.db.workbook.delete).not.toHaveBeenCalled();
+    // 残っているのは中途半端なスプレッドシート。案内先はスプレッドシート一覧。
+    expect(err.message).toContain("スプレッドシート一覧");
     expect(err.message).toContain("削除できませんでした");
+  });
+
+  it("F5: when only an empty workbook survives, says so instead of sending the user to the sheet list", async () => {
+    // Collection は消せている＝行は1件も残っていない。残骸は空のファイルだけ。
+    // 「スプレッドシート一覧をご確認ください」と案内すると、存在しないシートを
+    // 探させることになる。
+    mockFetch(dbSchema(), queryPage(2, false, null));
+    mocks.db.$transaction.mockRejectedValue(new Error("db is gone"));
+    mocks.db.workbook.delete.mockRejectedValue(new Error("delete failed"));
+    const { handler } = await loadRoute();
+
+    const err = await handler(routeReq, routeCtx("business")).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(mocks.db.collection.delete).toHaveBeenCalledTimes(1);
+    expect(mocks.db.workbook.delete).toHaveBeenCalledTimes(1);
+    expect(err.message).toContain("空のファイル");
+    expect(err.message).not.toContain("スプレッドシート一覧");
+  });
+
+  it("F5: when the collection was never created, the leftover is still only an empty workbook", async () => {
+    mockFetch(dbSchema(), queryPage(2, false, null));
+    mocks.db.collection.create.mockRejectedValue(new Error("create failed"));
+    mocks.db.workbook.delete.mockRejectedValue(new Error("delete failed"));
+    const { handler } = await loadRoute();
+
+    const err = await handler(routeReq, routeCtx("business")).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(mocks.db.collection.delete).not.toHaveBeenCalled();
+    expect(err.message).toContain("空のファイル");
+    expect(err.message).not.toContain("スプレッドシート一覧");
   });
 
   it("F5: deletes the workbook only after the collection delete succeeded", async () => {
@@ -977,6 +1117,7 @@ describe("POST /api/import/notion", () => {
       where: { id: "wb-1" },
     });
     expect(err.message).not.toContain("削除できませんでした");
+    expect(err.message).not.toContain("空のファイル");
   });
 
   it("F6: exports a maxDuration that covers the Notion read budget", async () => {
@@ -1115,5 +1256,97 @@ describe("ImportWizard — Notion source", () => {
       screen.getByRole("button", { name: "取り込んだスプレッドシートを開く" }),
     );
     expect(mocks.push).toHaveBeenCalledWith("/c/col-1");
+  });
+
+  it("F3: refuses to re-run the same database after a truncated import", async () => {
+    const fetchMock = wizardFetch((url) =>
+      url.includes(DB_LIST_URL)
+        ? jsonResponse({
+            ok: true,
+            data: {
+              databases: [
+                { id: "db-1", title: "顧客", url: "u" },
+                { id: "db-2", title: "案件", url: "u2" },
+              ],
+            },
+          })
+        : jsonResponse({
+            ok: true,
+            data: {
+              collectionId: "col-1",
+              truncated: true,
+              warning: "1回の取り込みで読み込める上限（2,000行）に達したため…",
+            },
+          }),
+    );
+    render(createElement(ImportWizard));
+
+    fireEvent.click(screen.getByRole("button", { name: "データベースを読み込む" }));
+    const runButton = await screen.findByRole("button", { name: /取り込む/ });
+    fireEvent.click(runButton);
+    await screen.findByRole("status");
+
+    // 押せたままだと、同じ先頭2,000行のスプレッドシートがもう1枚できるだけで、
+    // 最初の取り込みへの唯一のリンク（警告＋開くボタン）も消える。
+    const importCalls = () =>
+      fetchMock.mock.calls.filter((c) => !String(c[0]).includes(DB_LIST_URL)).length;
+    await waitFor(() => expect(runButton).toBeDisabled());
+    fireEvent.click(runButton);
+    expect(importCalls()).toBe(1);
+    expect(
+      screen.getByRole("button", { name: "取り込んだスプレッドシートを開く" }),
+    ).toBeInTheDocument();
+
+    // 再実行しても続きは取れない、と明言していること。
+    const warning = screen.getByRole("status");
+    expect(warning.textContent).toContain("取り込めなかった行は取得されません");
+
+    // 別のデータベースを選べば取り込みは再開できる。
+    fireEvent.change(screen.getByLabelText("データベース"), {
+      target: { value: "db-2" },
+    });
+    await waitFor(() => expect(runButton).not.toBeDisabled());
+  });
+
+  it("F4: blocks the Notion import while a Google Sheets URL is being parsed", async () => {
+    let releaseGsheets: (() => void) | null = null;
+    const fn = vi.fn((input: unknown) => {
+      const url = String(input);
+      if (url.includes(DB_LIST_URL)) {
+        return Promise.resolve(
+          jsonResponse({
+            ok: true,
+            data: { databases: [{ id: "db-1", title: "顧客", url: "u" }] },
+          }),
+        );
+      }
+      if (url.includes("/api/import/gsheets/preview")) {
+        // 解析を解決させない — 「読み込み中」の状態を観察する。
+        return new Promise<Response>((resolve) => {
+          releaseGsheets = () => resolve(jsonResponse({ ok: true, data: { sheets: [] } }));
+        });
+      }
+      return Promise.resolve(jsonResponse({ ok: true, data: { collectionId: "col-1" } }));
+    });
+    global.fetch = fn as unknown as typeof fetch;
+
+    render(createElement(ImportWizard));
+    fireEvent.click(screen.getByRole("button", { name: "データベースを読み込む" }));
+    const runButton = await screen.findByRole("button", { name: /取り込む/ });
+
+    fireEvent.change(
+      screen.getByPlaceholderText("https://docs.google.com/spreadsheets/d/…"),
+      { target: { value: "https://docs.google.com/spreadsheets/d/abc/edit" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "読み込む" }));
+
+    // Notion側が先に終わると router.push で画面を奪い、解析中のSheetsが消える。
+    await waitFor(() => expect(runButton).toBeDisabled());
+    fireEvent.click(runButton);
+    expect(
+      fn.mock.calls.some((c) => String(c[0]).includes("/api/import/notion")),
+    ).toBe(false);
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(releaseGsheets).not.toBeNull();
   });
 });

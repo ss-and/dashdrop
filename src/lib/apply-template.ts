@@ -8,6 +8,10 @@ import { db, toJson } from "./db";
 import { ApiError } from "./errors";
 import { slugify, uniqueName } from "./utils";
 import { getPlan } from "./plans";
+import {
+  assertWithinCollectionLimit,
+  takenSlugsWithReserved,
+} from "./master-objects";
 import { logActivity } from "./workspace";
 import { generateSampleRows } from "./sample-data";
 import {
@@ -50,12 +54,7 @@ export async function applyTemplate(
     where: { workspaceId },
     select: { slug: true },
   });
-  if (existing.length + template.collections.length > plan.limits.collections) {
-    throw new ApiError(
-      `プラン「${plan.name}」のテーブル上限（${plan.limits.collections}）を超えます。`,
-      403,
-    );
-  }
+  assertWithinCollectionLimit(plan, existing, template.collections.length);
   for (const c of template.collections) {
     const rows = withSampleData ? c.sampleRows : 0;
     if (rows > plan.limits.recordsPerCollection) {
@@ -66,7 +65,8 @@ export async function applyTemplate(
     }
   }
 
-  const takenSlugs = new Set(existing.map((c) => c.slug));
+  // マスターDBの slug は予約語 — 詳細は master-objects.ts。
+  const takenSlugs = takenSlugsWithReserved(existing);
   const slugMap = new Map<string, string>(); // template slug -> actual slug
   const created: Array<{ id: string; slug: string; name: string }> = [];
   let seededRows = 0;

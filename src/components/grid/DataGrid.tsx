@@ -72,6 +72,32 @@ function toGridField(f: RawField): GridField {
 type SortState = { key: string; dir: "asc" | "desc" };
 
 /**
+ * ルックアップ列の値を表示用ラベルへ置き換える。
+ *
+ * リンク先が select / multiselect のとき、computed に入っているのは保存値
+ * （"parttime" のようなコード）。ダッシュボードの集計や保存済みフィルタが
+ * その生の値を参照するので、データ側は絶対に書き換えず、表示の直前だけ
+ * ラベル（「パート・アルバイト」）に差し替える。
+ *
+ * - 対応表に無いコードは、何が保存されているか分かるようそのまま出す。
+ * - 複数リンク／multiselect では配列（や配列の配列）になるので再帰でたどる。
+ * - 文字列以外（数値・真偽値・null）は触らない。0 や false を消さないため。
+ *
+ * 同じ規則は src/lib/relations.ts の labelLookupValue() にもある。あちらは
+ * `server-only` なモジュールでクライアントから import できないため、ここに
+ * 同じ規則を置いている。
+ */
+function labelLookupValue(
+  value: unknown,
+  labels: Record<string, string> | undefined,
+): unknown {
+  if (!labels) return value;
+  if (Array.isArray(value)) return value.map((v) => labelLookupValue(v, labels));
+  if (typeof value !== "string") return value;
+  return labels[value] ?? value;
+}
+
+/**
  * Visible text for a cell — mirrors CellView's display logic (relation labels,
  * select/multiselect option labels, computed lookup/rollup) so that search
  * matches exactly what the user sees on screen.
@@ -81,6 +107,7 @@ function cellDisplayText(
   data: Record<string, unknown>,
   computed: Record<string, unknown>,
   relLabels: Record<string, string> | undefined,
+  lookupValueLabels: Record<string, string> | undefined,
 ): string {
   switch (field.type) {
     case "relation": {
@@ -90,7 +117,11 @@ function cellDisplayText(
       return ids.map((id) => relLabels?.[id] ?? id).join(" ");
     }
     case "lookup":
-      return displayValue("lookup", computed[field.key]);
+      // 検索は「画面に見えている文字」に一致してほしいので、ここもラベル後の値。
+      return displayValue(
+        "lookup",
+        labelLookupValue(computed[field.key], lookupValueLabels),
+      );
     case "rollup":
       return displayValue("rollup", computed[field.key]);
     case "formula":
@@ -128,6 +159,7 @@ function cellSortValue(
   data: Record<string, unknown>,
   computed: Record<string, unknown>,
   relLabels: Record<string, string> | undefined,
+  lookupValueLabels: Record<string, string> | undefined,
 ): number | string | null {
   if (field.type === "number" || field.type === "currency") {
     const raw = data[field.key];
@@ -156,7 +188,7 @@ function cellSortValue(
     const t = Date.parse(String(raw));
     return Number.isNaN(t) ? String(raw) : t;
   }
-  const text = cellDisplayText(field, data, computed, relLabels);
+  const text = cellDisplayText(field, data, computed, relLabels, lookupValueLabels);
   return text === "" ? null : text;
 }
 
@@ -180,12 +212,15 @@ export function DataGrid({
   fields: initialFields,
   initialRecords,
   relationLabels: initialRelationLabels,
+  lookupLabels: initialLookupLabels,
   workspaceCollections,
 }: {
   collection: { id: string; template: string };
   fields: RawField[];
   initialRecords: RawRecord[];
   relationLabels: Record<string, Record<string, string>>;
+  /** lookupLabels[ルックアップ列のkey][保存値] = 選択肢のラベル（表示専用）。 */
+  lookupLabels: Record<string, Record<string, string>>;
   workspaceCollections: WorkspaceCollection[];
 }) {
   const [fields, setFields] = useState<GridField[]>(() =>
@@ -201,6 +236,9 @@ export function DataGrid({
   const [relationLabels, setRelationLabels] = useState<
     Record<string, Record<string, string>>
   >(initialRelationLabels ?? {});
+  const [lookupLabels, setLookupLabels] = useState<
+    Record<string, Record<string, string>>
+  >(initialLookupLabels ?? {});
   const [draft, setDraft] = useState<Record<string, unknown>>({});
 
   // Salesforce-style list controls: a text filter over displayed values and a
@@ -274,6 +312,14 @@ export function DataGrid({
       );
       setRelationLabels(
         (json.data.relationLabels as Record<
+          string,
+          Record<string, string>
+        >) ?? {},
+      );
+      // ルックアップ先の列（選択肢）が差し替わることもあるので、ラベル対応表も
+      // records と同じタイミングで取り直す。
+      setLookupLabels(
+        (json.data.lookupLabels as Record<
           string,
           Record<string, string>
         >) ?? {},
@@ -444,7 +490,13 @@ export function DataGrid({
     if (q) {
       rows = rows.filter((rec) =>
         columns.some((f) =>
-          cellDisplayText(f, rec.data, rec.computed, relationLabels[f.key])
+          cellDisplayText(
+            f,
+            rec.data,
+            rec.computed,
+            relationLabels[f.key],
+            lookupLabels[f.key],
+          )
             .toLowerCase()
             .includes(q),
         ),
@@ -455,15 +507,27 @@ export function DataGrid({
       if (field) {
         rows = [...rows].sort((ra, rb) =>
           compareCells(
-            cellSortValue(field, ra.data, ra.computed, relationLabels[field.key]),
-            cellSortValue(field, rb.data, rb.computed, relationLabels[field.key]),
+            cellSortValue(
+              field,
+              ra.data,
+              ra.computed,
+              relationLabels[field.key],
+              lookupLabels[field.key],
+            ),
+            cellSortValue(
+              field,
+              rb.data,
+              rb.computed,
+              relationLabels[field.key],
+              lookupLabels[field.key],
+            ),
             sort.dir,
           ),
         );
       }
     }
     return rows;
-  }, [records, columns, query, sort, relationLabels]);
+  }, [records, columns, query, sort, relationLabels, lookupLabels]);
 
   const isEditing = (rowId: string, key: string) =>
     editing?.rowId === rowId && editing.key === key;
@@ -494,9 +558,15 @@ export function DataGrid({
 
     // Computed columns are read-only: render a non-interactive cell.
     if (isComputed) {
+      // ルックアップだけは、保存値ではなく選択肢のラベルを見せる（データは生の
+      // ままなので、差し替えるのはこの表示用の値だけ）。
+      const shown =
+        field.type === "lookup"
+          ? labelLookupValue(computed[field.key], lookupLabels[field.key])
+          : computed[field.key];
       return (
         <div className="flex h-full min-h-[38px] w-full items-center px-2.5 py-1 text-left text-sm text-ink-muted">
-          <CellView field={field} value={computed[field.key]} />
+          <CellView field={field} value={shown} />
         </div>
       );
     }

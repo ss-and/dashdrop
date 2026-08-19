@@ -87,7 +87,16 @@ export function isStrongSecret(secret: string): boolean {
   const lower = secret.toLowerCase();
   if (PLACEHOLDER_MARKERS.some((m) => lower.includes(m))) return false;
   // 同じ文字の繰り返し（"aaaa…"）のような、長さだけ足りている値も弾く。
-  if (new Set(secret).size < 12) return false;
+  //
+  // 固定の「12種類以上」だと、`openssl rand -hex 16`（32文字・16種類の英数字）
+  // という真っ当な128ビットの値が 1.7% の確率で拒否され、本番が起動しなく
+  // なっていた。使える文字種はエンコード方式で決まるので、文字種の数ではなく
+  // 「特定の1文字に偏っていないか」で判定する。
+  const counts = new Map<string, number>();
+  for (const ch of secret) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  if (counts.size < 5) return false;
+  const most = Math.max(...counts.values());
+  if (most * 2 > secret.length) return false; // 1文字が過半数 → 反復的
   return true;
 }
 

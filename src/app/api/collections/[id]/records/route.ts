@@ -64,6 +64,9 @@ export const GET = withAuth(async (req, { user, params }) => {
   return ok({
     records: resolved.records,
     relationLabels: resolved.relationLabels,
+    // ルックアップの表示ラベル（保存値 → 選択肢のラベル）。records[].computed は
+    // 集計・フィルタ用に生の値のままなので、画面側でこの対応表を当てて表示する。
+    lookupLabels: resolved.lookupLabels,
     nextCursor,
   });
 });

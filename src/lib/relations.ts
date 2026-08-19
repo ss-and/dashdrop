@@ -16,7 +16,13 @@
 import "server-only";
 import { db } from "./db";
 import { ApiError } from "./errors";
-import { displayValue, isComputedField, isFieldType, type FieldType } from "./field-types";
+import {
+  displayValue,
+  isComputedField,
+  isFieldType,
+  type FieldType,
+  type SelectOption,
+} from "./field-types";
 import {
   VLOOKUP_TARGET_ROW_CAP,
   resolveVlookupValues,
@@ -102,6 +108,75 @@ export interface ResolvedRecords {
   records: Array<{ id: string; data: Record<string, unknown>; computed: Record<string, unknown> }>;
   /** relationLabels[fieldKey][recordId] = display label of the linked record */
   relationLabels: Record<string, Record<string, string>>;
+  /**
+   * lookupLabels[lookupFieldKey][保存値] = 選択肢の表示ラベル。
+   *
+   * select / multiselect を引くルックアップ用の副次チャネル。computed の値は
+   * ダッシュボードの集計・保存済みフィルタが参照するため「保存値（コード）」の
+   * ままにしておかなければならない（直接の select 列と同じく、データは生の値、
+   * ラベルは表示時に当てる）。そこで relationLabels と同じ形で「生の値 → 人間が
+   * 読めるラベル」の対応表だけを別に渡し、画面側で表示の直前に差し替える。
+   */
+  lookupLabels: Record<string, Record<string, string>>;
+}
+
+/** 選択肢を持つ（＝ラベル差し替えの対象になる）フィールド型。 */
+function isOptionedType(type: string): boolean {
+  return type === "select" || type === "multiselect";
+}
+
+/**
+ * 選択肢配列から「保存値 → ラベル」の対応表を作る。ラベル未設定の選択肢は
+ * 入れない（空文字で上書きすると、表示が空欄になって何が入っているのか
+ * 分からなくなるため）。
+ */
+function optionLabelMap(options: unknown): Record<string, string> {
+  const map: Record<string, string> = {};
+  if (!Array.isArray(options)) return map;
+  for (const raw of options as SelectOption[]) {
+    if (!raw || typeof raw !== "object") continue;
+    const { value, label } = raw;
+    if (typeof value !== "string" || typeof label !== "string" || label === "") continue;
+    map[value] = label;
+  }
+  return map;
+}
+
+/**
+ * ルックアップの値を表示用ラベルへ置き換える（純粋関数）。
+ *
+ * - 対応表に無いコード（選択肢から消えた値など）は、何が保存されているのか
+ *   利用者に見せ続けるため、そのまま残す。空欄にはしない。
+ * - リンクが複数件のときは値の配列、multiselect を引いたときは配列の配列に
+ *   なるため、再帰的にたどる。
+ * - 文字列以外（数値・真偽値・null）は触らない。0 や false が消えてはいけない。
+ */
+export function labelLookupValue(
+  value: unknown,
+  labels: Record<string, string> | undefined,
+): unknown {
+  if (!labels) return value;
+  if (Array.isArray(value)) return value.map((v) => labelLookupValue(v, labels));
+  if (typeof value !== "string") return value;
+  return labels[value] ?? value;
+}
+
+/**
+ * computed バッグ全体にルックアップのラベルを当てた「表示用のコピー」を返す。
+ * 元の computed（集計・フィルタが読む生の値）は書き換えない。
+ */
+export function applyLookupLabels(
+  computed: Record<string, unknown>,
+  lookupLabels: Record<string, Record<string, string>>,
+): Record<string, unknown> {
+  const keys = Object.keys(lookupLabels);
+  if (keys.length === 0) return computed;
+  const out: Record<string, unknown> = { ...computed };
+  for (const key of keys) {
+    if (!(key in out)) continue;
+    out[key] = labelLookupValue(out[key], lookupLabels[key]);
+  }
+  return out;
 }
 
 /**
@@ -163,6 +238,19 @@ export async function resolveCollectionRecords(
     }
     perRelation.set(rf.key, { idToLabel, idToData, targetFields });
     relationLabels[rf.key] = Object.fromEntries(idToLabel);
+  }
+
+  // ---- lookup のラベル対応表 ------------------------------------------------
+  // リンク先が select / multiselect のときだけ「保存値 → ラベル」を集める。
+  // perRelation.targetFields はリンク先の options ごと持っているので、追加の
+  // クエリは要らない。ここで作るのは表示用の対応表だけで、computed に入る値は
+  // 生のまま（集計・保存済みフィルタが壊れないように）。
+  const lookupLabels: Record<string, Record<string, string>> = {};
+  for (const lf of collection.fields.filter((f) => f.type === "lookup")) {
+    const cfg = (lf.config ?? {}) as LookupConfig;
+    const targetField = perRelation.get(cfg.via)?.targetFields.get(cfg.target);
+    if (!targetField || !isOptionedType(targetField.type)) continue;
+    lookupLabels[lf.key] = optionLabelMap(targetField.options);
   }
 
   // ---- vlookup (sheet join on a key column) -------------------------------
@@ -272,7 +360,7 @@ export async function resolveCollectionRecords(
     return { id: r.id, data: r.data, computed };
   });
 
-  return { records: outRecords, relationLabels };
+  return { records: outRecords, relationLabels, lookupLabels };
 }
 
 /** Options for a relation picker: recent records of the target collection. */
