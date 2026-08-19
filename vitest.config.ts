@@ -13,6 +13,11 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      // next/dist/compiled にしか無く vitest からは解決できないため、
+      // 空のスタブに差し替える。詳細は tests/stubs/server-only.ts。
+      "server-only": fileURLToPath(
+        new URL("./tests/stubs/server-only.ts", import.meta.url),
+      ),
     },
   },
 });

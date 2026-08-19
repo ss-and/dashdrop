@@ -9,10 +9,7 @@
  * 1ルールの失敗が他のルールを巻き添えにしないよう、評価は `runEachIsolated` で
  * 1件ずつ隔離する（F3 の回帰）。
  */
-// `server-only` をこのファイルから直接 import しないのは、隔離ロジック
-// （runEachIsolated / describeRuleError）を DB なしで単体テストできるようにするため。
-// vitest は "server-only" を解決できず、import した時点でテストから読めなくなる。
-// クライアント境界は ./db と ./relations（server-only を import 済み）経由で維持される。
+import "server-only";
 import { db } from "./db";
 import { computeWidget, type AggCollection } from "./aggregate";
 import {
