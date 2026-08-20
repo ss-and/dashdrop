@@ -15,6 +15,7 @@ import {
   Bar,
 } from "recharts";
 import type { SeriesData } from "@/lib/widgets";
+import { formatCompact } from "@/lib/utils";
 
 /**
  * Time-series widget: line / area / bar (from data.type), one series per
@@ -89,7 +90,12 @@ function commonAxes(showLegend: boolean) {
       tick={axisTick}
       tickLine={false}
       axisLine={false}
-      width={36}
+      /*
+       * 36px では 15,000,000 が「000」だけに切れていた。万・億 に丸めたうえで
+       * 幅も足す。業務データの金額は8〜9桁が普通なので、生の数字は軸に載らない。
+       */
+      width={68}
+      tickFormatter={(v: number) => formatCompact(v)}
       domain={[0, "auto"]}
     />,
     <Tooltip key="tip" content={<ChartTooltip />} cursor={{ stroke: GRID, strokeWidth: 1 }} />,

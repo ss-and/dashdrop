@@ -108,6 +108,14 @@ const paths: Record<string, React.ReactNode> = {
     </>
   ),
   chevron: <path d="m9 6 6 6-6 6" />,
+  // レールの開閉。パネルの枠と、その中の仕切り線。開閉どちらでも同じ形を使い、
+  // 矢印の向きではなく「パネルがある/ない」で状態を示す。
+  panelLeft: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M9 4v16" />
+    </>
+  ),
 };
 
 export function NavIcon({ name, className }: { name: string; className?: string }) {

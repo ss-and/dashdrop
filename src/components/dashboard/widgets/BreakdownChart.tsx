@@ -16,7 +16,7 @@ import {
   Tooltip,
   LabelList,
 } from "recharts";
-import { formatNumber } from "@/lib/utils";
+import { formatCompact } from "@/lib/utils";
 import type { BreakdownData } from "@/lib/widgets";
 
 /**
@@ -98,6 +98,7 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
               tick={{ fill: TEXT, fontSize: 12 }}
               tickLine={false}
               axisLine={{ stroke: GRID }}
+              tickFormatter={(v: number) => formatCompact(v)}
             />
             <YAxis
               type="category"
@@ -130,6 +131,7 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
                 dataKey="value"
                 position="right"
                 style={{ fill: TEXT, fontSize: 11 }}
+                formatter={(v: number) => formatCompact(v)}
               />
             </Bar>
           </BarChart>
@@ -169,7 +171,7 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
       {/* Center total */}
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
         <span className="text-2xl font-semibold tabular-nums text-ink">
-          {formatNumber(total, Number.isInteger(total) ? 0 : 1)}
+          {formatCompact(total)}
         </span>
         <span className="text-2xs uppercase tracking-wide text-ink-muted">合計</span>
       </div>
@@ -194,7 +196,7 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
             />
             <span className="min-w-0 flex-1 truncate">{r.label}</span>
             <span className="shrink-0 tabular-nums text-ink-muted">
-              {formatNumber(r.value, Number.isInteger(r.value) ? 0 : 1)}
+              {formatCompact(r.value)}
             </span>
           </>
         );

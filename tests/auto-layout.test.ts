@@ -166,3 +166,46 @@ describe("未来の日付を持つ表", () => {
     expect(nonZero.length).toBeGreaterThanOrEqual(4);
   });
 });
+
+describe("枚数の下限", () => {
+  /** 列が少ないファイル（区分1本・金額なし・日付なし）。 */
+  const thin = () => {
+    const fields = [
+      { key: "名前", name: "名前", type: "text" },
+      { key: "区分", name: "区分", type: "text" },
+    ];
+    const records = Array.from({ length: 12 }, (_, i) => ({
+      名前: `項目${i + 1}`,
+      区分: ["A", "B", "C"][i % 3],
+    }));
+    return {
+      slug: "薄い表",
+      name: "薄い表",
+      rowCount: records.length,
+      fields: profileFields(records, fields),
+    };
+  };
+
+  it("主役シートは、内容が薄くても8枚以上そろえる", () => {
+    expect(autoLayoutFromProfiles([sheet()]).length).toBeGreaterThanOrEqual(8);
+    expect(autoLayoutFromProfiles([thin()]).length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("枚数のために意味の無いウィジェットを作らない", () => {
+    for (const w of autoLayoutFromProfiles([thin()])) {
+      // 金額が無い表なので、合計・平均を持つウィジェットは現れない。
+      if (w.type === "kpi") expect(w.measure.kind).toBe("count");
+      // 一意の列を構成比の軸にしない。
+      if (w.type === "donut" || w.type === "hbar") {
+        expect(w.groupBy).not.toBe("名前");
+      }
+    }
+  });
+
+  it("金額らしい列は通貨として表示する（Excelの型は number でも）", () => {
+    const kpi = autoLayoutFromProfiles([sheet()]).find(
+      (w) => w.type === "kpi" && "field" in w.measure && w.measure.field === "提案金額",
+    );
+    expect(kpi && "unit" in kpi && kpi.unit).toBe("currency");
+  });
+});

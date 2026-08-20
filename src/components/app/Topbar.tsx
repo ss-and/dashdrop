@@ -6,6 +6,7 @@ import { NavIcon } from "./icons";
 import { NotificationBell } from "./NotificationBell";
 import { HelpButton } from "./HelpButton";
 import { AppLauncher, type NavData } from "./AppLauncher";
+import { SidebarToggle } from "./SidebarShell";
 import { getPlanBadge } from "./plan-badge";
 import { GlobalSearch } from "@/components/search/GlobalSearch";
 import type { CurrentUser } from "@/lib/auth";
@@ -141,6 +142,8 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
     <header className="shrink-0 border-b border-ink-line bg-paper-raised">
       <div className="flex h-14 items-center justify-between px-5">
         <div className="flex min-w-0 items-center gap-3">
+          {/* 左レールの開閉。グラフを見ている間は畳んで横幅を稼げるようにする。 */}
+          <SidebarToggle />
           <AppLauncher data={nav} loading={navLoading} error={navError} />
           <span className="h-5 w-px shrink-0 bg-ink-line" aria-hidden="true" />
           <h1 className="truncate text-base font-semibold text-ink">

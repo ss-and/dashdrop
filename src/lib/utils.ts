@@ -55,6 +55,27 @@ export function formatNumber(value: number, fractionDigits = 0): string {
   }).format(value);
 }
 
+/**
+ * グラフの軸やラベル用の短い数値表記。
+ *
+ * 業務データの金額は 8〜9桁が普通で、`15,000,000` をそのまま軸に置くと幅が
+ * 足りずに「000」だけが残る（実際そうなっていた）。日本語の帳票と同じ 万・億 に
+ * 丸めれば、幅も意味も収まる。1万未満はそのまま出す。
+ */
+export function formatCompact(value: number): string {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+  if (abs >= 1e8) {
+    const v = abs / 1e8;
+    return `${sign}${formatNumber(v, v >= 100 ? 0 : 1)}億`;
+  }
+  if (abs >= 1e4) {
+    const v = abs / 1e4;
+    return `${sign}${formatNumber(v, v >= 100 ? 0 : 1)}万`;
+  }
+  return formatNumber(value, Number.isInteger(value) ? 0 : 1);
+}
+
 /** Percentage helper returning an integer 0–100 (guards divide-by-zero). */
 export function percent(part: number, whole: number): number {
   if (whole <= 0) return 0;

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { Sidebar } from "@/components/app/Sidebar";
+import { SidebarProvider, SidebarPane } from "@/components/app/SidebarShell";
 
 /**
  * Authenticated app shell. Guards every /(app) route: unauthenticated users
@@ -16,9 +17,14 @@ export default async function AppLayout({
   if (!user) redirect("/login");
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-paper">
-      <Sidebar user={user} />
-      <div className="flex min-w-0 flex-1 flex-col">{children}</div>
-    </div>
+    <SidebarProvider>
+      <div className="flex h-dvh overflow-hidden bg-paper">
+        {/* レールは畳めるが、中身はサーバーで描いたまま器に入れるだけ。 */}
+        <SidebarPane>
+          <Sidebar user={user} />
+        </SidebarPane>
+        <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+      </div>
+    </SidebarProvider>
   );
 }
