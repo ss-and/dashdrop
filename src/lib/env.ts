@@ -21,7 +21,7 @@ const schema = z.object({
   STRIPE_PRICE_BUSINESS: z.string().optional().default(""),
 
   ANTHROPIC_API_KEY: z.string().optional().default(""),
-  ANTHROPIC_MODEL: z.string().optional().default("claude-sonnet-4-5"),
+  ANTHROPIC_MODEL: z.string().optional().default("claude-opus-5"),
   OPENAI_API_KEY: z.string().optional().default(""),
   OPENAI_MODEL: z.string().optional().default("gpt-4o-mini"),
   GOOGLE_SHEETS_CLIENT_ID: z.string().optional().default(""),

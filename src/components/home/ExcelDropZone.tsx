@@ -4,6 +4,11 @@ import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { NavIcon } from "@/components/app/icons";
+import {
+  ImportReview,
+  type AnalyzeResult,
+  type SheetSelection,
+} from "./ImportReview";
 
 /**
  * ホームの主役 — Excel を置く場所。
@@ -20,10 +25,19 @@ import { NavIcon } from "@/components/app/icons";
  * 途中で設定を聞かない（列の対応づけを直したい人のために /import は残す）。
  */
 
-/** 取り込みの進み方。利用者にはこの3段階だけを見せる。 */
+/**
+ * 取り込みの進み方。
+ *
+ * 以前は「置いた瞬間に取り込む」だけで、確認の余地が無かった。速い代わりに、
+ * 想定と違う入り方をしても気づけない（複数タブの取りこぼし、結合セルで欠けた
+ * 列名など、入った後では分からない類）。下見（scan）を挟み、提案と質問を見せて
+ * から確定する。
+ */
 type Phase =
   | { kind: "idle" }
-  | { kind: "working"; step: "upload" | "build"; fileName: string }
+  | { kind: "working"; step: "scan" | "upload" | "build"; fileName: string }
+  | { kind: "review"; file: File; result: AnalyzeResult }
+  | { kind: "importing"; file: File; result: AnalyzeResult }
   | { kind: "error"; message: string };
 
 const ACCEPT = ".xlsx,.xls,.csv";
@@ -41,23 +55,56 @@ export function ExcelDropZone() {
   /** ドラッグ中の子要素をまたぐたびに leave が飛ぶので、深さで数える。 */
   const dragDepth = useRef(0);
 
-  const busy = phase.kind === "working";
+  const busy = phase.kind === "working" || phase.kind === "importing";
 
-  const run = useCallback(
-    async (file: File) => {
-      if (!looksSupported(file)) {
+  /** 段階1 — ファイルを下見して、提案と質問を作る。まだ何も書き込まない。 */
+  const run = useCallback(async (file: File) => {
+    if (!looksSupported(file)) {
+      setPhase({
+        kind: "error",
+        message: "Excel（.xlsx / .xls）か CSV のファイルを置いてください。",
+      });
+      return;
+    }
+
+    setPhase({ kind: "working", step: "scan", fileName: file.name });
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/import/analyze", {
+        method: "POST",
+        body: form,
+      });
+      const body = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        error?: string;
+        data?: AnalyzeResult;
+      } | null;
+
+      if (!res.ok || !body?.ok || !body.data) {
         setPhase({
           kind: "error",
-          message:
-            "Excel（.xlsx / .xls）か CSV のファイルを置いてください。",
+          message: body?.error ?? "ファイルを読み取れませんでした。",
         });
         return;
       }
+      setPhase({ kind: "review", file, result: body.data });
+    } catch {
+      setPhase({
+        kind: "error",
+        message: "通信エラーが発生しました。しばらくして再度お試しください。",
+      });
+    }
+  }, []);
 
-      setPhase({ kind: "working", step: "upload", fileName: file.name });
+  /** 段階2 — 確認した内容で取り込み、グラフまで作ってその画面へ送る。 */
+  const commit = useCallback(
+    async (file: File, result: AnalyzeResult, selection: SheetSelection[]) => {
+      setPhase({ kind: "importing", file, result });
       try {
         const form = new FormData();
         form.append("file", file);
+        form.append("sheets", JSON.stringify(selection));
         const res = await fetch("/api/import", { method: "POST", body: form });
         const body = (await res.json().catch(() => null)) as {
           ok?: boolean;
@@ -129,6 +176,19 @@ export function ExcelDropZone() {
     if (file) void run(file);
   }
 
+  // 確認中はドロップ枠を引っ込め、確認画面だけを見せる。並べて出すと
+  // 「置き直すのか、確認して進むのか」がぼやける。
+  if (phase.kind === "review" || phase.kind === "importing") {
+    return (
+      <ImportReview
+        result={phase.result}
+        busy={phase.kind === "importing"}
+        onConfirm={(selection) => void commit(phase.file, phase.result, selection)}
+        onCancel={() => setPhase({ kind: "idle" })}
+      />
+    );
+  }
+
   return (
     <section>
       <div
@@ -155,9 +215,11 @@ export function ExcelDropZone() {
         {busy ? (
           <div className="space-y-2" role="status" aria-live="polite">
             <p className="text-lg font-semibold text-ink">
-              {phase.step === "upload"
-                ? "取り込んでいます…"
-                : "グラフを作っています…"}
+              {phase.step === "scan"
+                ? "中身を読んでいます…"
+                : phase.step === "upload"
+                  ? "取り込んでいます…"
+                  : "グラフを作っています…"}
             </p>
             <p className="text-sm text-ink-muted">{phase.fileName}</p>
           </div>

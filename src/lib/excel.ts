@@ -645,6 +645,52 @@ export interface SheetParse extends SheetLimitInfo {
   headerRowIndex: number;
   /** 打ち切りなどの日本語警告文（無ければ空配列）。 */
   warnings: string[];
+  /** 結合セルの状況。人が作った表ほど見出しが結合されている。 */
+  merges: MergeInfo;
+}
+
+/**
+ * 結合セルの要約。
+ *
+ * 結合は「人間向けに整形された表」の一番強い手掛かりで、そのまま取り込むと
+ * 静かに壊れる。結合された見出し（例: 上段に「2026年度」、下段に「上期/下期」）は
+ * 片方のセルにしか値が無いため、列名が空欄になったり、意味が半分失われたりする。
+ * 取り込む前に利用者へ知らせるための材料として、件数と位置だけを持つ。
+ */
+export interface MergeInfo {
+  /** 結合範囲の総数。 */
+  count: number;
+  /** 見出しとして採用した行に掛かっている結合の数。 */
+  inHeaderRow: number;
+  /** 見出し行より上（表題や注記の可能性が高い領域）に掛かっている結合の数。 */
+  aboveHeaderRow: number;
+  /** 人が読める範囲表記の先頭いくつか（例 "A1:C1"）。 */
+  examples: string[];
+}
+
+const MAX_MERGE_EXAMPLES = 5;
+
+/** シートの結合セルを要約する。`!merges` が無いシートは全ゼロ。 */
+function mergeInfo(ws: XLSX.WorkSheet, headerRowIndex: number): MergeInfo {
+  const merges = (ws?.["!merges"] as XLSX.Range[] | undefined) ?? [];
+  if (!Array.isArray(merges) || merges.length === 0) {
+    return { count: 0, inHeaderRow: 0, aboveHeaderRow: 0, examples: [] };
+  }
+
+  let inHeaderRow = 0;
+  let aboveHeaderRow = 0;
+  const examples: string[] = [];
+  for (const m of merges) {
+    if (!m?.s || !m?.e) continue;
+    if (headerRowIndex >= 0) {
+      if (m.s.r <= headerRowIndex && m.e.r >= headerRowIndex) inHeaderRow += 1;
+      else if (m.e.r < headerRowIndex) aboveHeaderRow += 1;
+    }
+    if (examples.length < MAX_MERGE_EXAMPLES) {
+      examples.push(XLSX.utils.encode_range(m));
+    }
+  }
+  return { count: merges.length, inHeaderRow, aboveHeaderRow, examples };
 }
 
 /** ワークブックのシート表示状態（0=表示 / 1=非表示 / 2=veryHidden）。 */
@@ -698,6 +744,7 @@ export function readAllSheets(
       totalColumns: parsed.totalColumns,
       columnLimit: parsed.columnLimit,
       warnings: sheetWarnings({ ...parsed, sheetName: sheetName || name }),
+      merges: mergeInfo(wb.Sheets?.[name], parsed.headerRowIndex),
     });
   }
   return out;
