@@ -1,30 +1,15 @@
-import { cn, formatNumber } from "@/lib/utils";
+import { cn, formatValue } from "@/lib/utils";
 import type { KpiData } from "@/lib/widgets";
+
+// 数値の書式は共有先（Slack / Notion）とも共通なので lib に置いてある。
+// ここは既存の取り込み元を変えないための再輸出。
+export { formatValue };
 
 /**
  * A single KPI figure: a large value formatted by unit, an optional period
  * delta chip, and an optional target with a thin progress bar. Calm and
  * low-radius, in keeping with the earthy design system.
  */
-
-/**
- * Format a measure value by unit. Exported so every numeric widget (KPI tile,
- * pivot cross-tab) prints the same number the same way.
- */
-export function formatValue(value: number, unit: KpiData["unit"]): string {
-  switch (unit) {
-    case "currency":
-      return `¥${formatNumber(Math.round(value))}`;
-    case "percent":
-      return `${formatNumber(value)}%`;
-    case "days":
-      return `${formatNumber(value)}日`;
-    case "number":
-    default:
-      // Keep up to one decimal for fractional measures (e.g. averages).
-      return formatNumber(value, Number.isInteger(value) ? 0 : 1);
-  }
-}
 
 export function KpiTile({ data }: { data: KpiData }) {
   const { value, unit, deltaPercent, target } = data;

@@ -283,6 +283,162 @@ export async function listDatabases(
   return out;
 }
 
+/** ページを作れる行き先。Notion側でインテグレーションに共有されたページ。 */
+export interface NotionPageSummary {
+  id: string;
+  title: string;
+  url: string;
+}
+
+/**
+ * サブページを作れる親ページの一覧。
+ *
+ * `object: "page"` にはデータベースの**行**も含まれる（行もページなので）。
+ * 行の下にサブページは作れないので、親がワークスペースか別のページのものだけを
+ * 残す。ここを絞らないと、選んだ先が原因で作成が 400 で落ちる。
+ */
+export async function listPages(token: string): Promise<NotionPageSummary[]> {
+  const json = await notionFetch(token, "/search", {
+    method: "POST",
+    body: {
+      filter: { value: "page", property: "object" },
+      page_size: NOTION_PAGE_SIZE,
+    },
+  });
+
+  const out: NotionPageSummary[] = [];
+  for (const item of asArray(json.results)) {
+    if (!isRecord(item)) continue;
+    if (typeof item.object === "string" && item.object !== "page") continue;
+    const id = asString(item.id);
+    if (!id) continue;
+    const parent = isRecord(item.parent) ? item.parent : null;
+    const parentType = parent && typeof parent.type === "string" ? parent.type : "";
+    if (parentType !== "workspace" && parentType !== "page_id") continue;
+    out.push({
+      id,
+      title: pageTitle(item),
+      url: asString(item.url) ?? "",
+    });
+  }
+  return out;
+}
+
+/**
+ * ページの見出し。ページのタイトルは `properties` の中の
+ * 「type が title のプロパティ」に入っていて、名前は決まっていない
+ * （"title" のこともあれば "Name" のこともある）ので、型で探す。
+ */
+function pageTitle(page: Record<string, unknown>): string {
+  const props = isRecord(page.properties) ? page.properties : {};
+  for (const value of Object.values(props)) {
+    if (!isRecord(value)) continue;
+    if (value.type !== "title") continue;
+    const text = plainText(value.title);
+    if (text) return text;
+  }
+  return UNTITLED;
+}
+
+/** Notion のリッチテキスト1片。2000文字を超えると 400 になるので切る。 */
+function richText(content: string) {
+  return [{ type: "text", text: { content: clampBlockText(content) } }];
+}
+
+/** Notion のテキストブロックは1片あたり 2000 文字まで。 */
+function clampBlockText(value: string): string {
+  const s = String(value ?? "");
+  return s.length > 1900 ? `${s.slice(0, 1899)}…` : s;
+}
+
+export interface NotionBlock {
+  object: "block";
+  type: string;
+  [key: string]: unknown;
+}
+
+/** 見出しブロック（h2 / h3）。 */
+export function headingBlock(text: string, level: 2 | 3 = 2): NotionBlock {
+  const type = level === 2 ? "heading_2" : "heading_3";
+  return { object: "block", type, [type]: { rich_text: richText(text) } };
+}
+
+/** 段落ブロック。 */
+export function paragraphBlock(text: string): NotionBlock {
+  return {
+    object: "block",
+    type: "paragraph",
+    paragraph: { rich_text: richText(text) },
+  };
+}
+
+/** 箇条書きブロック。 */
+export function bulletBlock(text: string): NotionBlock {
+  return {
+    object: "block",
+    type: "bulleted_list_item",
+    bulleted_list_item: { rich_text: richText(text) },
+  };
+}
+
+/** リンクを1行で置くブロック。 */
+export function linkBlock(label: string, url: string): NotionBlock {
+  return {
+    object: "block",
+    type: "paragraph",
+    paragraph: {
+      rich_text: [
+        {
+          type: "text",
+          text: { content: clampBlockText(label), link: { url } },
+        },
+      ],
+    },
+  };
+}
+
+/** 1リクエストで作れる子ブロックの数。超える分は捨てずに切って伝える。 */
+export const MAX_PAGE_BLOCKS = 100;
+
+/**
+ * 親ページの下に1枚ページを作る。作ったページのURLを返す。
+ *
+ * 失敗は握り潰さない——「送りました」と言った先に何も無い、が最悪なので、
+ * Notion が返したエラーはそのまま `notionError` で日本語にして投げる。
+ */
+export async function createPage(
+  token: string,
+  parentPageId: string,
+  title: string,
+  blocks: NotionBlock[],
+): Promise<{ id: string; url: string }> {
+  const parent = String(parentPageId ?? "").trim();
+  if (!parent) {
+    throw new ApiError("作成先のNotionページを選択してください。", 400);
+  }
+
+  const json = await notionFetch(token, "/pages", {
+    method: "POST",
+    body: {
+      parent: { type: "page_id", page_id: parent },
+      properties: {
+        title: { title: richText(title || UNTITLED) },
+      },
+      children: blocks.slice(0, MAX_PAGE_BLOCKS),
+    },
+  });
+
+  const id = asString(json.id);
+  if (!id) {
+    // 200 なのにページが返ってこないのは想定外。成功として返さない。
+    throw new ApiError(
+      "Notionにページを作成できませんでした。時間をおいて再度お試しください。",
+      502,
+    );
+  }
+  return { id, url: asString(json.url) ?? "" };
+}
+
 /** The database object (its `properties` map is the schema we import). */
 export async function fetchDatabase(
   token: string,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button, buttonStyles } from "@/components/ui/Button";
@@ -9,7 +9,20 @@ import { NavIcon } from "@/components/app/icons";
 /**
  * Action row for a rendered dashboard: clear seeded sample data, jump to the
  * underlying table, or delete the dashboard. Destructive actions confirm first.
+ *
+ * 共有は3つ並ぶ——読み取り専用リンク、Slack、Notion。同じ「共有」なので、
+ * 別々の場所に散らさず1つの吹き出しにまとめてある。
  */
+
+/** GET /api/dashboards/[id]/share/targets の応答。 */
+interface ShareTargets {
+  slack: { connected: boolean; hint: string | null };
+  notion: {
+    connected: boolean;
+    pages: Array<{ id: string; title: string }>;
+    error: string | null;
+  };
+}
 export function DashboardActions({
   dashboardId,
   firstCollectionId,
@@ -30,6 +43,60 @@ export function DashboardActions({
   const [shareOpen, setShareOpen] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  /*
+   * 送り先（Slack / Notion）の状態。
+   *
+   * 共有ボタンを開いた時点で取りに行く。押してから「接続されていません」と
+   * 言われるより、最初から押せる／押せないが見えている方が早い。
+   */
+  const [targets, setTargets] = useState<ShareTargets | null>(null);
+  const [notionPage, setNotionPage] = useState("");
+  const [sending, setSending] = useState<"slack" | "notion" | null>(null);
+  const [sent, setSent] = useState<{ to: "slack" | "notion"; url?: string } | null>(
+    null,
+  );
+
+  const loadTargets = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/dashboards/${dashboardId}/share/targets`);
+      const json = await res.json();
+      if (res.ok && json.ok) setTargets(json.data as ShareTargets);
+    } catch {
+      // 取れなくても共有リンクの機能は使えるべきなので、黙って諦める。
+    }
+  }, [dashboardId]);
+
+  useEffect(() => {
+    if (shareOpen && targets === null) void loadTargets();
+  }, [shareOpen, targets, loadTargets]);
+
+  // Notionの作成先は、候補が1つなら選ぶ手間を省く。
+  useEffect(() => {
+    if (!notionPage && targets?.notion.pages.length === 1) {
+      setNotionPage(targets.notion.pages[0].id);
+    }
+  }, [targets, notionPage]);
+
+  async function sendTo(to: "slack" | "notion") {
+    setSending(to);
+    setError(null);
+    setSent(null);
+    try {
+      const res = await fetch(`/api/dashboards/${dashboardId}/share/${to}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: to === "notion" ? JSON.stringify({ parentPageId: notionPage }) : undefined,
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error ?? "送信に失敗しました");
+      setSent({ to, url: json.data?.url });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "送信に失敗しました");
+    } finally {
+      setSending(null);
+    }
+  }
 
   const shareUrl =
     shareToken && typeof window !== "undefined"
@@ -138,7 +205,9 @@ export function DashboardActions({
           {shareOpen && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setShareOpen(false)} aria-hidden />
-              <div className="absolute right-0 z-30 mt-2 w-80 animate-fade-in rounded-md border border-ink-line bg-paper-raised p-4 text-left shadow-raised">
+              {/* 送り先が増えたぶん縦に伸びる。画面からはみ出す前に、
+                  吹き出しの中でスクロールさせる。 */}
+              <div className="absolute right-0 z-30 mt-2 max-h-[80vh] w-80 animate-fade-in overflow-y-auto rounded-md border border-ink-line bg-paper-raised p-4 text-left shadow-raised">
                 <p className="text-sm font-semibold text-ink">読み取り専用リンクで共有</p>
                 <p className="mt-1 text-xs leading-relaxed text-ink-muted">
                   リンクを知っている人は、ログインなしでこのダッシュボードを閲覧できます（編集は不可）。
@@ -165,6 +234,111 @@ export function DashboardActions({
                     {shareBusy ? "作成中…" : "共有リンクを作成"}
                   </Button>
                 )}
+
+                {/* ------------------------- Slack / Notion ------------------------- */}
+                <div className="mt-4 space-y-3 border-t border-ink-line pt-3">
+                  <p className="text-sm font-semibold text-ink">送って共有</p>
+                  <p className="text-xs leading-relaxed text-ink-muted">
+                    {/*
+                      どのリンクが相手に届くのかを先に書く。共有リンクを作らずに
+                      送ると、受け取った人はログイン画面に着く——それを
+                      「リンクが壊れている」と受け取られるのがいちばん困る。
+                    */}
+                    {shareToken
+                      ? "主要な数字と、ログイン不要の共有リンクを送ります。"
+                      : "主要な数字と、社内メンバー向けのリンクを送ります。社外の人にも開いてほしいときは、先に共有リンクを作成してください。"}
+                  </p>
+
+                  {/* Slack */}
+                  {targets?.slack.connected ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="w-full"
+                      onClick={() => void sendTo("slack")}
+                      disabled={sending !== null}
+                    >
+                      {sending === "slack"
+                        ? "送信中…"
+                        : targets.slack.hint
+                          ? `Slackに送る（${targets.slack.hint}）`
+                          : "Slackに送る"}
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-ink-muted">
+                      Slackは未接続です。
+                      <Link href="/settings" className="ml-1 text-khaki-700 hover:underline">
+                        設定で接続
+                      </Link>
+                    </p>
+                  )}
+
+                  {/* Notion */}
+                  {targets?.notion.connected ? (
+                    targets.notion.pages.length > 0 ? (
+                      <div className="space-y-2">
+                        {/* 作成先を選ばないと送れない。Notionの仕様上、ページは
+                            必ず親を持つため。 */}
+                        <select
+                          aria-label="Notionの作成先ページ"
+                          className="input-base h-8 w-full text-xs"
+                          value={notionPage}
+                          onChange={(e) => setNotionPage(e.target.value)}
+                        >
+                          <option value="">作成先のページを選ぶ…</option>
+                          {targets.notion.pages.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.title}
+                            </option>
+                          ))}
+                        </select>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="w-full"
+                          onClick={() => void sendTo("notion")}
+                          disabled={sending !== null || !notionPage}
+                        >
+                          {sending === "notion" ? "作成中…" : "Notionにページを作る"}
+                        </Button>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-ink-muted">
+                        {targets.notion.error ??
+                          "作成先にできるページがありません。Notion側で、インテグレーションにページを共有してください。"}
+                      </p>
+                    )
+                  ) : (
+                    <p className="text-xs text-ink-muted">
+                      Notionは未接続です。
+                      <Link href="/settings" className="ml-1 text-khaki-700 hover:underline">
+                        設定で接続
+                      </Link>
+                    </p>
+                  )}
+
+                  {sent && (
+                    <p className="text-xs text-success" role="status">
+                      {sent.to === "slack" ? (
+                        "Slackに送りました。"
+                      ) : (
+                        <>
+                          Notionにページを作りました。
+                          {sent.url && (
+                            <a
+                              href={sent.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="ml-1 underline"
+                            >
+                              開く
+                            </a>
+                          )}
+                        </>
+                      )}
+                    </p>
+                  )}
+                </div>
               </div>
             </>
           )}
