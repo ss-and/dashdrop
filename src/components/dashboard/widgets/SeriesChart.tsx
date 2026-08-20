@@ -23,23 +23,15 @@ import { formatCompact } from "@/lib/utils";
  * measure. Earthy palette, honest axes (start at 0), tidy tooltip + legend.
  */
 
-const COLOR_HEX: Record<string, string> = {
-  khaki: "#8a8250",
-  info: "#4a6d80",
-  success: "#4f7a53",
-  warning: "#b07d38",
-  danger: "#a24b3f",
-  neutral: "#a8a493",
-};
-const GRID = "#e2ded1";
-const TEXT = "#57544b";
-const FALLBACK = ["khaki", "info", "success", "warning"];
+import {
+  seriesColor,
+  CHART_GRID as GRID,
+  CHART_TEXT as TEXT,
+  type Palette,
+} from "@/lib/palette";
+import { usePalette } from "../PaletteContext";
 
 const axisTick = { fill: TEXT, fontSize: 12 } as const;
-
-function hexFor(color: string | undefined, i: number): string {
-  return COLOR_HEX[color ?? ""] ?? COLOR_HEX[FALLBACK[i % FALLBACK.length]];
-}
 
 function ChartTooltip({
   active,
@@ -125,7 +117,7 @@ function commonAxes(showLegend: boolean) {
  * は直下の子を clone して width/height を渡すので、独自コンポーネントで包むと
  * 寸法が伝わらず、グラフが何も描かれないまま黙って消える。
  */
-function comboChildren(series: SeriesData["series"]) {
+function comboChildren(series: SeriesData["series"], palette: Palette) {
   const hasRight = series.some((s) => s.axis === "right");
   const yAxis = (id: "left" | "right") => (
     <YAxis
@@ -161,7 +153,7 @@ function comboChildren(series: SeriesData["series"]) {
       wrapperStyle={{ fontSize: 12, color: TEXT, paddingTop: 8 }}
     />,
     ...series.map((s, i) => {
-      const hex = hexFor(s.color, i);
+      const hex = seriesColor(palette, i, s.color);
       // 右軸を出していないのに yAxisId="right" を指すと、その系列は
       // 描かれずに黙って消える。存在する軸にだけ載せる。
       const yAxisId = hasRight && s.axis === "right" ? "right" : "left";
@@ -216,6 +208,7 @@ function comboChildren(series: SeriesData["series"]) {
 
 export function SeriesChart({ data }: { data: SeriesData }) {
   const { type, points, series, stacked } = data;
+  const palette = usePalette();
 
   if (points.length === 0 || series.length === 0) {
     return (
@@ -234,13 +227,13 @@ export function SeriesChart({ data }: { data: SeriesData }) {
       <ResponsiveContainer width="100%" height="100%">
         {type === "combo" ? (
           <ComposedChart data={points} margin={margin}>
-            {comboChildren(series)}
+            {comboChildren(series, palette)}
           </ComposedChart>
         ) : type === "area" ? (
           <AreaChart data={points} margin={margin}>
             {axes}
             {series.map((s, i) => {
-              const hex = hexFor(s.color, i);
+              const hex = seriesColor(palette, i, s.color);
               return (
                 <Area
                   key={s.label}
@@ -267,7 +260,7 @@ export function SeriesChart({ data }: { data: SeriesData }) {
                 dataKey={s.label}
                 name={s.label}
                 stackId={stacked ? "stack" : undefined}
-                fill={hexFor(s.color, i)}
+                fill={seriesColor(palette, i, s.color)}
                 radius={[2, 2, 0, 0]}
                 maxBarSize={40}
                 isAnimationActive={false}
@@ -278,7 +271,7 @@ export function SeriesChart({ data }: { data: SeriesData }) {
           <LineChart data={points} margin={margin}>
             {axes}
             {series.map((s, i) => {
-              const hex = hexFor(s.color, i);
+              const hex = seriesColor(palette, i, s.color);
               return (
                 <Line
                   key={s.label}

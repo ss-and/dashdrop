@@ -215,6 +215,10 @@ model Dashboard {
   description     String    @default("")
   icon            String    @default("dashboard")
   color           String    @default("khaki")
+  /// グラフの配色テーマ（src/lib/palette.ts の Palette.key）。
+  /// 取り込みのときに選ばれ、以後この画面のグラフ全部に効く。
+  /// 未知の値は標準に落ちるので、消したテーマがあってもダッシュボードは壊れない。
+  theme           String    @default("standard")
   // Slugs of the collections this dashboard reads (resolved within workspace).
   collectionSlugs Json
   // Array of widget specs (see WidgetSpec in src/lib/widgets.ts).

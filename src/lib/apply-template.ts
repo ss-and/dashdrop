@@ -23,6 +23,8 @@ import {
 import { autoLayout, type AutoSheet } from "./widget-builder";
 import { profileFields } from "./data-profile";
 import { autoLayoutFromProfiles, type ProfiledSheet } from "./auto-layout";
+import { paletteFor } from "./palette";
+import { DEFAULT_INTENT, type DashboardIntent } from "./dashboard-intent";
 import type { CurrentUser } from "./auth";
 import type { AggCollection, CollectionMap } from "./aggregate";
 import {
@@ -171,6 +173,8 @@ export interface CustomDashboardInput {
   description?: string;
   icon?: string;
   color?: string;
+  /** グラフの配色（src/lib/palette.ts の Palette.key）。未知なら標準に落ちる。 */
+  theme?: string;
   collectionSlugs: string[];
   layout: unknown; // validated here against dashboardLayoutSchema
 }
@@ -221,6 +225,7 @@ export async function createCustomDashboard(
       description: input.description?.trim() ?? "",
       icon: input.icon ?? "dashboard",
       color: input.color ?? "khaki",
+      theme: paletteFor(input.theme).key,
       collectionSlugs: toJson(slugs),
       layout: toJson(layout),
       source: "custom",
@@ -256,7 +261,15 @@ const AUTO_DESCRIPTION = "取り込んだデータから自動作成しました
 
 export async function createAutoDashboard(
   user: CurrentUser,
-  opts: { workbookId?: string; collectionId?: string },
+  opts: {
+    workbookId?: string;
+    collectionId?: string;
+    /**
+     * 取り込みのときに聞いた「どんな画面が欲しいか」。省略すると
+     * これまでどおり、データの形だけを見て組み立てる。
+     */
+    intent?: DashboardIntent;
+  },
 ): Promise<{
   dashboardId: string;
   name: string;
@@ -337,8 +350,9 @@ export async function createAutoDashboard(
   }
 
   // 中身が読めたときはそれを使い、読めなければ従来の型ベースに落とす。
+  const intent = opts.intent ?? DEFAULT_INTENT;
   const layout = profiled.some((p) => p.rowCount > 0)
-    ? autoLayoutFromProfiles(profiled)
+    ? autoLayoutFromProfiles(profiled, intent)
     : autoLayout(sheets);
   if (layout.length === 0) {
     throw new ApiError(
@@ -367,6 +381,7 @@ export async function createAutoDashboard(
     const { dashboardId } = await createCustomDashboard(user, {
       name,
       description: AUTO_DESCRIPTION,
+      theme: intent.theme,
       collectionSlugs: usedSlugs,
       layout,
     });
@@ -377,6 +392,7 @@ export async function createAutoDashboard(
   await updateCustomDashboard(user, keep.id, {
     name,
     description: AUTO_DESCRIPTION,
+    theme: intent.theme,
     collectionSlugs: usedSlugs,
     layout,
   });
@@ -421,6 +437,9 @@ export async function updateCustomDashboard(
   }
   if (typeof input.description === "string") {
     data.description = input.description.trim();
+  }
+  if (typeof input.theme === "string") {
+    data.theme = paletteFor(input.theme).key;
   }
 
   // Resolve the sheets this dashboard binds to (new list or the current one).

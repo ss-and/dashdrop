@@ -23,23 +23,14 @@ import type { ScatterData } from "@/lib/widgets";
  * それが一目で分かるし、外れ値を押せばその行まで辿れる。
  */
 
-const COLOR_HEX: Record<string, string> = {
-  khaki: "#8a8250",
-  info: "#4a6d80",
-  success: "#4f7a53",
-  warning: "#b07d38",
-  danger: "#a24b3f",
-  neutral: "#a8a493",
-};
-const GRID = "#e2ded1";
-const TEXT = "#57544b";
-const FALLBACK = ["khaki", "info", "success", "warning", "danger", "neutral"];
+import {
+  seriesColor,
+  CHART_GRID as GRID,
+  CHART_TEXT as TEXT,
+} from "@/lib/palette";
+import { usePalette } from "../PaletteContext";
 
 const axisTick = { fill: TEXT, fontSize: 12 } as const;
-
-function hexFor(color: string | undefined, i: number): string {
-  return COLOR_HEX[color ?? ""] ?? COLOR_HEX[FALLBACK[i % FALLBACK.length]];
-}
 
 type Point = ScatterData["points"][number];
 
@@ -78,6 +69,7 @@ function PointTooltip({
 }
 
 export function ScatterPlot({ data }: { data: ScatterData }) {
+  const palette = usePalette();
   const { points, groups, xLabel, yLabel, collectionId, omitted } = data;
   const router = useRouter();
 
@@ -103,10 +95,10 @@ export function ScatterPlot({ data }: { data: ScatterData }) {
     groups.length > 0
       ? groups.map((g, i) => ({
           label: g.label,
-          color: hexFor(g.color, i),
+          color: seriesColor(palette, i, g.color),
           rows: points.filter((p) => p.group === g.label),
         }))
-      : [{ label: yLabel, color: hexFor("khaki", 0), rows: points }];
+      : [{ label: yLabel, color: seriesColor(palette, 0), rows: points }];
 
   return (
     <div>

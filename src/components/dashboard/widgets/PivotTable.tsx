@@ -1,4 +1,8 @@
+"use client";
+
 import { formatValue } from "./KpiTile";
+import { rgbTriple } from "@/lib/palette";
+import { usePalette } from "../PaletteContext";
 import type { PivotData } from "@/lib/widgets";
 
 /**
@@ -26,19 +30,17 @@ import type { PivotData } from "@/lib/widgets";
 const HEAT_MAX_ALPHA = { pivot: 0.12, heatmap: 0.85 } as const;
 /** この濃さを超えたら、文字は白でないと読めなくなる。 */
 const INVERT_TEXT_ABOVE = 0.45;
-/** khaki-500 as an rgb triple (see tailwind.config.ts). */
-const HEAT_RGB = "111, 104, 63";
-
 function heatStyle(
   value: number | null,
   max: number,
   variant: PivotData["type"],
+  rgb: string,
 ): React.CSSProperties | undefined {
   if (value === null || max <= 0) return undefined;
   const alpha = (Math.abs(value) / max) * HEAT_MAX_ALPHA[variant];
   if (alpha <= 0.005) return undefined;
   return {
-    backgroundColor: `rgba(${HEAT_RGB}, ${alpha.toFixed(3)})`,
+    backgroundColor: `rgba(${rgb}, ${alpha.toFixed(3)})`,
     ...(alpha > INVERT_TEXT_ABOVE ? { color: "#ffffff" } : {}),
   };
 }
@@ -57,6 +59,7 @@ const TOTAL_TOP = "border-t-2 border-t-ink-rule";
 const TOTAL_SURFACE = "bg-paper-sunken font-medium text-ink";
 
 export function PivotTable({ data }: { data: PivotData }) {
+  const heatRgb = rgbTriple(usePalette().ramp);
   const {
     type,
     rowLabel,
@@ -144,7 +147,7 @@ export function PivotTable({ data }: { data: PivotData }) {
                   return (
                     <td
                       key={c}
-                      style={heatStyle(v, maxAbs, type)}
+                      style={heatStyle(v, maxAbs, type, heatRgb)}
                       className={`${CELL} text-right tabular-nums text-ink`}
                     >
                       <Num value={v} unit={unit} />

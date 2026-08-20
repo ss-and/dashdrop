@@ -17,7 +17,7 @@ import { widgetSchema, type WidgetData } from "@/lib/widgets";
 
 const bodySchema = z.object({
   collectionSlugs: z.array(z.string()).max(24).default([]),
-  layout: z.array(z.unknown()).max(24).default([]),
+  layout: z.array(z.unknown()).max(48).default([]),
 });
 
 export const POST = withAuth(async (req, { user }) => {

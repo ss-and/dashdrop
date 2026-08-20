@@ -56,7 +56,7 @@ export default async function SharedDashboardPage({
           )}
         </div>
 
-        <DashboardGrid computed={computed} />
+        <DashboardGrid computed={computed} theme={dashboard.theme} />
 
         <div className="border-t border-ink-line pt-4 text-center text-xs text-ink-faint">
           <Link href="/" className="hover:text-ink-muted">

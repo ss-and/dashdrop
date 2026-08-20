@@ -86,7 +86,7 @@ export default async function DashboardRendererPage({
               表示できるウィジェットがありません。
             </p>
           ) : (
-            <DashboardGrid computed={computed} />
+            <DashboardGrid computed={computed} theme={dashboard.theme} />
           )}
         </div>
       </main>

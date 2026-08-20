@@ -390,7 +390,20 @@ function bucketKeys(raw: unknown): string[] {
 
 /* ------------------------------- widgets -------------------------------- */
 
-const COLOR_CYCLE = ["khaki", "info", "success", "warning", "danger"];
+/*
+ * 色は、ここでは決めない。
+ *
+ * 以前はここに ["khaki","info","success","warning","danger"] の輪があり、
+ * 系列や切れ端に順番で割り当てていた。名前は意味を持つ側の名前（success /
+ * danger）なのに、実体は**ただの5番目までの席順**という二重の使い方に
+ * なっていて、配色テーマを入れた途端に壊れた——5区分の内訳を描くと、
+ * 3切れが「意味を持つ色」と見なされてテーマを無視し、藍のダッシュボードの
+ * 中に緑と橙と赤が混ざった。
+ *
+ * 割り当てないでおけば、描く側（src/lib/palette.ts）が並び順に応じて
+ * テーマの色を当てる。ここが決めるのは「何番目か」だけで良い。
+ * 利用者が選択肢に付けた色（optionMeta）は、意図のある指定なので今までどおり効く。
+ */
 
 function computeKpi(w: KpiWidget, col: AggCollection, now: Date): WidgetData {
   const base = applyFilters(col.records, w.filters);
@@ -554,7 +567,7 @@ function seriesDefs(
     label: labels[i],
     measure: base.measure,
     filters: base.filters,
-    color: optionMeta.get(k)?.color ?? COLOR_CYCLE[i % COLOR_CYCLE.length],
+    color: optionMeta.get(k)?.color,
     as: base.as,
     axis: base.axis,
     splitKey: k,
@@ -690,7 +703,7 @@ function computeSeries(w: SeriesWidget, col: AggCollection, now: Date): WidgetDa
     stacked: w.stacked ?? (w.splitBy ? true : undefined),
     series: defs.map((sm, i) => ({
       label: labels[i],
-      color: sm.color ?? COLOR_CYCLE[i % COLOR_CYCLE.length],
+      color: sm.color,
       as: sm.as,
       axis: sm.axis,
     })),
@@ -792,10 +805,6 @@ function computeBreakdown(w: BreakdownWidget, col: AggCollection): WidgetData {
       return a.label.localeCompare(b.label, "ja");
     });
   }
-
-  slices.forEach((s, i) => {
-    if (!s.color) s.color = COLOR_CYCLE[i % COLOR_CYCLE.length];
-  });
 
   return {
     type: w.type,
@@ -1038,9 +1047,9 @@ function computeScatter(w: ScatterWidget, col: AggCollection): WidgetData {
   const keptLabels = Array.from(kept).map(labelOfGroup);
   const otherLabel = otherLabelFor(new Set(keptLabels));
 
-  const groups = Array.from(kept).map((k, i) => ({
+  const groups = Array.from(kept).map((k) => ({
     label: labelOfGroup(k),
-    color: optionMeta.get(k)?.color ?? COLOR_CYCLE[i % COLOR_CYCLE.length],
+    color: optionMeta.get(k)?.color,
   }));
   if (overflow) groups.push({ label: otherLabel, color: "neutral" });
 
@@ -1105,7 +1114,7 @@ function computeHistogram(w: HistogramWidget, col: AggCollection): SeriesData {
     const v = toNumber(r.data[w.field]);
     if (v !== null) values.push(v);
   }
-  const series = [{ label: "件数", color: "khaki" }];
+  const series = [{ label: "件数" }];
   if (values.length === 0) return { type: "bar", points: [], series: [] };
 
   const min = Math.min(...values);

@@ -79,7 +79,7 @@ export default async function ReportPrintPage({
             表示できるウィジェットがありません。
           </p>
         ) : (
-          <DashboardGrid computed={computed} />
+          <DashboardGrid computed={computed} theme={dashboard.theme} />
         )}
 
         <p className="mt-8 text-2xs text-ink-faint">

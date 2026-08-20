@@ -9,11 +9,14 @@
 import { z } from "zod";
 import { withAuth, ok, readJson, ApiError } from "@/lib/api";
 import { createAutoDashboard } from "@/lib/apply-template";
+import { dashboardIntentSchema } from "@/lib/dashboard-intent";
 
 const bodySchema = z
   .object({
     workbookId: z.string().optional(),
     collectionId: z.string().optional(),
+    /** 取り込みで聞いた「どんな画面が欲しいか」。省略すればおまかせ。 */
+    intent: dashboardIntentSchema.optional(),
   })
   .refine((b) => b.workbookId || b.collectionId, {
     message: "workbookId か collectionId のいずれかが必要です",

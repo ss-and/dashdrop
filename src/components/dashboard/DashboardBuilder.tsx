@@ -9,6 +9,9 @@ import { Input } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
 import { NavIcon } from "@/components/app/icons";
 import { cn } from "@/lib/utils";
+import { paletteFor } from "@/lib/palette";
+import { ThemeSelect } from "@/components/dashboard/ThemeSelect";
+import { PaletteProvider } from "@/components/dashboard/PaletteContext";
 import {
   newWidget,
   genWidgetId,
@@ -40,6 +43,8 @@ interface DashboardBuilderProps {
     id: string;
     name: string;
     description: string;
+    /** 保存済みの配色テーマ。新規作成では未指定＝標準。 */
+    theme?: string;
     collectionSlugs: string[];
     layout: WidgetSpec[];
   };
@@ -126,6 +131,7 @@ export function DashboardBuilder({
 
   const [name, setName] = useState(initial?.name ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
+  const [theme, setTheme] = useState(paletteFor(initial?.theme).key);
   const [selectedSlugs, setSelectedSlugs] = useState<string[]>(
     initial?.collectionSlugs ?? preselectSlugs,
   );
@@ -313,6 +319,7 @@ export function DashboardBuilder({
         body: JSON.stringify({
           name: name.trim(),
           description: description.trim(),
+          theme,
           collectionSlugs: selectedSlugs,
           layout,
         }),
@@ -363,6 +370,15 @@ export function DashboardBuilder({
               className="text-sm"
               aria-label="サブタイトル"
             />
+            {/*
+              配色は取り込みのときに一度選ぶが、あとから変えたくなるのが普通
+              （配る資料に合わせて白黒にしたい、など）。作り直させないで済むよう、
+              編集の場所にも置いておく。
+            */}
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <span className="text-xs font-medium text-ink-muted">配色</span>
+              <ThemeSelect value={theme} onChange={setTheme} />
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <Link
@@ -654,11 +670,17 @@ export function DashboardBuilder({
                       <p className="truncate text-sm font-medium text-ink">
                         {widget.title}
                       </p>
-                      <PreviewCard
-                        widget={widget}
-                        data={results[widget.id]}
-                        sheetSelected={sheetSelected}
-                      />
+                      {/*
+                        見本も選んだ配色で描く。ここが常に標準色だと、
+                        保存して開き直すまで結果が分からない。
+                      */}
+                      <PaletteProvider theme={theme}>
+                        <PreviewCard
+                          widget={widget}
+                          data={results[widget.id]}
+                          sheetSelected={sheetSelected}
+                        />
+                      </PaletteProvider>
                       <WidgetConfig
                         widget={widget}
                         sheets={selectedSheets}

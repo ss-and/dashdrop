@@ -10,6 +10,7 @@ import {
   type ImportMode,
   type SheetSelection,
 } from "./ImportReview";
+import type { DashboardIntent } from "@/lib/dashboard-intent";
 
 /**
  * ホームの主役 — Excel を置く場所。
@@ -107,6 +108,7 @@ export function ExcelDropZone() {
       result: AnalyzeResult,
       selection: SheetSelection[],
       mode: ImportMode,
+      intent: DashboardIntent,
     ) => {
       setPhase({ kind: "importing", file, result });
       try {
@@ -159,9 +161,10 @@ export function ExcelDropZone() {
         const auto = await fetch("/api/dashboards/auto", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            workbookId ? { workbookId } : { collectionId },
-          ),
+          body: JSON.stringify({
+            ...(workbookId ? { workbookId } : { collectionId }),
+            intent,
+          }),
         });
         const autoBody = (await auto.json().catch(() => null)) as {
           ok?: boolean;
@@ -202,8 +205,8 @@ export function ExcelDropZone() {
       <ImportReview
         result={phase.result}
         busy={phase.kind === "importing"}
-        onConfirm={(selection, mode) =>
-          void commit(phase.file, phase.result, selection, mode)
+        onConfirm={(selection, mode, intent) =>
+          void commit(phase.file, phase.result, selection, mode, intent)
         }
         onCancel={() => setPhase({ kind: "idle" })}
       />

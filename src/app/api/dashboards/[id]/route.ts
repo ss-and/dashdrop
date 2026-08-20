@@ -32,8 +32,10 @@ export const GET = withAuth(async (_req, { user, params }) => {
 const patchSchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
+  /** グラフの配色テーマ。未知の値はサーバ側で標準に落ちる。 */
+  theme: z.string().optional(),
   collectionSlugs: z.array(z.string()).max(24).optional(),
-  layout: z.array(z.unknown()).max(24).optional(),
+  layout: z.array(z.unknown()).max(48).optional(),
 });
 
 export const PATCH = withAuth(async (req, { user, params }) => {

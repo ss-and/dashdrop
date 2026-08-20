@@ -10,6 +10,8 @@ import {
   isFieldType,
   type FieldType,
 } from "@/lib/field-types";
+import { DashboardIntentPicker } from "./DashboardIntentPicker";
+import { DEFAULT_INTENT, type DashboardIntent } from "@/lib/dashboard-intent";
 
 /**
  * 取り込む前の確認画面 —「この内容で入れますが、良いですか？」
@@ -103,9 +105,18 @@ export function ImportReview({
 }: {
   result: AnalyzeResult;
   busy: boolean;
-  onConfirm: (selection: SheetSelection[], mode: ImportMode) => void;
+  onConfirm: (
+    selection: SheetSelection[],
+    mode: ImportMode,
+    intent: DashboardIntent,
+  ) => void;
   onCancel: () => void;
 }) {
+  /*
+   * 欲しい画面の指定。既定（おまかせ／チームで見る／標準）のままなら、
+   * これまでと同じダッシュボードが出る。
+   */
+  const [intent, setIntent] = useState<DashboardIntent>(DEFAULT_INTENT);
   /*
    * 同名ファイルがあるときの既定は「上書き」。
    *
@@ -186,6 +197,7 @@ export function ImportReview({
         };
       }),
       result.existing ? mode : "add",
+      intent,
     );
   }
 
@@ -304,6 +316,14 @@ export function ImportReview({
           )}
         </div>
       )}
+
+      {/*
+        欲しい画面の指定は、列の一覧より**上**に置く。
+        下に置いていたときは、シートの列テーブルが縦に長いせいで画面外に
+        追いやられ、そこに何かがあること自体が分からなかった。列名を直すのは
+        必要な人だけがやる作業なので、全員が通る道の側に出す。
+      */}
+      <DashboardIntentPicker value={intent} onChange={setIntent} />
 
       {/* シートごと */}
       <div className="space-y-4">

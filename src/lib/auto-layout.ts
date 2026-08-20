@@ -26,6 +26,15 @@ import {
   type ProfiledField,
 } from "./data-profile";
 import type { WidgetSpec, Unit } from "./widgets";
+import {
+  DEFAULT_INTENT,
+  audienceMeta,
+  weightOf,
+  type AudienceMeta,
+  type DashboardIntent,
+  type Lens,
+  type WidgetRole,
+} from "./dashboard-intent";
 
 export interface ProfiledSheet {
   slug: string;
@@ -48,12 +57,11 @@ const MONEY_NAME = /金額|売上|価格|単価|合計|額$|収益|コスト|費
  */
 const MIN_WIDGETS_PER_SHEET = 8;
 
-/**
- * 主役シートの上限。図の種類が増えたぶん、条件を満たすものを全部並べると
- * 20枚近くになる。多ければ良いというものでもないので、価値の高い順に並べた
- * 中核から上限までを採る（明細表は別枠で必ず最後に付く）。
+/*
+ * 主役シートの上限は、この定数ではなく「誰が見るか」で決まるようになった
+ * （src/lib/dashboard-intent.ts の AudienceMeta.maxWidgets）。既定の
+ * 「チームで見る」が 15 枚で、これは以前の固定値と同じ。
  */
-const MAX_WIDGETS_PER_SHEET = 15;
 
 /**
  * ツリーマップに切り替える項目数の目安。
@@ -78,7 +86,11 @@ function orderedMeasures(fields: ProfiledField[]): ProfiledField[] {
  * 1シート分のウィジェットを組み立てる。
  * 4列グリッドなので、各行の span 合計が 4 になるように積む。
  */
-function layoutForSheet(sheet: ProfiledSheet, isPrimary: boolean): WidgetSpec[] {
+function layoutForSheet(
+  sheet: ProfiledSheet,
+  isPrimary: boolean,
+  intent: DashboardIntent,
+): WidgetSpec[] {
   const S = sheet.slug;
   const out: WidgetSpec[] = [];
 
@@ -568,20 +580,15 @@ function layoutForSheet(sheet: ProfiledSheet, isPrimary: boolean): WidgetSpec[] 
     });
   }
 
-  // 明細（最後に置く）ぶんを1枚見込んで積む。
-  for (const w of extras) {
-    if (out.length >= MIN_WIDGETS_PER_SHEET - 1) break;
-    out.push(w);
-  }
+  extras.push(...lensExtras(sheet, intent.lens));
 
-  // 条件を満たすものを全部並べると多すぎる。価値の高い順に並べてあるので、
-  // 上から上限までを採る。明細表はこの後に必ず付くので、1枚分空けておく。
-  const capped = out.slice(0, MAX_WIDGETS_PER_SHEET - 1);
+  const aud = audienceMeta(intent.audience);
+  const capped = selectByIntent(out, extras, intent.lens, aud);
 
   /* ------------------------------- 明細 ---------------------------------- */
 
   const cols = detailColumns(sheet.fields, 6);
-  if (cols.length > 0) {
+  if (aud.detail && cols.length > 0) {
     capped.push({
       id: genWidgetId(),
       type: "table",
@@ -594,7 +601,170 @@ function layoutForSheet(sheet: ProfiledSheet, isPrimary: boolean): WidgetSpec[] 
     });
   }
 
-  return capped;
+  return capped.map((w) => restyle(w, intent.lens));
+}
+
+/* ============================ 欲しい画面に寄せる =========================== */
+
+/**
+ * 図の「役割」を、出来上がった仕様から読み取る。
+ *
+ * 生成する側（上の長い関数）に役割を書き足して回るのではなく、後から見て
+ * 判定するようにした。追加のたびにタグを付け忘れる余地を作りたくない——
+ * 付け忘れは型では検出できず、「なぜかこの図だけ選ばれない」という
+ * 分かりにくい症状になる。
+ *
+ * 横棒だけは実際には2つの役割を兼ねている（顧客別の売上＝順位、
+ * フェーズ別の件数＝構成）。ここでは順位として扱う。取り違えても
+ * 重みが少しずれるだけで、間違った図が出るわけではない。
+ */
+function roleOf(w: WidgetSpec): WidgetRole {
+  switch (w.type) {
+    case "kpi":
+      return "kpi";
+    case "line":
+    case "area":
+    case "bar":
+    case "combo":
+      return w.splitBy ? "trend-split" : "trend";
+    case "hbar":
+      return "ranking";
+    case "donut":
+    case "treemap":
+      return "composition";
+    case "funnel":
+      return "stage";
+    case "pivot":
+    case "heatmap":
+      return "cross";
+    case "scatter":
+      return "relation";
+    case "histogram":
+      return "distribution";
+    case "table":
+      return "detail";
+  }
+}
+
+/**
+ * 候補から、この画面に載せるぶんだけを選ぶ。
+ *
+ * KPI は常に先頭。上段の数字は帯としてまとまって並ぶ設計（DashboardGrid）
+ * なので、間に図が挟まると帯が割れて、同じ画面に細い帯が2本できる。
+ *
+ * 「おまかせ」は、これまでの並び（データから見て価値の高い順）をそのまま
+ * 使う。視点を選んだときだけ、役割の重みで並べ替える。同点は元の順序を
+ * 保つ（安定ソート）ので、同じファイルと同じ答えなら必ず同じ画面になる。
+ */
+function selectByIntent(
+  core: WidgetSpec[],
+  extras: WidgetSpec[],
+  lens: Lens,
+  aud: AudienceMeta,
+): WidgetSpec[] {
+  /*
+   * 上段の数字は core と extras の両方から出る（extras 側は「2本目以降の
+   * 数値列の合計」）。片方だけを数えると、重み付けの段で extras の KPI が
+   * 図と同じ土俵に乗り、視点によっては KPI が10枚並んで**グラフが3枚しか
+   * 残らない**という壊れ方をする。しかも並びの途中に挟まるので、
+   * まとまって並ぶはずの帯が2本に割れる。数える対象は最初から1つにする。
+   */
+  const isKpi = (w: WidgetSpec) => w.type === "kpi";
+  const kpis = [...core, ...extras].filter(isKpi).slice(0, aud.maxKpis);
+  const coreRest = core.filter((w) => !isKpi(w));
+  // 明細表は選抜の後に必ず足すので、その1枚ぶんを空けておく。
+  const room = Math.max(1, aud.maxWidgets - kpis.length - (aud.detail ? 1 : 0));
+
+  if (lens === "auto") {
+    const merged: WidgetSpec[] = [...coreRest];
+    for (const w of extras) {
+      if (kpis.length + merged.length >= MIN_WIDGETS_PER_SHEET - 1) break;
+      merged.push(w);
+    }
+    return [...kpis, ...merged.slice(0, room)];
+  }
+
+  const scored = [...coreRest, ...extras.filter((w) => !isKpi(w))].map((w, i) => ({
+    w,
+    i,
+    score: weightOf(lens, roleOf(w)),
+  }));
+  scored.sort((a, b) => b.score - a.score || a.i - b.i);
+  return [...kpis, ...scored.slice(0, room).map((x) => x.w)];
+}
+
+/**
+ * 視点に合わせて図の形を変える。中身（集計）は一切変えない。
+ *
+ * 同じ「月別の売上」でも、実績を追うなら棒——ひと月ぶんの量として読む——、
+ * ばらつきを見るなら折れ線——形の変化として読む——のほうが速い。
+ * どちらも同じ数字なので、間違いようがない範囲の言い換えだけを行う。
+ */
+function restyle(w: WidgetSpec, lens: Lens): WidgetSpec {
+  if (lens === "performance" && (w.type === "line" || w.type === "area")) {
+    return { ...w, type: "bar" };
+  }
+  if (lens === "distribution" && w.type === "bar" && !w.stacked && !w.splitBy) {
+    return { ...w, type: "line" };
+  }
+  /*
+   * 進み具合を見るときは、区分を割った棒は必ず積み上げる。
+   * 横に並べると「先月と今月でどちらが多いか」を、区分ごとに目で足し算する
+   * ことになる。段階の合計と内訳を同時に読みたいのが、この視点の目的。
+   *
+   * 今のところ生成側が既に積み上げているので、この行は保険。積んでいない
+   * 区分割りの棒を後から足したときに、この視点だけは崩れないようにする。
+   */
+  if (lens === "pipeline" && w.type === "bar" && w.splitBy) {
+    return { ...w, stacked: true };
+  }
+  return w;
+}
+
+/**
+ * その視点でだけ欲しくなる図を足す。
+ *
+ * 上の生成はデータの形だけを見ているので、たとえば数値列が3本あっても
+ * 分布は1本目しか描かない（普段はそれで十分で、増やすと埋め草になる）。
+ * 「ばらつきを見たい」と答えた人にとっては、そこが本題なので足す。
+ */
+function lensExtras(sheet: ProfiledSheet, lens: Lens): WidgetSpec[] {
+  if (lens !== "distribution") return [];
+  const S = sheet.slug;
+  const measures = orderedMeasures(sheet.fields);
+  const out: WidgetSpec[] = [];
+
+  for (const m of measures.slice(1, 3)) {
+    out.push({
+      id: genWidgetId(),
+      type: "histogram",
+      title: `${m.name}の分布`,
+      collection: S,
+      span: 2,
+      field: m.key,
+      bins: 10,
+      unit: unitOf(m),
+    });
+  }
+
+  // 1本目 × 3本目。2本目との組み合わせは通常の生成が既に作っている。
+  if (measures[2]) {
+    out.push({
+      id: genWidgetId(),
+      type: "scatter",
+      title: `${measures[0].name} × ${measures[2].name}`,
+      collection: S,
+      span: 2,
+      xField: measures[0].key,
+      yField: measures[2].key,
+      colorBy: categoryFields(sheet.fields)[0]?.key,
+      labelField: detailColumns(sheet.fields, 1)[0]?.key,
+      limit: 500,
+      xUnit: unitOf(measures[0]),
+      yUnit: unitOf(measures[2]),
+    });
+  }
+  return out;
 }
 
 /**
@@ -663,11 +833,14 @@ function packRows(widgets: WidgetSpec[]): WidgetSpec[] {
  * ファイル全体のレイアウト。
  * 先頭のシートを主役として厚く作り、残りのシートは件数と明細だけ添える。
  */
-export function autoLayoutFromProfiles(sheets: ProfiledSheet[]): WidgetSpec[] {
+export function autoLayoutFromProfiles(
+  sheets: ProfiledSheet[],
+  intent: DashboardIntent = DEFAULT_INTENT,
+): WidgetSpec[] {
   const usable = sheets.filter((s) => s.fields.length > 0 && s.rowCount > 0);
   if (usable.length === 0) return [];
 
-  const out: WidgetSpec[] = packRows(layoutForSheet(usable[0], true));
+  const out: WidgetSpec[] = packRows(layoutForSheet(usable[0], true, intent));
 
   for (const sheet of usable.slice(1)) {
     /*
@@ -700,7 +873,7 @@ export function autoLayoutFromProfiles(sheets: ProfiledSheet[]): WidgetSpec[] {
       });
     }
     const cols = detailColumns(sheet.fields, 5);
-    if (cols.length > 0) {
+    if (audienceMeta(intent.audience).detail && cols.length > 0) {
       block.push({
         id: genWidgetId(),
         type: "table",

@@ -68,6 +68,7 @@ export default async function DashboardEditPage({
             id: dashboard.id,
             name: dashboard.name,
             description: dashboard.description ?? "",
+            theme: dashboard.theme,
             collectionSlugs,
             layout,
           }}

@@ -6,6 +6,7 @@ import { BreakdownChart } from "./widgets/BreakdownChart";
 import { DataTable } from "./widgets/DataTable";
 import { PivotTable } from "./widgets/PivotTable";
 import { ScatterPlot } from "./widgets/ScatterPlot";
+import { PaletteProvider } from "./PaletteContext";
 
 /**
  * Renders a computed dashboard layout on a 4-column responsive grid. Each
@@ -95,49 +96,65 @@ const KPI_COLS: Record<number, string> = {
   4: "grid-cols-2 lg:grid-cols-4",
 };
 
-export function DashboardGrid({ computed }: { computed: ComputedWidget[] }) {
+/**
+ * `theme` はこのダッシュボードの配色（src/lib/palette.ts）。渡さなければ標準。
+ * 中のグラフは全部ここから色を受け取るので、1枚のダッシュボードの中で
+ * 配色がばらけることはない。
+ */
+export function DashboardGrid({
+  computed,
+  theme,
+}: {
+  computed: ComputedWidget[];
+  theme?: string | null;
+}) {
   const blocks = toBlocks(computed);
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      {blocks.map((block) => {
-        if (block.kind === "kpis") {
-          return (
-            <section
-              key={block.items[0].widget.id}
-              className={`grid gap-px overflow-hidden rounded-md border border-ink-line bg-ink-line ${
-                KPI_COLS[Math.min(4, block.items.length)]
-              } ${SPAN_CLASS[block.span]}`}
-            >
-              {block.items.map(({ widget, data }) => (
-                <div
-                  key={widget.id}
-                  className="flex flex-col gap-2.5 bg-paper-raised px-5 py-4"
-                >
-                  <p className="text-sm font-medium text-ink-muted">
-                    {widget.title}
-                  </p>
-                  <div className="flex-1">
-                    <WidgetBody data={data} />
+    <PaletteProvider theme={theme}>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {blocks.map((block) => {
+          if (block.kind === "kpis") {
+            return (
+              <section
+                key={block.items[0].widget.id}
+                className={`grid gap-px overflow-hidden rounded-md border border-ink-line bg-ink-line ${
+                  KPI_COLS[Math.min(4, block.items.length)]
+                } ${SPAN_CLASS[block.span]}`}
+              >
+                {block.items.map(({ widget, data }) => (
+                  <div
+                    key={widget.id}
+                    className="flex flex-col gap-2.5 bg-paper-raised px-5 py-4"
+                  >
+                    <p className="text-sm font-medium text-ink-muted">
+                      {widget.title}
+                    </p>
+                    <div className="flex-1">
+                      <WidgetBody data={data} />
+                    </div>
                   </div>
-                </div>
-              ))}
-            </section>
-          );
-        }
+                ))}
+              </section>
+            );
+          }
 
-        const { widget, data } = block.item;
-        return (
-          <Card key={widget.id} className={`flex flex-col ${SPAN_CLASS[block.span]}`}>
-            <CardHeader>
-              <CardTitle>{widget.title}</CardTitle>
-            </CardHeader>
-            <CardBody className="flex-1">
-              <WidgetBody data={data} />
-            </CardBody>
-          </Card>
-        );
-      })}
-    </div>
+          const { widget, data } = block.item;
+          return (
+            <Card
+              key={widget.id}
+              className={`flex flex-col ${SPAN_CLASS[block.span]}`}
+            >
+              <CardHeader>
+                <CardTitle>{widget.title}</CardTitle>
+              </CardHeader>
+              <CardBody className="flex-1">
+                <WidgetBody data={data} />
+              </CardBody>
+            </Card>
+          );
+        })}
+      </div>
+    </PaletteProvider>
   );
 }

@@ -29,21 +29,15 @@ import type { BreakdownData } from "@/lib/widgets";
  * state when every value is zero.
  */
 
-const COLOR_HEX: Record<string, string> = {
-  khaki: "#8a8250",
-  info: "#4a6d80",
-  success: "#4f7a53",
-  warning: "#b07d38",
-  danger: "#a24b3f",
-  neutral: "#a8a493",
-};
-const TEXT = "#57544b";
-const GRID = "#e2ded1";
-const FALLBACK = ["khaki", "info", "success", "warning", "danger", "neutral"];
+import {
+  seriesColor,
+  CHART_GRID as GRID,
+  CHART_TEXT as TEXT,
+} from "@/lib/palette";
+import { usePalette } from "../PaletteContext";
 
-function hexFor(color: string | undefined, i: number): string {
-  return COLOR_HEX[color ?? ""] ?? COLOR_HEX[FALLBACK[i % FALLBACK.length]];
-}
+/** ツリーマップの区画が色を受け取れなかったときの受け皿。 */
+const NO_COLOR = "#a8a493";
 
 /**
  * ツリーマップの1区画。
@@ -79,7 +73,7 @@ function TreemapCell(props: unknown) {
         y={y}
         width={width}
         height={height}
-        fill={fill ?? COLOR_HEX.neutral}
+        fill={fill ?? NO_COLOR}
         stroke="#fbfaf6"
         strokeWidth={2}
       />
@@ -116,6 +110,7 @@ const tooltipStyle = {
 } as const;
 
 export function BreakdownChart({ data }: { data: BreakdownData }) {
+  const palette = usePalette();
   const { type, slices, total, groupBy, collectionId } = data;
   const empty = slices.length === 0 || total === 0;
   const router = useRouter();
@@ -155,7 +150,7 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
       value: s.value,
       key: s.key,
       synthetic: s.synthetic,
-      fill: hexFor(s.color, i),
+      fill: seriesColor(palette, i, s.color),
     }));
     return (
       <div className="h-64 w-full">
@@ -186,7 +181,7 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
   if (type === "funnel") {
     const rows = slices.map((s, i) => ({
       ...s,
-      fill: hexFor(s.color, i),
+      fill: seriesColor(palette, i, s.color),
       // ラベルと数字を1本にまとめる。長い名前は右の余白に収まらないので省略する。
       caption: `${s.label.length > 9 ? `${s.label.slice(0, 8)}…` : s.label}　${formatCompact(s.value)}`,
     }));
@@ -231,7 +226,7 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
   if (type === "hbar") {
     const rows = slices.map((s, i) => ({
       ...s,
-      fill: hexFor(s.color, i),
+      fill: seriesColor(palette, i, s.color),
     }));
     // Give each bar breathing room; grow the container with the row count.
     const height = Math.max(200, rows.length * 40 + 24);
@@ -294,7 +289,7 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
   }
 
   // Donut
-  const rows = slices.map((s, i) => ({ ...s, fill: hexFor(s.color, i) }));
+  const rows = slices.map((s, i) => ({ ...s, fill: seriesColor(palette, i, s.color) }));
   const chart = (
     <div className="relative h-56 w-full">
       <ResponsiveContainer width="100%" height="100%">

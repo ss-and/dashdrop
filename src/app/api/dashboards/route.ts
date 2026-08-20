@@ -14,8 +14,9 @@ import { createCustomDashboard } from "@/lib/apply-template";
 const bodySchema = z.object({
   name: z.string().min(1, "ダッシュボード名を入力してください"),
   description: z.string().optional(),
+  theme: z.string().optional(),
   collectionSlugs: z.array(z.string()).min(1).max(24),
-  layout: z.array(z.unknown()).min(1).max(24),
+  layout: z.array(z.unknown()).min(1).max(48),
 });
 
 export const POST = withAuth(async (req, { user }) => {
