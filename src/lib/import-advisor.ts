@@ -195,6 +195,25 @@ export function heuristicAdvice(sheets: SheetParse[]): ImportAdvice {
       });
       continue;
     }
+
+    /*
+     * 列の提案は、取り込みを勧めるかどうかとは別に、必ず作る。
+     *
+     * 以前は「取り込む」と判断したシートにだけ作っていた。取捨は**提案**で
+     * あって決定ではないので、利用者が非表示シートにチェックを入れると、
+     * 確認画面に列が1本も出ず、項目名も型も直せないまま取り込むことになる
+     * （列の中身は同じように読めているのに、ただ渡していなかった）。
+     */
+    columns[s.sheetName] = uniquify(
+      s.inferredFields.map((f) => ({
+        sourceHeader: f.name,
+        name: f.name,
+        key: f.key,
+        type: f.type,
+        reason: "",
+      })),
+    );
+
     if (s.hidden) {
       sheetAdvice.push({
         sheetName: s.sheetName,
@@ -220,16 +239,6 @@ export function heuristicAdvice(sheets: SheetParse[]): ImportAdvice {
     // 行数・列数は画面が別に出しているので、ここでは繰り返さない。
     // AI が使えるときは、この欄に「なぜ取り込むと判断したか」が入る。
     sheetAdvice.push({ sheetName: s.sheetName, include: true, reason: "" });
-
-    columns[s.sheetName] = uniquify(
-      s.inferredFields.map((f) => ({
-        sourceHeader: f.name,
-        name: f.name,
-        key: f.key,
-        type: f.type,
-        reason: "",
-      })),
-    );
   }
 
   return {

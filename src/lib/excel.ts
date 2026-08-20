@@ -178,9 +178,22 @@ function toWorkbook(
   buffer: ArrayBuffer | Buffer,
   maxRows: number = MAX_IMPORT_ROWS,
 ): XLSX.WorkBook {
-  // Buffer is a Uint8Array subclass, so "array" reads both flavours safely.
-  const data =
-    buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
+  /*
+   * バイト列の見方をそろえる。
+   *
+   * `instanceof ArrayBuffer` で分けてはいけない。`instanceof` は「同じ実行
+   * コンテキストで作られたか」まで見るので、別のコンテキストから渡ってきた
+   * ArrayBuffer（テスト環境の jsdom、Worker、差し替えられた fetch 実装など）は
+   * false になる。そうなると ArrayBuffer をそのまま添字アクセスすることになり、
+   * `data[0]` が undefined ＝「ZIP でも OLE でもない」と判定され、**正しい
+   * .xlsx が CSV として読まれて**「文字コードを判別できませんでした」で落ちる。
+   * 中身は何も悪くないのに、利用者には文字コードの問題だと案内される。
+   *
+   * `ArrayBuffer.isView` はコンテキストに依らない判定なので、こちらを使う。
+   */
+  const data = ArrayBuffer.isView(buffer)
+    ? new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+    : new Uint8Array(buffer as ArrayBuffer);
 
   // Distinguish real spreadsheet binaries from delimited text (CSV/TSV) by
   // magic bytes: .xlsx/.xlsm are ZIP ("PK"), legacy .xls is an OLE compound
@@ -264,10 +277,39 @@ const TOTAL_ROW_LABEL = /^(合計|小計|総計|累計|平均|総合計|計)([\s
 function isTotalRow(row: unknown[]): boolean {
   const filled = row.filter((c) => cellToString(c) !== "");
   if (filled.length === 0) return false;
+
+  /*
+   * 埋まりきった合計行。
+   *
+   * 「合計 / 2,000,000 / 2,170,000 / …」のように全列が埋まる合計行は、
+   * 半分ルールでは普通のデータ行に見える。だが列の合計を出すと**自分自身の
+   * 合計を二重に足す**ことになり、売上が倍になった数字が黙って出る。
+   * エラーにならないぶん、いちばん気づけない壊れ方をする。
+   *
+   * 見出し語が先頭にあり、残りが全部数値なら合計行と見なす。「合計」が
+   * 区分名として入っているだけのデータ行は、ふつう他の列にも文字が入るので
+   * 残る（例: 合計 / 山田商事 / 1,000）。
+   */
+  const first = cellToString(filled[0]);
+  if (TOTAL_ROW_LABEL.test(first)) {
+    const rest = filled.slice(1);
+    const allNumeric =
+      rest.length > 0 &&
+      rest.every((c) => {
+        if (typeof c === "number") return true;
+        const s = cellToString(c);
+        return s !== "" && NUMERIC_CELL.test(s);
+      });
+    if (allNumeric) return true;
+  }
+
   // 半分以上の列が埋まっていれば、それは普通のデータ行。
   if (filled.length >= Math.ceil(row.length / 2)) return false;
   return row.some((c) => TOTAL_ROW_LABEL.test(cellToString(c)));
 }
+
+/** 合計行の判定に使う「数値らしいセル」。桁区切り・通貨記号は飾りとして許す。 */
+const NUMERIC_CELL = /^[+-]?[¥￥$]?\s*\d[\d,]*(\.\d+)?%?$/;
 
 /** 2桁ゼロ埋め。 */
 function pad2(n: number): string {
@@ -376,24 +418,98 @@ function readRow(
   return row;
 }
 
+/** 行が値を持っている列の番号。見出しらしさの判定に使う。 */
+function occupiedColumns(row: unknown[]): Set<number> {
+  const out = new Set<number>();
+  for (let i = 0; i < row.length; i++) {
+    if (cellToString(row[i]) !== "") out.add(i);
+  }
+  return out;
+}
+
+/**
+ * 候補の行が、下の行が実際に使っている列をどれだけ**名付けられているか**（0〜1）。
+ *
+ * 「どれだけ似ているか」で測ってはいけない。見出しには、下がずっと空の列
+ * （キャッシュの無い数式列など）の名前も入っている。似ている度合いで測ると、
+ * その1列ぶんだけ見出しが減点され、**1行目のデータが見出しに選ばれる**
+ * （生成した3000通りのうち1件で実際に起きた）。見出しの役割は「下で使われて
+ * いる列に名前を付けること」なので、そちら向きだけを見る。
+ */
+function columnCoverage(header: Set<number>, below: Set<number>): number {
+  if (below.size === 0) return 1;
+  let covered = 0;
+  for (const c of below) if (header.has(c)) covered += 1;
+  return covered / below.size;
+}
+
+/** 何行先まで見て「見出しらしさ」を測るか。 */
+const HEADER_LOOKAHEAD = 3;
+/**
+ * 先頭の候補を追い越すのに必要な差。
+ * 僅差で入れ替えると、これまで正しく読めていた表まで動いてしまう。
+ */
+const HEADER_OVERRIDE_MARGIN = 0.25;
+
 /**
  * ヘッダーらしい行を選ぶ。
  *
- * 先頭の非空行を無条件にヘッダーにすると、「2026年度 売上表」のようなタイトル行が
- * ヘッダーになり、本物の見出し行がデータとして取り込まれてしまう。先頭
- * HEADER_SCAN_ROWS 行のうち「埋まっているセル数」が最大値の6割以上ある最初の行を
- * 採用する（タイトル行は1セルしか埋まらないので自然に外れ、ヘッダーの一部が
- * 空欄でも本物のヘッダーが残る）。選んだ行は `headerRowIndex` で必ず外に出し、
- * UI が「N行目を見出しとして認識」と表示・訂正できるようにする。
+ * まず「埋まっているセル数が最大値の6割以上」で候補を絞る。タイトル行は1セルしか
+ * 埋まらないので、これだけで大半は正しく決まる。
+ *
+ * ただし請求書・納品書のような**人向けの1枚**では足りない。宛名の行
+ * （「株式会社◯◯ 御中 / 請求日 / 2026-04-30」）も3セル埋まっているので、
+ * 先頭から探すとそこで止まり、列名が「株式会社◯◯ 御中」「2026-04-30」になった
+ * 意味の無い表ができていた（明細の「品目 / 数量 / 単価 / 金額」はデータ行に
+ * 落ちる）。日本の中小企業がそのまま渡してくる形なので、ここは効く。
+ *
+ * 見分けるのは**下に続く行が使っている列を、その行が名付けているか**。本物の
+ * 見出しの下には、見出しが名付けた列だけを使う行が並ぶ。宛名の行の下は、
+ * 名付けていない列（品目・数量）を使う行が並ぶ。差がはっきりしているときだけ、
+ * 先頭の候補を追い越す。
+ *
+ * 選んだ行は `headerRowIndex` で必ず外に出し、UI が「N行目を見出しとして
+ * 認識」と表示・訂正できるようにする。
  */
 function detectHeaderRow(
-  candidates: { index: number; filled: number }[],
+  candidates: { index: number; row: unknown[]; filled: number }[],
 ): number {
   if (candidates.length === 0) return -1;
   const maxFilled = candidates.reduce((m, c) => Math.max(m, c.filled), 0);
   const threshold = Math.max(1, maxFilled * 0.6);
-  const hit = candidates.find((c) => c.filled >= threshold);
-  return (hit ?? candidates[0]).index;
+
+  const eligible = candidates
+    .map((c, at) => ({ ...c, at }))
+    .filter((c) => c.filled >= threshold);
+  if (eligible.length === 0) return candidates[0].index;
+  if (eligible.length === 1) return eligible[0].index;
+
+  const scoreOf = (at: number): number => {
+    const cols = occupiedColumns(candidates[at].row);
+    const next = candidates.slice(at + 1, at + 1 + HEADER_LOOKAHEAD);
+    if (next.length === 0) return 0;
+    const total = next.reduce(
+      (sum, n) => sum + columnCoverage(cols, occupiedColumns(n.row)),
+      0,
+    );
+    return total / next.length;
+  };
+
+  const first = eligible[0];
+  const firstScore = scoreOf(first.at);
+  let best = first;
+  let bestScore = firstScore;
+  for (const c of eligible.slice(1)) {
+    const s = scoreOf(c.at);
+    // 同点なら先に出てきた行を採る（見出しは上にあるのが普通）。
+    if (s > bestScore) {
+      best = c;
+      bestScore = s;
+    }
+  }
+  return bestScore - firstScore >= HEADER_OVERRIDE_MARGIN
+    ? best.index
+    : first.index;
 }
 
 /** List the sheet names in a workbook (lightweight probe). */

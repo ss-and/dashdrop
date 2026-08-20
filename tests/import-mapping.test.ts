@@ -19,6 +19,7 @@ import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/re
 import * as XLSX from "xlsx";
 import { ImportWizard } from "@/components/import/ImportWizard";
 import { ApiError } from "@/lib/errors";
+import { buildWorkbook, MARK, MARK_RE } from "./helpers/excel-fixtures";
 
 // パーサ本体は本物。readSheet だけ差し替え可能にして、5万行のファイルを
 // 作らずに「打ち切られた解析結果」を注入できるようにする。
@@ -972,5 +973,108 @@ describe("同名ファイルの上書き — POST /api/import", () => {
 
     expect(mocks.db.workbook.create).toHaveBeenCalled();
     expect(mocks.db.collection.delete).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Excel のいろいろな形を、実際のルートに通す
+// ---------------------------------------------------------------------------
+
+/**
+ * 生成した .xlsx を、**本物の POST /api/import** に流し込む。
+ *
+ * これまでのパターンテスト（tests/excel-patterns.test.ts）はパーサから
+ * 自動レイアウトまでを通していたが、ルートの中の「列の対応づけ」だけは
+ * 別に書かれている。値がどの列から来るかを決めているのはそこなので、
+ * 同じ生成器で本物のルートも叩いておく。
+ *
+ * 見るのは2つだけ、ただしいちばん大事な2つ。
+ *   1. 生成した行が、1行ずつちょうど1回だけ書き込まれること。
+ *   2. 各セルの値が、書いたときの列から読まれていること（1列ずれない）。
+ */
+function xlsxReq(
+  buffer: Buffer,
+  extra: Record<string, unknown> = {},
+): { formData: () => Promise<FakeForm> } {
+  const ab = buffer.buffer.slice(
+    buffer.byteOffset,
+    buffer.byteOffset + buffer.byteLength,
+  ) as ArrayBuffer;
+  const file = {
+    name: "パターン.xlsx",
+    size: ab.byteLength,
+    arrayBuffer: async () => ab,
+  };
+  const entries: Record<string, unknown> = { file, ...extra };
+  return { formData: async () => ({ get: (key: string) => entries[key] ?? null }) };
+}
+
+/** db.record.create に渡されたデータを、コレクション作成順にまとめる。 */
+function writtenRecordsByCollection(): Array<Array<Record<string, unknown>>> {
+  const perCollection = new Map<string, Array<Record<string, unknown>>>();
+  for (const call of mocks.db.record.create.mock.calls) {
+    const arg = call[0] as {
+      data: { collectionId: string; data: Record<string, unknown> };
+    };
+    const list = perCollection.get(arg.data.collectionId) ?? [];
+    list.push(arg.data.data);
+    perCollection.set(arg.data.collectionId, list);
+  }
+  return [...perCollection.values()];
+}
+
+describe("Excelのいろいろな形 — 本物の POST /api/import", () => {
+  const BASE = Number(process.env.FUZZ_SEED ?? 1);
+  const CASES = Number(process.env.ROUTE_FUZZ_CASES ?? 60);
+  const seeds = Array.from({ length: CASES }, (_, i) => BASE + i);
+
+  it.each(seeds)("seed %i — 行を落とさず、列がずれない", async (seed) => {
+    const { buffer, sheets } = buildWorkbook(seed);
+
+    // 生成したコレクションを1枚ずつ別IDにして、行の帰属を追えるようにする。
+    let n = 0;
+    mocks.db.collection.create.mockImplementation(async () => ({ id: `col-${n++}` }));
+
+    const handler = await importRoute();
+    const res = await handler(xlsxReq(buffer), ctx());
+    expect(res.ok, `seed=${seed}: 取り込みに失敗`).toBe(true);
+
+    const written = writtenRecordsByCollection();
+
+    /*
+     * 突き合わせは印だけで行う。シート名では追えない——1枚しかないタブは
+     * ファイル名に付け替えられるし、名前が衝突することもある。印には
+     * シート番号が入っているので、名前に一切依存しない。
+     */
+    const writtenMarks: string[] = [];
+    for (const rows of written) {
+      for (const rec of rows) {
+        for (const v of Object.values(rec)) {
+          if (typeof v === "string" && MARK_RE.test(v)) writtenMarks.push(v);
+        }
+      }
+    }
+
+    const expectedMarks = new Set<string>();
+    for (const gen of sheets) {
+      if (!gen.plan.columns.some((c) => c.header === MARK)) continue;
+      for (const m of gen.expected.keys()) expectedMarks.add(m);
+    }
+
+    // 同じ行が2回書き込まれていないこと。
+    expect(
+      new Set(writtenMarks).size,
+      `seed=${seed}: 同じ行が2回書き込まれた`,
+    ).toBe(writtenMarks.length);
+
+    // 1行も失われていないこと（印を持つシートの分だけ）。
+    for (const m of expectedMarks) {
+      expect(writtenMarks.includes(m), `seed=${seed}: 行「${m}」が失われた`).toBe(true);
+    }
+
+    // 無い行が生えていないこと。
+    for (const m of writtenMarks) {
+      expect(expectedMarks.has(m), `seed=${seed}: 覚えの無い行「${m}」`).toBe(true);
+    }
   });
 });

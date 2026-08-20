@@ -631,12 +631,16 @@ function packRows(widgets: WidgetSpec[]): WidgetSpec[] {
     }
 
     /*
-     * それでも余るなら、その行の中身を広げて幅を使い切る。
+     * それでも余るなら、行の中身を広げて幅を使い切る。
      *
-     * KPI は横に並ぶ帯なので、残った枚数で等分する（2枚なら 2+2）。
-     * グラフが1枚だけ残ったときは、その1枚を行いっぱいにする。どちらも
+     * KPI だけの行は横に並ぶ帯なので、枚数で等分する（2枚なら 2+2）。
+     * それ以外は、いちばん右のウィジェットに余りを足す。どちらも
      * 「右半分が空いた行」を作らないため——中身は正しいのに、穴が開いて
      * いると作りかけに見える。
+     *
+     * 【回帰防止】「1枚だけ残ったとき」だけを特別扱いしていたときは、金額の
+     * 列が無いファイル（KPIが件数の1枚だけ）で「件数(1) + ドーナツ(2) = 3」の
+     * 行が漏れていた。生成したExcel 200通りのうち166通りがこの形だった。
      */
     if (width < 4 && row.length > 0) {
       if (row.every((w) => w.type === "kpi")) {
@@ -645,8 +649,9 @@ function packRows(widgets: WidgetSpec[]): WidgetSpec[] {
         for (let k = 0; k < row.length; k++) {
           row[k] = { ...row[k], span: base + (k < extra ? 1 : 0) };
         }
-      } else if (row.length === 1) {
-        row[0] = { ...row[0], span: 4 };
+      } else {
+        const last = row.length - 1;
+        row[last] = { ...row[last], span: spanOf(row[last]) + (4 - width) };
       }
     }
     out.push(...row);
@@ -665,8 +670,16 @@ export function autoLayoutFromProfiles(sheets: ProfiledSheet[]): WidgetSpec[] {
   const out: WidgetSpec[] = packRows(layoutForSheet(usable[0], true));
 
   for (const sheet of usable.slice(1)) {
+    /*
+     * 2枚目以降は「件数・金額・明細」を添える。
+     *
+     * 詰め直しはシートごとに行うこと。全体を一気に詰めると、後ろのシートの
+     * ウィジェットが前のシートの行の隙間に繰り上がって、どのシートの数字なのかが
+     * 混ざる。1シート分は必ず幅4の倍数で終わるので、そのまま連結できる。
+     */
+    const block: WidgetSpec[] = [];
     const money = orderedMeasures(sheet.fields)[0];
-    out.push({
+    block.push({
       id: genWidgetId(),
       type: "kpi",
       title: `${sheet.name}の件数`,
@@ -676,7 +689,7 @@ export function autoLayoutFromProfiles(sheets: ProfiledSheet[]): WidgetSpec[] {
       unit: "number",
     });
     if (money) {
-      out.push({
+      block.push({
         id: genWidgetId(),
         type: "kpi",
         title: `${sheet.name}の${money.name}`,
@@ -688,7 +701,7 @@ export function autoLayoutFromProfiles(sheets: ProfiledSheet[]): WidgetSpec[] {
     }
     const cols = detailColumns(sheet.fields, 5);
     if (cols.length > 0) {
-      out.push({
+      block.push({
         id: genWidgetId(),
         type: "table",
         title: `${sheet.name} 明細`,
@@ -698,6 +711,7 @@ export function autoLayoutFromProfiles(sheets: ProfiledSheet[]): WidgetSpec[] {
         limit: 8,
       });
     }
+    out.push(...packRows(block));
   }
 
   return out;

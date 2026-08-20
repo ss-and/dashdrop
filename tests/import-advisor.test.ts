@@ -121,8 +121,14 @@ describe("シートの取捨（AIなし）", () => {
     expect(cover?.include).toBe(false);
     expect(cover?.reason).toContain("表紙");
     expect(orders?.include).toBe(true);
-    // 取り込まないシートの列は提案しない。
-    expect(advice.columns["表紙"]).toBeUndefined();
+    /*
+     * 勧めないシートでも、列の提案そのものは用意しておく。
+     *
+     * 取捨は提案であって決定ではない。以前はここで列を作っていなかったため、
+     * 利用者が表紙や非表示シートにチェックを入れると、確認画面に列が1本も
+     * 出ず、項目名も型も直せないまま取り込むことになっていた。
+     */
+    expect(advice.columns["表紙"]).toHaveLength(1);
     expect(advice.columns["受注明細"]).toHaveLength(3);
   });
 });
