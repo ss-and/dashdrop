@@ -116,6 +116,27 @@ const paths: Record<string, React.ReactNode> = {
       <path d="M9 4v16" />
     </>
   ),
+  /*
+   * 戻る。
+   *
+   * 山形（＜）ではなく**軸のある矢印**にする。Windows の利用者には、
+   * ブラウザの戻るボタンと同じ形であることが手掛かりになる（Mac のように
+   * 二本指スワイプで戻る習慣が無いぶん、押せるものだと分かる形が要る）。
+   */
+  arrowLeft: (
+    <>
+      <path d="M19 12H5" />
+      <path d="m12 19-7-7 7-7" />
+    </>
+  ),
+  trash: (
+    <>
+      <path d="M3 6h18" />
+      <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M10 11v6M14 11v6" />
+    </>
+  ),
 };
 
 export function NavIcon({ name, className }: { name: string; className?: string }) {

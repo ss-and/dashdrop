@@ -12,6 +12,8 @@ import { Topbar } from "@/components/app/Topbar";
 import { CollectionIcon, NavIcon } from "@/components/app/icons";
 import { HelpTip } from "@/components/ui/HelpTip";
 import { AutoDashboardButton } from "@/components/dashboard/AutoDashboardButton";
+import { DeleteDataButton } from "@/components/data/DeleteDataButton";
+import { collectDeleteImpact } from "@/lib/data-delete";
 
 const SOURCE_LABEL: Record<string, string> = {
   excel: "Excel",
@@ -46,6 +48,16 @@ export default async function WorkbookPage({
   const totalRows = sheets.reduce((a, c) => a + c._count.records, 0);
   const sourceLabel = SOURCE_LABEL[workbook.source] ?? "ファイル";
 
+  /*
+   * 消したときに巻き添えになるものを、押す前に見せるために先に数えておく。
+   * 消した後では「どのダッシュボードが空になったか」は分からない。
+   */
+  const impact = await collectDeleteImpact(
+    user.workspace.id,
+    sheets.map((c) => c.id),
+    sheets.map((c) => c.slug),
+  );
+
   return (
     <>
       <Topbar user={user} title={workbook.name} />
@@ -77,18 +89,31 @@ export default async function WorkbookPage({
               </div>
             </div>
 
-            {sheets.length > 0 && (
-              <div className="flex shrink-0 items-start gap-2">
-                <AutoDashboardButton workbookId={workbook.id} />
-                <Link
-                  href={`/dashboards/build?file=${workbook.id}`}
-                  className="inline-flex h-9 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
-                >
-                  <NavIcon name="dashboard" className="h-4 w-4" />
-                  自分で作る
-                </Link>
-              </div>
-            )}
+            <div className="flex shrink-0 items-start gap-2">
+              {sheets.length > 0 && (
+                <>
+                  <AutoDashboardButton workbookId={workbook.id} />
+                  <Link
+                    href={`/dashboards/build?file=${workbook.id}`}
+                    className="inline-flex h-9 items-center gap-2 rounded border border-ink-line bg-paper-raised px-3 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken"
+                  >
+                    <NavIcon name="dashboard" className="h-4 w-4" />
+                    自分で作る
+                  </Link>
+                </>
+              )}
+              {/* 取り込んだものを取り消せるように。中身が空のファイルも消せる。 */}
+              <DeleteDataButton
+                kind="file"
+                id={workbook.id}
+                name={workbook.name}
+                rowCount={totalRows}
+                sheetNames={sheets.map((c) => c.name)}
+                affectedDashboards={impact.affectedDashboards}
+                emptiedDashboards={impact.emptiedDashboards}
+                redirectTo="/home"
+              />
+            </div>
           </div>
 
           {/* Sheets — Salesforce-style related list */}

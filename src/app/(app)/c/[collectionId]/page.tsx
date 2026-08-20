@@ -23,6 +23,8 @@ import { HelpTip } from "@/components/ui/HelpTip";
 import { DataGrid } from "@/components/grid/DataGrid";
 import { AutoDashboardButton } from "@/components/dashboard/AutoDashboardButton";
 import { SheetTabs } from "@/components/sheet/SheetTabs";
+import { DeleteDataButton } from "@/components/data/DeleteDataButton";
+import { collectDeleteImpact } from "@/lib/data-delete";
 import { AnalyzeView } from "@/components/sheet/AnalyzeView";
 
 /** 絞り込み時に読む最大行数。全件読みにしないための上限。 */
@@ -66,6 +68,16 @@ export default async function CollectionPage({
         select: { id: true, name: true },
       })
     : null;
+
+  /*
+   * 消したときに巻き添えになるものを、押す前に見せるために先に数えておく。
+   * 消した後では「どのダッシュボードが空になったか」は分からない。
+   */
+  const deleteImpact = await collectDeleteImpact(
+    user.workspace.id,
+    [collection.id],
+    [collection.slug],
+  );
 
   /** Everything only the 表 tab needs — skipped entirely on the 分析 tab. */
   async function loadGrid() {
@@ -186,6 +198,17 @@ export default async function CollectionPage({
                 <NavIcon name="download" className="h-4 w-4" />
                 Excelで書き出し
               </Link>
+              {/* 間違えて入れた表を、その場で取り消せるように。 */}
+              <DeleteDataButton
+                kind="sheet"
+                id={collection.id}
+                name={collection.name}
+                rowCount={deleteImpact.recordCount}
+                affectedDashboards={deleteImpact.affectedDashboards}
+                emptiedDashboards={deleteImpact.emptiedDashboards}
+                exportHref={`/api/export/${collection.id}`}
+                redirectTo={workbook ? `/f/${workbook.id}` : "/home"}
+              />
             </div>
           </div>
 

@@ -7,6 +7,7 @@ import { NotificationBell } from "./NotificationBell";
 import { HelpButton } from "./HelpButton";
 import { AppLauncher, type NavData } from "./AppLauncher";
 import { SidebarToggle } from "./SidebarShell";
+import { BackButton } from "./BackButton";
 import { getPlanBadge } from "./plan-badge";
 import { GlobalSearch } from "@/components/search/GlobalSearch";
 import type { CurrentUser } from "@/lib/auth";
@@ -144,6 +145,8 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
         <div className="flex min-w-0 items-center gap-3">
           {/* 左レールの開閉。グラフを見ている間は畳んで横幅を稼げるようにする。 */}
           <SidebarToggle />
+          {/* 戻る。Windows にはスワイプで戻る習慣が無いので、画面の中に置く。 */}
+          <BackButton />
           <AppLauncher data={nav} loading={navLoading} error={navError} />
           <span className="h-5 w-px shrink-0 bg-ink-line" aria-hidden="true" />
           <h1 className="truncate text-base font-semibold text-ink">

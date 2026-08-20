@@ -68,7 +68,10 @@ export type ActivityType =
   | "inquiry.resolved"
   | "task.completed"
   | "import.completed"
-  | "collection.created";
+  | "collection.created"
+  // 消した記録は必ず残す。「無くなっている」に気づいたときに、誰がいつ
+  // 消したのかを辿れる場所がここしか無い。
+  | "collection.deleted";
 
 /** Append to the activity stream that powers the weekly performance charts. */
 export async function logActivity(
