@@ -13,6 +13,8 @@ const config = [
   {
     ignores: [
       ".next/**",
+      // 本番ビルドの出力（next.config.mjs の distDir を参照）。生成物なので見ない。
+      ".next-build/**",
       "node_modules/**",
       "prisma/generated/**",
       "next-env.d.ts",

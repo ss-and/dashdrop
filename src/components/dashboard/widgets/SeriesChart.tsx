@@ -5,6 +5,7 @@ import {
   LineChart,
   AreaChart,
   BarChart,
+  ComposedChart,
   CartesianGrid,
   XAxis,
   YAxis,
@@ -62,7 +63,9 @@ function ChartTooltip({
               aria-hidden="true"
             />
             <span className="flex-1">{p.name}</span>
-            <span className="tabular-nums font-medium text-ink">{p.value}</span>
+            <span className="tabular-nums font-medium text-ink">
+              {typeof p.value === "number" ? formatCompact(p.value) : p.value}
+            </span>
           </li>
         ))}
       </ul>
@@ -111,6 +114,106 @@ function commonAxes(showLegend: boolean) {
   ];
 }
 
+/**
+ * 複合グラフ（棒＋線）の中身。
+ *
+ * 「件数」と「金額」を同じ軸に載せると、件数(10前後)が金額(1,000万前後)の
+ * 足元で平らな線になり、片方がまったく読めない。右軸を用意して、系列ごとに
+ * どちらの軸に載せるかを決められるようにしてある。
+ *
+ * commonAxes と同じ理由で、ここも**キー付き配列**を返すこと。ResponsiveContainer
+ * は直下の子を clone して width/height を渡すので、独自コンポーネントで包むと
+ * 寸法が伝わらず、グラフが何も描かれないまま黙って消える。
+ */
+function comboChildren(series: SeriesData["series"]) {
+  const hasRight = series.some((s) => s.axis === "right");
+  const yAxis = (id: "left" | "right") => (
+    <YAxis
+      key={`y-${id}`}
+      yAxisId={id}
+      orientation={id}
+      allowDecimals={false}
+      tick={axisTick}
+      tickLine={false}
+      axisLine={false}
+      width={68}
+      tickFormatter={(v: number) => formatCompact(v)}
+      domain={[0, "auto"]}
+    />
+  );
+
+  return [
+    <CartesianGrid key="grid" stroke={GRID} strokeDasharray="3 3" vertical={false} />,
+    <XAxis
+      key="x"
+      dataKey="x"
+      tick={axisTick}
+      tickLine={false}
+      axisLine={{ stroke: GRID }}
+      minTickGap={16}
+    />,
+    yAxis("left"),
+    ...(hasRight ? [yAxis("right")] : []),
+    <Tooltip key="tip" content={<ChartTooltip />} cursor={{ stroke: GRID, strokeWidth: 1 }} />,
+    <Legend
+      key="legend"
+      iconType="plainline"
+      wrapperStyle={{ fontSize: 12, color: TEXT, paddingTop: 8 }}
+    />,
+    ...series.map((s, i) => {
+      const hex = hexFor(s.color, i);
+      // 右軸を出していないのに yAxisId="right" を指すと、その系列は
+      // 描かれずに黙って消える。存在する軸にだけ載せる。
+      const yAxisId = hasRight && s.axis === "right" ? "right" : "left";
+      if (s.as === "line") {
+        return (
+          <Line
+            key={s.label}
+            yAxisId={yAxisId}
+            type="monotone"
+            dataKey={s.label}
+            name={s.label}
+            stroke={hex}
+            strokeWidth={2}
+            dot={{ r: 2, fill: hex }}
+            activeDot={{ r: 4 }}
+            isAnimationActive={false}
+          />
+        );
+      }
+      if (s.as === "area") {
+        return (
+          <Area
+            key={s.label}
+            yAxisId={yAxisId}
+            type="monotone"
+            dataKey={s.label}
+            name={s.label}
+            stroke={hex}
+            fill={hex}
+            fillOpacity={0.15}
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+        );
+      }
+      return (
+        <Bar
+          key={s.label}
+          yAxisId={yAxisId}
+          dataKey={s.label}
+          name={s.label}
+          fill={hex}
+          radius={[2, 2, 0, 0]}
+          maxBarSize={40}
+          isAnimationActive={false}
+        />
+      );
+    }),
+  ];
+}
+
 export function SeriesChart({ data }: { data: SeriesData }) {
   const { type, points, series, stacked } = data;
 
@@ -129,7 +232,11 @@ export function SeriesChart({ data }: { data: SeriesData }) {
   return (
     <div className="h-60 w-full">
       <ResponsiveContainer width="100%" height="100%">
-        {type === "area" ? (
+        {type === "combo" ? (
+          <ComposedChart data={points} margin={margin}>
+            {comboChildren(series)}
+          </ComposedChart>
+        ) : type === "area" ? (
           <AreaChart data={points} margin={margin}>
             {axes}
             {series.map((s, i) => {

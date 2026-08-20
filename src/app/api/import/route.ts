@@ -10,8 +10,12 @@
  * `sourceHeader` pins a field to the column it was read from. The display name
  * is free text the user may rename; the column it reads must never move with it.
  *
+ *   - mode   : "replace"（同名ファイルを上書き）| "add"（別ファイルとして追加）
+ *   - workbookId : 上書き先のファイル（省略時は同名のものを探す）
+ *
  * Back-compat: if `sheets` is absent, falls back to a single-sheet import using
- * `collectionName` + `fields` against the first sheet.
+ * `collectionName` + `fields` against the first sheet. `mode` を省略すると
+ * "add"（従来どおり毎回新しいファイルとして追加）になる。
  *
  * Each selected sheet becomes its own Collection (spreadsheet) with typed
  * Fields and one Record per row. Tenant-safe and plan-limited; all-or-nothing
@@ -26,6 +30,7 @@ import {
   takenSlugsWithReserved,
 } from "@/lib/master-objects";
 import { logActivity } from "@/lib/workspace";
+import { createNotification } from "@/lib/notify";
 import {
   isFieldType,
   coerceValue,
@@ -144,6 +149,10 @@ function buildWarning(parseWarnings: string[], skipped: number): string | null {
 
 interface PreparedJob {
   collectionName: string;
+  /**
+   * 作成に使う slug。上書きするシートでは**仮の slug**（`…-tmp`）になる。
+   * 本来の slug は既存のシートがまだ握っているため、入れ替えが済むまで使えない。
+   */
   slug: string;
   fields: FinalField[];
   rows: Record<string, unknown>[];
@@ -151,6 +160,8 @@ interface PreparedJob {
   truncated: boolean;
   /** パーサが申告した打ち切り警告（行・列）。日本語のまま利用者に見せる。 */
   warnings: string[];
+  /** 置き換える既存シート。null なら新規追加。 */
+  replaces: { id: string; slug: string; position: number } | null;
 }
 
 export const POST = withAuth(async (req, { user }) => {
@@ -254,6 +265,40 @@ export const POST = withAuth(async (req, { user }) => {
   // 無いときはシートの名前にもなる。
   const fileBase = fileName.replace(/\.[^.]+$/, "").trim() || "インポート";
 
+  /*
+   * 上書きするか、別のファイルとして足すか。
+   *
+   * 毎月同じ台帳を入れ直すのが普通の使い方なので、既定は上書き…にはしない。
+   * 指定が無いときは従来どおり「追加」にしておく（API を直接叩いている
+   * 呼び出し元の意味を、こちらの都合で変えてしまわないため）。画面からは
+   * 必ず明示的に送る。
+   */
+  const modeRaw = form.get("mode");
+  const mode = modeRaw === "replace" ? "replace" : "add";
+  const workbookIdRaw = form.get("workbookId");
+
+  const target =
+    mode === "replace"
+      ? await db.workbook.findFirst({
+          where: {
+            workspaceId: user.workspace.id,
+            ...(typeof workbookIdRaw === "string" && workbookIdRaw
+              ? { id: workbookIdRaw }
+              : { name: fileBase }),
+          },
+          orderBy: { createdAt: "desc" },
+          include: {
+            collections: {
+              orderBy: { position: "asc" },
+              select: { id: true, name: true, slug: true, position: true },
+            },
+          },
+        })
+      : null;
+
+  // 同じ既存シートを2つの取り込みシートが取り合わないようにする。
+  const claimed = new Set<string>();
+
   const jobs: PreparedJob[] = [];
   for (const sel of selections) {
     const parsed = readSheet(buffer, sel.sheetName || undefined);
@@ -289,7 +334,30 @@ export const POST = withAuth(async (req, { user }) => {
       (sel.collectionName && sel.collectionName.trim()) ||
       (selections.length === 1 && isPlaceholderName ? fileBase : sheetName) ||
       fileBase;
-    const slug = uniqueName(slugify(collectionName), takenSlugs);
+    /*
+     * 上書き先を探す。突き合わせは「利用者が付けた名前」→「Excelのタブ名」の順。
+     * 画面でシート名を変えていても、タブ名が同じなら同じシートの更新として扱う。
+     */
+    const replaces =
+      target?.collections.find(
+        (c) => !claimed.has(c.id) && c.name === collectionName,
+      ) ??
+      target?.collections.find(
+        (c) => !claimed.has(c.id) && c.name === sheetName,
+      ) ??
+      null;
+    if (replaces) claimed.add(replaces.id);
+
+    /*
+     * 上書きするシートは、まず**仮の slug** で作る。
+     *
+     * 本来の slug は既存のシートがまだ握っているので、先に消してから作ると
+     * 「新しい方の作成に失敗したときに、古い方も消えている」という最悪の結果に
+     * なる。新しい中身を全部作り終えてから、最後に入れ替える。
+     */
+    const slug = replaces
+      ? uniqueName(`${replaces.slug}-tmp`, takenSlugs)
+      : uniqueName(slugify(collectionName), takenSlugs);
     takenSlugs.add(slug);
     jobs.push({
       collectionName,
@@ -299,6 +367,7 @@ export const POST = withAuth(async (req, { user }) => {
       sheetName,
       truncated: parsed.truncated,
       warnings,
+      replaces,
     });
   }
 
@@ -306,22 +375,44 @@ export const POST = withAuth(async (req, { user }) => {
     throw new ApiError("取り込めるシートがありませんでした", 422);
   }
 
-  // 上限は「実際に作るシートの数」で判定する。選択された数で数えると、
-  // 空タブを含むファイルで、実際には収まるのに 403 になってしまう。
-  // まだ何も書いていないので、ここで弾いても副作用は無い。
-  assertWithinCollectionLimit(plan, existing, jobs.length);
+  // 上限は「実際に増えるシートの数」で判定する。選択された数で数えると、
+  // 空タブを含むファイルで、実際には収まるのに 403 になってしまう。上書きは
+  // 差し引きゼロなので数えない（入れ替えの一瞬だけ1枚多くなるが、同じ要求の
+  // 中で必ず解消する）。まだ何も書いていないので、ここで弾いても副作用は無い。
+  assertWithinCollectionLimit(
+    plan,
+    existing,
+    jobs.filter((j) => !j.replaces).length,
+  );
 
   // --- Group all sheets under one Workbook (the file) ---
-  const workbook = await db.workbook.create({
-    data: {
-      workspaceId: user.workspace.id,
-      name: fileBase,
-      source: ext === ".csv" ? "csv" : "excel",
-    },
+  /*
+   * 上書きなら既存のファイルをそのまま使う。追加のときは、同じ名前が既に
+   * あれば「(2)」を付けて区別できるようにする——サイドバーに同じ名前が2つ
+   * 並ぶと、どちらが今入れたものか分からなくなる。
+   */
+  const sameName = await db.workbook.count({
+    where: { workspaceId: user.workspace.id, name: fileBase },
   });
+  const workbook =
+    target ??
+    (await db.workbook.create({
+      data: {
+        workspaceId: user.workspace.id,
+        name: sameName > 0 ? `${fileBase} (${sameName + 1})` : fileBase,
+        source: ext === ".csv" ? "csv" : "excel",
+      },
+    }));
 
   // --- Create each collection + its records; roll back all on any failure ---
-  const created: Array<{ id: string; name: string; imported: number; skipped: number }> = [];
+  const created: Array<{
+    id: string;
+    name: string;
+    imported: number;
+    skipped: number;
+    /** 既存シートを置き換えたか（false なら新規追加）。 */
+    replaced: boolean;
+  }> = [];
   const createdIds: string[] = [];
   let position = existing.length;
 
@@ -390,8 +481,10 @@ export const POST = withAuth(async (req, { user }) => {
         name: job.collectionName,
         imported: job.rows.length,
         skipped,
+        replaced: job.replaces !== null,
       });
     }
+
   } catch (err) {
     // All-or-nothing: drop the collections (fields/records cascade) first — the
     // workbook relation is SetNull, so deleting the workbook alone would leave
@@ -416,7 +509,9 @@ export const POST = withAuth(async (req, { user }) => {
         );
       }
     }
-    if (leftover === null) {
+    // 上書き先として既にあったファイルは、こちらが作ったものではない。
+    // 失敗したからといって消してはいけない（中の既存シートごと消える）。
+    if (leftover === null && target === null) {
       try {
         await db.workbook.delete({ where: { id: workbook.id } });
       } catch (cleanupErr) {
@@ -451,6 +546,52 @@ export const POST = withAuth(async (req, { user }) => {
     throw new ApiError("インポート中にエラーが発生しました", 500);
   }
 
+  /*
+   * 入れ替え。ここまで来た時点で、新しい中身は全部そろっている。
+   *
+   * **この処理は上のロールバックの外に置くこと。** 中に入れると、3枚目の
+   * 入れ替えで落ちたときに「巻き戻し」が1〜2枚目の新しいシートまで消してしまう
+   * ——古い方は既に消えているので、そのシートは丸ごと失われる。ここまで来たら
+   * 巻き戻さない方が安全で、最悪でも「古い中身のまま」か「仮名のシートが残る」
+   * で済む。
+   *
+   * 古いシートを消してから新しい slug を名乗るまでは1つのトランザクションに
+   * 入れる。分けると、消した直後に落ちたときに、その slug を誰も持たない
+   * （ダッシュボードから見てリンク切れの）状態が残る。
+   *
+   * 通知ルールは Collection への外部キーではなく id を持っているだけなので、
+   * 消す前にこちらで新しい id へ付け替える。放っておくと、存在しないシートを
+   * 見張り続ける壊れたルールになる。
+   */
+  const swapFailed: string[] = [];
+  for (let i = 0; i < jobs.length; i++) {
+    const job = jobs[i];
+    if (!job.replaces) continue;
+    const newId = created[i].id;
+    try {
+      await db.$transaction([
+        db.alertRule.updateMany({
+          where: {
+            workspaceId: user.workspace.id,
+            collectionId: job.replaces.id,
+          },
+          data: { collectionId: newId },
+        }),
+        db.collection.delete({ where: { id: job.replaces.id } }),
+        db.collection.update({
+          where: { id: newId },
+          data: { slug: job.replaces.slug, position: job.replaces.position },
+        }),
+      ]);
+    } catch (swapErr) {
+      console.error(
+        `Import replace: could not swap collection ${job.replaces.id} -> ${newId}`,
+        swapErr,
+      );
+      swapFailed.push(job.collectionName);
+    }
+  }
+
   // 【回帰防止】collection.created の記録は try の中にあり、ロールバックでも
   // 取り消されなかった。失敗した取り込みでも /logs に記録が残り、既に削除された
   // スプレッドシートへのリンクになっていた。全て成功してからまとめて記録する。
@@ -460,13 +601,52 @@ export const POST = withAuth(async (req, { user }) => {
       name: c.name,
       template: "custom",
       source: "import",
+      replaced: c.replaced,
     });
   }
 
+  const replacedCount = created.filter((c) => c.replaced).length;
+  // 上書きしたが、今回のファイルに入っていなかった既存シート。勝手に消すことは
+  // しない（利用者が別の用途で使っているかもしれない）が、黙っていると
+  // 「古い数字が混ざったまま」に気づけないので必ず知らせる。
+  const untouched = (target?.collections ?? [])
+    .filter((c) => !claimed.has(c.id))
+    .map((c) => c.name);
+
   const totalRows = created.reduce((a, c) => a + c.imported, 0);
   const totalSkipped = created.reduce((a, c) => a + c.skipped, 0);
+  /*
+   * 「知らせるだけ」と「止めて読ませる」を分ける。
+   *
+   * 行が落ちた・列の型に合わなかった、は数字が変わる話なので、グラフに進む前に
+   * 必ず読ませる。一方「今回入っていなかったシートは残した」は、何も失われて
+   * いない事実の共有でしかない。これで毎回グラフへの導線を止めると、上書きの
+   * たびに寄り道させることになる。
+   */
+  const notice =
+    untouched.length > 0
+      ? `今回のファイルに無かったシートは、そのまま残しています: ${untouched.join("、")}。古い数字が混ざって見えないかご確認ください。`
+      : null;
+
+  // 画面から離れても後で確認できるように、受信箱にも残す。
+  if (notice) {
+    await createNotification(user.workspace.id, {
+      type: "system",
+      title: `${workbook.name} を上書きしました`,
+      body: notice,
+      url: `/f/${workbook.id}`,
+    });
+  }
+
   const warning = buildWarning(
-    jobs.flatMap((j) => j.warnings),
+    [
+      ...jobs.flatMap((j) => j.warnings),
+      ...(swapFailed.length > 0
+        ? [
+            `${swapFailed.join("、")} は新しい内容で取り込めましたが、古いシートとの入れ替えに失敗しました。「${swapFailed[0]}」で始まる仮のシートが残っているので、内容を確認して不要な方を削除してください。`,
+          ]
+        : []),
+    ],
     totalSkipped,
   );
   const truncated = jobs.some((j) => j.truncated);
@@ -490,10 +670,15 @@ export const POST = withAuth(async (req, { user }) => {
     collectionId: created[0].id, // first, for redirect
     workbookId: workbook.id,
     sheetsImported: created.length,
+    /** 既存シートを置き換えた枚数。0 なら全部が新規。 */
+    sheetsReplaced: replacedCount,
+    mode,
     imported: totalRows,
     skipped: totalSkipped,
     truncated,
     // UIはこの文言をそのまま表示する。null なら注意すべきことは無い。
     warning,
+    /** 進行は止めずに知らせるだけの文言（上書きで残したシートなど）。 */
+    notice,
   });
 });

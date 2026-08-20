@@ -15,9 +15,15 @@ export type BuilderWidgetType =
   | "bar"
   | "line"
   | "area"
+  | "combo"
+  | "histogram"
   | "donut"
   | "hbar"
+  | "treemap"
+  | "funnel"
+  | "scatter"
   | "pivot"
+  | "heatmap"
   | "table";
 
 /** A field as the builder sees it (subset of the DB Field). */
@@ -43,9 +49,15 @@ export const WIDGET_TYPES: BuilderWidgetType[] = [
   "bar",
   "line",
   "area",
+  "combo",
+  "histogram",
   "donut",
   "hbar",
+  "treemap",
+  "funnel",
+  "scatter",
   "pivot",
+  "heatmap",
   "table",
 ];
 
@@ -91,6 +103,48 @@ export const WIDGET_META: Record<BuilderWidgetType, WidgetMeta> = {
     hint: "項目別のランキング",
     defaultSpan: 2,
     group: "グラフ",
+  },
+  combo: {
+    label: "複合グラフ（棒＋線）",
+    icon: "report",
+    hint: "件数と金額など、単位の違う2つを1枚で",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
+  histogram: {
+    label: "ヒストグラム",
+    icon: "report",
+    hint: "数値の分布（何がいくつあるか）",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
+  treemap: {
+    label: "ツリーマップ",
+    icon: "report",
+    hint: "面積で構成比を見る（項目が多いとき）",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
+  funnel: {
+    label: "ファネル",
+    icon: "report",
+    hint: "段階ごとの絞り込み（商談フェーズなど）",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
+  scatter: {
+    label: "散布図",
+    icon: "report",
+    hint: "2つの数値の関係と外れ値",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
+  heatmap: {
+    label: "ヒートマップ",
+    icon: "table",
+    hint: "行×列を濃淡で（クロス集計の色版）",
+    defaultSpan: 4,
+    group: "明細",
   },
   pivot: {
     label: "クロス集計",
@@ -150,10 +204,22 @@ export function canAddWidget(
 ): boolean {
   switch (type) {
     case "pivot":
+    case "heatmap":
       // Needs something to put down the side AND across the top.
       return groupableFields(fields).length >= 2;
+    case "scatter":
+      // 縦横それぞれに数値が要る。1本しか無ければ図にならない。
+      return numericFields(fields).length >= 2;
+    case "histogram":
+      // 分布を数える対象の数値が1本。
+      return numericFields(fields).length >= 1;
+    case "combo":
+      // 棒と線で別の指標を出すためのもの。1本だけなら普通の棒グラフで足りる。
+      return numericFields(fields).length >= 1;
     case "donut":
     case "hbar":
+    case "treemap":
+    case "funnel":
     case "table":
       return fields.length > 0;
     default:
@@ -215,8 +281,56 @@ export function newWidget(
             : { label: "件数", measure: { kind: "count" } },
         ],
       };
+    case "combo":
+      // 既定は「件数を棒、金額を線」。単位が違うので軸も分ける——同じ軸に
+      // 載せると、件数(10前後)が金額(1,000万前後)の足元で平らになる。
+      return {
+        ...base,
+        type: "combo",
+        title: nums[0] ? `件数と${nums[0].name}` : "推移",
+        dateField: dates[0]?.key,
+        bucket: "month",
+        rangeCount: 12,
+        measures: nums[0]
+          ? [
+              { label: "件数", measure: { kind: "count" }, as: "bar", axis: "left" },
+              {
+                label: nums[0].name,
+                measure: { kind: "sum", field: nums[0].key },
+                as: "line",
+                axis: "right",
+                color: "info",
+              },
+            ]
+          : [{ label: "件数", measure: { kind: "count" }, as: "bar" }],
+      };
+    case "histogram":
+      return {
+        ...base,
+        type: "histogram",
+        title: nums[0] ? `${nums[0].name}の分布` : "分布",
+        field: nums[0]?.key ?? fields[0]?.key ?? "",
+        bins: 10,
+        unit: nums[0]?.type === "currency" ? "currency" : "number",
+      };
+    case "scatter": {
+      const [xF, yF] = nums;
+      return {
+        ...base,
+        type: "scatter",
+        title: xF && yF ? `${xF.name} × ${yF.name}` : "散布図",
+        xField: xF?.key ?? fields[0]?.key ?? "",
+        yField: yF?.key ?? xF?.key ?? fields[0]?.key ?? "",
+        colorBy: groups[0]?.key,
+        labelField: groups[0]?.key,
+        limit: 500,
+        xUnit: xF?.type === "currency" ? "currency" : "number",
+        yUnit: yF?.type === "currency" ? "currency" : "number",
+      };
+    }
     case "donut":
     case "hbar":
+    case "treemap":
       return {
         ...base,
         type,
@@ -227,11 +341,23 @@ export function newWidget(
           : { kind: "count" },
         limit: 6,
       };
+    case "funnel":
+      // 段階の順に並べる。値の大きい順では漏斗の形が意味を失う。
+      return {
+        ...base,
+        type: "funnel",
+        title: groups[0] ? `${groups[0].name}の推移（段階別）` : "段階別",
+        groupBy: groups[0]?.key ?? fields[0]?.key ?? "",
+        measure: { kind: "count" },
+        limit: 8,
+        order: "label",
+      };
+    case "heatmap":
     case "pivot": {
       const [rowF, colF] = groups;
       return {
         ...base,
-        type: "pivot",
+        type,
         title:
           rowF && colF ? `${rowF.name} × ${colF.name}` : "クロス集計",
         rowField: rowF?.key ?? fields[0]?.key ?? "",

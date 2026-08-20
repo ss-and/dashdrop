@@ -15,14 +15,18 @@ import {
   CartesianGrid,
   Tooltip,
   LabelList,
+  Treemap,
+  FunnelChart,
+  Funnel,
 } from "recharts";
 import { formatCompact } from "@/lib/utils";
 import type { BreakdownData } from "@/lib/widgets";
 
 /**
- * Categorical breakdown widget: donut (PieChart with a centered total) or
- * horizontal bars. Earthy palette mapped from slice color tokens, with a
- * graceful "データなし" state when every value is zero.
+ * Categorical breakdown widget: donut / horizontal bars / treemap / funnel.
+ * どれも同じ集計結果（BreakdownData）を、違う読み方で見せる。
+ * Earthy palette mapped from slice color tokens, with a graceful "データなし"
+ * state when every value is zero.
  */
 
 const COLOR_HEX: Record<string, string> = {
@@ -40,6 +44,68 @@ const FALLBACK = ["khaki", "info", "success", "warning", "danger", "neutral"];
 function hexFor(color: string | undefined, i: number): string {
   return COLOR_HEX[color ?? ""] ?? COLOR_HEX[FALLBACK[i % FALLBACK.length]];
 }
+
+/**
+ * ツリーマップの1区画。
+ *
+ * Recharts は既定だと区画に何も書かないので、色の四角が並ぶだけになる。
+ * 名前と数字を入れるが、入り切らない小さな区画に押し込むと文字が枠から
+ * はみ出して隣と重なるため、幅と高さが足りるときだけ描く。
+ */
+function TreemapCell(props: unknown) {
+  const p = props as {
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    depth?: number;
+    name?: string;
+    value?: number;
+    fill?: string;
+  };
+  const { x = 0, y = 0, width = 0, height = 0, depth, name = "", value, fill } = p;
+  // 深さ0は全体を覆う根。ここを塗ると全部同じ色で埋まる。
+  if (depth === 0 || width <= 0 || height <= 0) return null;
+
+  const showLabel = width > 72 && height > 34;
+  // 日本語は全角なので、およそ 12px/字 で収まる字数に切る。
+  const maxChars = Math.max(1, Math.floor((width - 16) / 12));
+  const label = name.length > maxChars ? `${name.slice(0, maxChars - 1)}…` : name;
+
+  return (
+    <g>
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        fill={fill ?? COLOR_HEX.neutral}
+        stroke="#fbfaf6"
+        strokeWidth={2}
+      />
+      {showLabel && (
+        <>
+          <text x={x + 8} y={y + 20} fill="#ffffff" fontSize={12}>
+            {label}
+          </text>
+          {typeof value === "number" && (
+            <text
+              x={x + 8}
+              y={y + 36}
+              fill="rgba(255,255,255,0.85)"
+              fontSize={12}
+            >
+              {formatCompact(value)}
+            </text>
+          )}
+        </>
+      )}
+    </g>
+  );
+}
+
+/** ファネルの段名＋数字を置く右余白。ここを削ると文字がカードから出る。 */
+const FUNNEL_LABEL_WIDTH = 132;
 
 const tooltipStyle = {
   borderRadius: 6,
@@ -76,6 +142,92 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
     );
   }
 
+  /*
+   * ツリーマップ。面積で構成比を見る。
+   *
+   * 項目が10個を超えるとドーナツは細い扇が並ぶだけで読めなくなる。面積なら
+   * 数が増えても「どれが大きいか」は保たれるので、多項目の構成比はこちら。
+   */
+  if (type === "treemap") {
+    const rows = slices.map((s, i) => ({
+      name: s.label,
+      size: Math.abs(s.value),
+      value: s.value,
+      key: s.key,
+      synthetic: s.synthetic,
+      fill: hexFor(s.color, i),
+    }));
+    return (
+      <div className="h-64 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <Treemap
+            data={rows}
+            dataKey="size"
+            stroke="#fbfaf6"
+            isAnimationActive={false}
+            content={<TreemapCell />}
+            onClick={(node: unknown) => {
+              const n = node as { key?: string; synthetic?: boolean } | undefined;
+              if (n) drillTo(n);
+            }}
+          />
+        </ResponsiveContainer>
+      </div>
+    );
+  }
+
+  /*
+   * ファネル。段階ごとの厚みを上から順に見る。
+   *
+   * 並びは値の大小ではなく段階の順（集計側で order: "label"）。「A: 契約完了」
+   * より「D: 初回ヒアリング」の方が件数が多いのは普通のことで、それを大きい順に
+   * 並べ替えてしまうと、どこで落ちているのかが読めなくなる。
+   */
+  if (type === "funnel") {
+    const rows = slices.map((s, i) => ({
+      ...s,
+      fill: hexFor(s.color, i),
+      // ラベルと数字を1本にまとめる。長い名前は右の余白に収まらないので省略する。
+      caption: `${s.label.length > 9 ? `${s.label.slice(0, 8)}…` : s.label}　${formatCompact(s.value)}`,
+    }));
+    return (
+      <div className="w-full" style={{ height: Math.max(220, rows.length * 46) }}>
+        <ResponsiveContainer width="100%" height="100%">
+          {/*
+            右の余白は必ず確保する。8px しか空けなかったときは、段の名前が
+            カードの外に出て「見積提出」「失注 1…」のように切れて読めなかった。
+            漏斗そのものより、どの段が何件かの方が大事。
+          */}
+          <FunnelChart margin={{ top: 8, right: FUNNEL_LABEL_WIDTH, bottom: 8, left: 8 }}>
+            <Tooltip contentStyle={tooltipStyle} />
+            <Funnel
+              dataKey="value"
+              nameKey="label"
+              data={rows}
+              isAnimationActive={false}
+              // Funnel の onClick は (データ, 添字, イベント) で呼ばれる。
+              // 引数を2つ書くと MouseEventHandler と型が合わないので、
+              // データだけを受ける。
+              onClick={(entry: unknown) =>
+                drillTo(entry as { key?: string; synthetic?: boolean })
+              }
+              cursor={canDrill ? "pointer" : undefined}
+            >
+              {rows.map((r) => (
+                <Cell key={r.label} fill={r.fill} />
+              ))}
+              <LabelList
+                dataKey="caption"
+                position="right"
+                style={{ fill: TEXT, fontSize: 12 }}
+              />
+            </Funnel>
+          </FunnelChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  }
+
   if (type === "hbar") {
     const rows = slices.map((s, i) => ({
       ...s,
@@ -89,7 +241,8 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
           <BarChart
             data={rows}
             layout="vertical"
-            margin={{ top: 4, right: 24, bottom: 4, left: 8 }}
+            /* 右は棒の先の数字ぶん。24px だと「27.4万」が「27.4」で切れる。 */
+            margin={{ top: 4, right: 56, bottom: 4, left: 8 }}
           >
             <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
             <XAxis

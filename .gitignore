@@ -5,6 +5,8 @@
 
 # next.js
 /.next/
+# 本番ビルドの出力（開発サーバーの .next と混ざらないように分けてある）
+/.next-build/
 /out/
 next-env.d.ts
 

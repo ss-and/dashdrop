@@ -28,9 +28,18 @@ const actualExcel = await vi.importActual<typeof import("@/lib/excel")>(
 
 const mocks = vi.hoisted(() => ({
   db: {
-    collection: { findMany: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
-    workbook: { create: vi.fn(), delete: vi.fn() },
+    collection: {
+      findMany: vi.fn(),
+      create: vi.fn(),
+      deleteMany: vi.fn(),
+      delete: vi.fn(),
+      update: vi.fn(),
+    },
+    workbook: { create: vi.fn(), delete: vi.fn(), count: vi.fn(), findFirst: vi.fn() },
+    // 上書きの入れ替えで使う。
     record: { create: vi.fn() },
+    alertRule: { updateMany: vi.fn() },
+    notification: { create: vi.fn() },
     $transaction: vi.fn(),
   },
   logActivity: vi.fn(),
@@ -176,9 +185,15 @@ beforeEach(() => {
     mocks.db.collection.findMany,
     mocks.db.collection.create,
     mocks.db.collection.deleteMany,
+    mocks.db.collection.delete,
+    mocks.db.collection.update,
     mocks.db.workbook.create,
     mocks.db.workbook.delete,
+    mocks.db.workbook.count,
+    mocks.db.workbook.findFirst,
     mocks.db.record.create,
+    mocks.db.alertRule.updateMany,
+    mocks.db.notification.create,
     mocks.db.$transaction,
     mocks.logActivity,
     mocks.assertCanCreateCollection,
@@ -194,10 +209,17 @@ beforeEach(() => {
   mocks.logActivity.mockResolvedValue(undefined);
   mocks.db.collection.findMany.mockResolvedValue([]);
   mocks.db.workbook.create.mockResolvedValue({ id: "wb-1" });
+  // 既定は「同名のファイルは無い」＝従来どおりの新規追加。
+  mocks.db.workbook.count.mockResolvedValue(0);
+  mocks.db.workbook.findFirst.mockResolvedValue(null);
+  mocks.db.alertRule.updateMany.mockResolvedValue({ count: 0 });
+  mocks.db.notification.create.mockResolvedValue({});
   mocks.db.collection.create.mockResolvedValue({ id: "col-1" });
   mocks.db.record.create.mockImplementation((args: unknown) => args);
   mocks.db.$transaction.mockResolvedValue([]);
   mocks.db.collection.deleteMany.mockResolvedValue({ count: 1 });
+  mocks.db.collection.delete.mockResolvedValue({});
+  mocks.db.collection.update.mockResolvedValue({});
   mocks.db.workbook.delete.mockResolvedValue({});
 });
 
@@ -782,5 +804,173 @@ describe("シート指定なしの取り込み — POST /api/import", () => {
 
     expect(res.ok).toBe(true);
     expect(createdCollectionNames()).toEqual(["受注データ"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 同じファイルを入れ直したとき（上書き）
+// ---------------------------------------------------------------------------
+
+/**
+ * 利用者の言葉:「ダッシュボード重複しているやつとかわかりづらくなるね、
+ * 同じExcel名なら上書きとかが良さそうだよ」。
+ *
+ * 毎月同じ台帳を入れ直すのが普通の使い方なのに、これまでは入れるたびに
+ * 同じ名前のファイルとシートが増えていた。ここで固定したいのは3つ。
+ *
+ *  1. 上書きしても slug は変わらない（既存のダッシュボードとURLが生き残る）。
+ *  2. **新しい中身を全部作り終えてから**入れ替える（途中で失敗しても
+ *     古い方が消えない）。
+ *  3. 失敗したときに、上書き先の既存ファイルを道連れにしない。
+ */
+describe("同名ファイルの上書き — POST /api/import", () => {
+  const TABS = {
+    受注一覧: [
+      ["日付", "取引先", "金額"],
+      ["2026-01-01", "山田商事", 12000],
+    ],
+  };
+
+  /** 既に「受注データ」というファイルがあり、中に「受注一覧」がある状態。 */
+  function withExistingWorkbook() {
+    mocks.db.workbook.findFirst.mockResolvedValue({
+      id: "wb-old",
+      name: "受注データ",
+      collections: [
+        { id: "col-old", name: "受注一覧", slug: "juchu-ichiran", position: 3 },
+      ],
+    });
+  }
+
+  it("既存シートの slug と位置を引き継ぐ（ダッシュボードが生き残る）", async () => {
+    withExistingWorkbook();
+    mocks.db.collection.create.mockResolvedValue({ id: "col-new" });
+    const handler = await importRoute();
+
+    const res = await handler(
+      workbookReq(TABS, { mode: "replace", workbookId: "wb-old" }),
+      ctx(),
+    );
+
+    expect(res.ok).toBe(true);
+    // 新しいファイルは作らない。既存のファイルの中身が入れ替わる。
+    expect(mocks.db.workbook.create).not.toHaveBeenCalled();
+
+    // 作るときは仮の slug。本来の slug はまだ古いシートが握っている。
+    const created = mocks.db.collection.create.mock.calls[0][0] as {
+      data: { slug: string; workbookId: string };
+    };
+    expect(created.data.slug).toBe("juchu-ichiran-tmp");
+    expect(created.data.workbookId).toBe("wb-old");
+
+    // 入れ替えは1つのトランザクションで（通知ルールの付け替え → 古い方を削除
+    // → 新しい方が本来の slug を名乗る）。
+    const ops = mocks.db.$transaction.mock.calls.at(-1)![0] as unknown[];
+    expect(ops).toHaveLength(3);
+    expect(mocks.db.alertRule.updateMany).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", collectionId: "col-old" },
+      data: { collectionId: "col-new" },
+    });
+    expect(mocks.db.collection.delete).toHaveBeenCalledWith({
+      where: { id: "col-old" },
+    });
+    expect(mocks.db.collection.update).toHaveBeenCalledWith({
+      where: { id: "col-new" },
+      data: { slug: "juchu-ichiran", position: 3 },
+    });
+  });
+
+  it("古いシートを消すのは、新しい中身を作り終えてから", async () => {
+    // 先に消してしまうと、作成に失敗したときに「新しい方も古い方も無い」に
+    // なる。順序そのものが安全装置なので、順序を固定する。
+    withExistingWorkbook();
+    mocks.db.collection.create.mockResolvedValue({ id: "col-new" });
+    const order: string[] = [];
+    mocks.db.collection.create.mockImplementation(async () => {
+      order.push("create");
+      return { id: "col-new" };
+    });
+    mocks.db.collection.delete.mockImplementation(async () => {
+      order.push("delete");
+      return {};
+    });
+    const handler = await importRoute();
+
+    await handler(
+      workbookReq(TABS, { mode: "replace", workbookId: "wb-old" }),
+      ctx(),
+    );
+
+    expect(order).toEqual(["create", "delete"]);
+  });
+
+  it("取り込みに失敗しても、上書き先の既存ファイルは消さない", async () => {
+    withExistingWorkbook();
+    mocks.db.collection.create.mockRejectedValue(new Error("boom"));
+    const handler = await importRoute();
+
+    await expect(
+      handler(workbookReq(TABS, { mode: "replace", workbookId: "wb-old" }), ctx()),
+    ).rejects.toThrow();
+
+    // ここで消すと、中の既存シートごと巻き添えになる。
+    expect(mocks.db.workbook.delete).not.toHaveBeenCalled();
+    expect(mocks.db.collection.delete).not.toHaveBeenCalled();
+  });
+
+  it("「追加」を選んだときは、同じ名前でも見分けが付くようにする", async () => {
+    mocks.db.workbook.count.mockResolvedValue(1);
+    const handler = await importRoute();
+
+    await handler(workbookReq(TABS, { mode: "add" }), ctx());
+
+    const call = mocks.db.workbook.create.mock.calls[0][0] as {
+      data: { name: string };
+    };
+    expect(call.data.name).toBe("受注データ (2)");
+  });
+
+  it("今回のファイルに無かった既存シートは、消さずに知らせる", async () => {
+    mocks.db.workbook.findFirst.mockResolvedValue({
+      id: "wb-old",
+      name: "受注データ",
+      collections: [
+        { id: "col-old", name: "受注一覧", slug: "juchu-ichiran", position: 0 },
+        { id: "col-keep", name: "去年の実績", slug: "kyonen", position: 1 },
+      ],
+    });
+    mocks.db.collection.create.mockResolvedValue({ id: "col-new" });
+    const handler = await importRoute();
+
+    const res = await handler(
+      workbookReq(TABS, { mode: "replace", workbookId: "wb-old" }),
+      ctx(),
+    );
+
+    expect(res.ok).toBe(true);
+    // 勝手に消さない。ただし黙ってもいけない——古い数字が混ざったままになる。
+    expect(mocks.db.collection.delete).not.toHaveBeenCalledWith({
+      where: { id: "col-keep" },
+    });
+    // 何も失われていないので、グラフへの導線は止めない（warning ではなく
+    // notice）。ただし黙ってもいけない——古い数字が混ざったままになる。
+    expect(res.data.warning).toBeNull();
+    expect(res.data.notice).toContain("去年の実績");
+    // 画面から離れても後で読めるように、受信箱にも残す。
+    expect(mocks.db.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ url: "/f/wb-old" }),
+      }),
+    );
+  });
+
+  it("mode を送らない呼び出しは、これまでどおり新しいファイルとして増える", async () => {
+    withExistingWorkbook();
+    const handler = await importRoute();
+
+    await handler(workbookReq(TABS), ctx());
+
+    expect(mocks.db.workbook.create).toHaveBeenCalled();
+    expect(mocks.db.collection.delete).not.toHaveBeenCalled();
   });
 });

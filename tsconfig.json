@@ -18,7 +18,15 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  // .next は開発サーバー、.next-build は本番ビルドの出力（next.config.mjs の
+  // distDir を参照）。どちらが生成した型定義でも拾えるように両方入れておく。
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next-build/types/**/*.ts"
+  ],
   "exclude": [
     "node_modules",
     // 使い捨ての検証用テスト（tests/_… ）。手元で動かすためのもので、

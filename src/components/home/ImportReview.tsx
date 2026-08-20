@@ -53,6 +53,14 @@ export interface AnalyzedSheet {
   merges: { count: number };
 }
 
+/** 同じ名前で既に入っているファイル。無ければ null。 */
+export interface ExistingWorkbook {
+  workbookId: string;
+  name: string;
+  importedAt: string;
+  sheets: Array<{ name: string; slug: string; rowCount: number }>;
+}
+
 export interface AnalyzeResult {
   fileName: string;
   fileBase: string;
@@ -63,7 +71,11 @@ export interface AnalyzeResult {
     questions: AdviceQuestion[];
   };
   via: "anthropic" | "heuristic";
+  existing: ExistingWorkbook | null;
 }
+
+/** 同名ファイルの扱い。 */
+export type ImportMode = "replace" | "add";
 
 /** 画面が /api/import に送る形。 */
 export interface SheetSelection {
@@ -91,9 +103,19 @@ export function ImportReview({
 }: {
   result: AnalyzeResult;
   busy: boolean;
-  onConfirm: (selection: SheetSelection[]) => void;
+  onConfirm: (selection: SheetSelection[], mode: ImportMode) => void;
   onCancel: () => void;
 }) {
+  /*
+   * 同名ファイルがあるときの既定は「上書き」。
+   *
+   * 毎月同じ台帳を入れ直すのが普通の使い方で、そのたびに増えていくと
+   * サイドバーに同じ名前が並んで、どれが最新か分からなくなる。ただし
+   * 消える側の中身は戻せないので、何が置き換わるのかを必ず先に見せる。
+   */
+  const [mode, setMode] = useState<ImportMode>(
+    result.existing ? "replace" : "add",
+  );
   const importable = useMemo(
     () => result.sheets.filter((s) => !s.empty),
     [result.sheets],
@@ -163,6 +185,7 @@ export function ImportReview({
           })),
         };
       }),
+      result.existing ? mode : "add",
     );
   }
 
@@ -206,6 +229,79 @@ export function ImportReview({
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* 同名ファイルがある場合の選択 */}
+      {result.existing && (
+        <div className="space-y-3 rounded-md border border-ink-line bg-paper-raised p-4">
+          <h3 className="text-sm font-semibold text-ink">
+            同じ名前のファイルが既にあります
+          </h3>
+          <p className="text-sm text-ink-soft">
+            「{result.existing.name}」（
+            {result.existing.sheets.length.toLocaleString()} シート・
+            {result.existing.sheets
+              .reduce((n, s) => n + s.rowCount, 0)
+              .toLocaleString()}
+            行）
+          </p>
+
+          <div className="space-y-2">
+            {(
+              [
+                {
+                  value: "replace" as const,
+                  label: "上書きして更新する",
+                  hint: "同じ名前のシートは中身を入れ替えます。ダッシュボードとURLはそのまま使えます。",
+                },
+                {
+                  value: "add" as const,
+                  label: "別のファイルとして追加する",
+                  hint: "今あるものは残したまま、新しく増やします。名前には (2) が付きます。",
+                },
+              ] as const
+            ).map((opt) => (
+              <label
+                key={opt.value}
+                className="flex cursor-pointer items-start gap-2.5 rounded px-2 py-1.5 transition-colors duration-fast hover:bg-paper-sunken"
+              >
+                <input
+                  type="radio"
+                  name="import-mode"
+                  value={opt.value}
+                  checked={mode === opt.value}
+                  onChange={() => setMode(opt.value)}
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-khaki-500"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-ink">
+                    {opt.label}
+                  </span>
+                  <span className="block text-xs text-ink-muted">{opt.hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {mode === "replace" && (
+            /* 何が消えるのかを、押す前に名前と行数で見せる。 */
+            <ul className="space-y-0.5 border-t border-ink-line pt-2 text-xs text-ink-muted">
+              {result.existing.sheets.map((s) => {
+                const willReplace = chosen.some(
+                  (c) =>
+                    state[c.sheetName]?.collectionName.trim() === s.name ||
+                    c.sheetName === s.name,
+                );
+                return (
+                  <li key={s.slug}>
+                    {s.name}（{s.rowCount.toLocaleString()}行）—{" "}
+                    {willReplace ? "入れ替え" : "そのまま残ります"}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
       )}
 

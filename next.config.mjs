@@ -32,6 +32,23 @@ const nextConfig = {
    * ここを明示すれば、ホーム側のファイルに触らずに警告だけ消える。
    */
   outputFileTracingRoot: import.meta.dirname,
+
+  /*
+   * 本番ビルドの出力先を、開発サーバーと分ける。
+   *
+   * `next dev` と `next build` は既定でどちらも `.next` に書く。開発サーバーを
+   * 動かしたまま `npm run build` を走らせると、ビルドが `.next/static` を
+   * 作り直し、動いていた開発サーバーが配っていたチャンクが消える。ブラウザは
+   * `_next/static/chunks/*` に 404 を返され、スタイルもJSも当たらない
+   * 素のHTMLになる。**エラーは出ない**ので、原因がまったく分からないまま
+   * 「アプリが壊れた」ように見える——これで実際に4回止まった。
+   *
+   * `npm run build` / `npm start` は NEXT_DIST_DIR=.next-build を渡すので、
+   * 開発サーバーの `.next` には一切触れない。環境変数が無いときは従来どおり
+   * `.next` なので、`next build` を直接叩くホスティング（Vercel 等）の
+   * 振る舞いは変わらない。
+   */
+  distDir: process.env.NEXT_DIST_DIR || ".next",
 };
 
 export default nextConfig;

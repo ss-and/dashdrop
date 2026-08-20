@@ -7,6 +7,7 @@ import { NavIcon } from "@/components/app/icons";
 import {
   ImportReview,
   type AnalyzeResult,
+  type ImportMode,
   type SheetSelection,
 } from "./ImportReview";
 
@@ -51,6 +52,8 @@ export function ExcelDropZone() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  /** 止めるほどではないが、伝えておきたいこと。 */
+  const [notice, setNotice] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   /** ドラッグ中の子要素をまたぐたびに leave が飛ぶので、深さで数える。 */
   const dragDepth = useRef(0);
@@ -99,12 +102,23 @@ export function ExcelDropZone() {
 
   /** 段階2 — 確認した内容で取り込み、グラフまで作ってその画面へ送る。 */
   const commit = useCallback(
-    async (file: File, result: AnalyzeResult, selection: SheetSelection[]) => {
+    async (
+      file: File,
+      result: AnalyzeResult,
+      selection: SheetSelection[],
+      mode: ImportMode,
+    ) => {
       setPhase({ kind: "importing", file, result });
       try {
         const form = new FormData();
         form.append("file", file);
         form.append("sheets", JSON.stringify(selection));
+        form.append("mode", mode);
+        // 上書き先は名前ではなく id で指定する。下見のあとに同名のファイルが
+        // もう1つ増えていても、利用者が見て選んだものへ確実に当たるように。
+        if (mode === "replace" && result.existing) {
+          form.append("workbookId", result.existing.workbookId);
+        }
         const res = await fetch("/api/import", { method: "POST", body: form });
         const body = (await res.json().catch(() => null)) as {
           ok?: boolean;
@@ -113,6 +127,7 @@ export function ExcelDropZone() {
             collectionId?: string;
             workbookId?: string;
             warning?: string | null;
+            notice?: string | null;
           };
         } | null;
 
@@ -124,7 +139,7 @@ export function ExcelDropZone() {
           return;
         }
 
-        const { collectionId, workbookId, warning } = body.data;
+        const { collectionId, workbookId, warning, notice } = body.data;
 
         // 行が落ちた場合は、グラフに進む前に必ず伝える。黙って先に進むと
         // 「取り込めた」と誤解したまま、欠けた数字でグラフを見ることになる。
@@ -133,6 +148,10 @@ export function ExcelDropZone() {
           router.push(`/c/${collectionId}`);
           return;
         }
+
+        // 進行は止めない知らせ（上書きで残したシートなど）。受信箱にも
+        // 同じものが残るので、画面が切り替わっても後から確認できる。
+        if (notice) setNotice(notice);
 
         // 表だけ出して終わりにしない。グラフまで出して初めて
         // 「入れたら分析が出てきた」という体験になる。
@@ -183,7 +202,9 @@ export function ExcelDropZone() {
       <ImportReview
         result={phase.result}
         busy={phase.kind === "importing"}
-        onConfirm={(selection) => void commit(phase.file, phase.result, selection)}
+        onConfirm={(selection, mode) =>
+          void commit(phase.file, phase.result, selection, mode)
+        }
         onCancel={() => setPhase({ kind: "idle" })}
       />
     );
@@ -266,6 +287,15 @@ export function ExcelDropZone() {
           className="mt-3 rounded border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger"
         >
           {phase.message}
+        </p>
+      )}
+
+      {notice && (
+        <p
+          role="status"
+          className="mt-3 rounded border border-ink-line bg-paper-sunken px-3 py-2 text-sm text-ink-soft"
+        >
+          {notice}
         </p>
       )}
 

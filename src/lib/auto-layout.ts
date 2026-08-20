@@ -22,6 +22,7 @@ import {
   rankableFields,
   dateAxisFields,
   detailColumns,
+  STATUS_NAME,
   type ProfiledField,
 } from "./data-profile";
 import type { WidgetSpec, Unit } from "./widgets";
@@ -46,6 +47,19 @@ const MONEY_NAME = /金額|売上|価格|単価|合計|額$|収益|コスト|費
  * 埋めるための箱は置かず、単体で読む意味のある候補だけを足していく。
  */
 const MIN_WIDGETS_PER_SHEET = 8;
+
+/**
+ * 主役シートの上限。図の種類が増えたぶん、条件を満たすものを全部並べると
+ * 20枚近くになる。多ければ良いというものでもないので、価値の高い順に並べた
+ * 中核から上限までを採る（明細表は別枠で必ず最後に付く）。
+ */
+const MAX_WIDGETS_PER_SHEET = 15;
+
+/**
+ * ツリーマップに切り替える項目数の目安。
+ * これ未満なら横棒（ランキング）の方が読みやすい。
+ */
+const TREEMAP_MIN_DISTINCT = 10;
 
 const unitOf = (f?: ProfiledField): Unit =>
   f && (f.type === "currency" || MONEY_NAME.test(f.name)) ? "currency" : "number";
@@ -155,6 +169,63 @@ function layoutForSheet(sheet: ProfiledSheet, isPrimary: boolean): WidgetSpec[] 
     });
   }
 
+  /*
+   * 区分別の積み上げ。
+   *
+   * 合計の推移だけでは「増えたのは分かるが、どこが増えたのか」が分からない。
+   * 同じ時間軸に区分を重ねると、内訳まで一度に読める（Tableau で色に
+   * ディメンションを載せたときの図）。
+   */
+  if (dates[0] && cats[0]) {
+    out.push({
+      id: genWidgetId(),
+      type: "bar",
+      title: money
+        ? `${dates[0].name}別の${money.name}（${cats[0].name}別）`
+        : `${dates[0].name}別の件数（${cats[0].name}別）`,
+      collection: S,
+      span: 2,
+      dateField: dates[0].key,
+      bucket: "month",
+      rangeCount: 24,
+      anchor: "data",
+      stacked: true,
+      splitBy: cats[0].key,
+      splitLimit: 5,
+      measures: [
+        money
+          ? { label: money.name, measure: { kind: "sum", field: money.key } }
+          : { label: "件数", measure: { kind: "count" } },
+      ],
+    });
+  } else if (dates[0] && money) {
+    /*
+     * 区分が無いファイルでは、代わりに件数と金額を1枚に重ねる。単位が違うので
+     * 軸を左右に分ける——同じ軸に載せると件数が金額の足元で平らになる。
+     */
+    out.push({
+      id: genWidgetId(),
+      type: "combo",
+      title: `${dates[0].name}別の件数と${money.name}`,
+      collection: S,
+      span: 2,
+      dateField: dates[0].key,
+      bucket: "month",
+      rangeCount: 24,
+      anchor: "data",
+      measures: [
+        { label: "件数", measure: { kind: "count" }, as: "bar", axis: "left" },
+        {
+          label: money.name,
+          measure: { kind: "sum", field: money.key },
+          as: "line",
+          axis: "right",
+          color: "info",
+        },
+      ],
+    });
+  }
+
   /* ------------------------------ 構成比 --------------------------------- */
 
   if (cats[0]) {
@@ -167,6 +238,27 @@ function layoutForSheet(sheet: ProfiledSheet, isPrimary: boolean): WidgetSpec[] 
       groupBy: cats[0].key,
       measure: money ? { kind: "sum", field: money.key } : { kind: "count" },
       limit: 8,
+    });
+  }
+
+  /*
+   * ファネル。
+   *
+   * 「フェーズ」「ステータス」のような**段階**の列は、大きい順に並べると
+   * 意味が壊れる。段階の順に上から並べて初めて「どこで落ちているか」が読める。
+   * 段階らしい名前のときだけ出す（ただの分類に漏斗を当てても意味が無い）。
+   */
+  if (cats[0] && STATUS_NAME.test(cats[0].name)) {
+    out.push({
+      id: genWidgetId(),
+      type: "funnel",
+      title: `${cats[0].name}の段階別 件数`,
+      collection: S,
+      span: 2,
+      groupBy: cats[0].key,
+      measure: { kind: "count" },
+      limit: 8,
+      order: "label",
     });
   }
 
@@ -197,6 +289,89 @@ function layoutForSheet(sheet: ProfiledSheet, isPrimary: boolean): WidgetSpec[] 
       groupBy: ranks[0].key,
       measure: { kind: "sum", field: money.key },
       limit: 8,
+    });
+  }
+
+  /*
+   * ツリーマップ。
+   *
+   * 顧客のように項目数が多い列は、横棒だと上位8件しか見えず「残りがどれくらい
+   * あるのか」が分からない。面積なら多くの項目を同時に置けるので、ランキング
+   * （誰が一番か）と構成（全体でどう分かれているか）を別々に読める。
+   * 項目が少ないうちは横棒の方が読みやすいので、そのときは出さない。
+   */
+  if (ranks[0] && money && ranks[0].stats.distinct >= TREEMAP_MIN_DISTINCT) {
+    out.push({
+      id: genWidgetId(),
+      type: "treemap",
+      title: `${ranks[0].name}別の${money.name}（構成）`,
+      collection: S,
+      span: 2,
+      groupBy: ranks[0].key,
+      measure: { kind: "sum", field: money.key },
+      limit: 12,
+    });
+  }
+
+  /*
+   * ヒストグラム（分布）。
+   *
+   * 合計と平均だけでは分布が分からない。「平均1,000万」が、1,000万前後に
+   * 集まっているのか、100万が9件と1億が1件なのかで打ち手はまったく違う。
+   */
+  if (money) {
+    out.push({
+      id: genWidgetId(),
+      type: "histogram",
+      title: `${money.name}の分布`,
+      collection: S,
+      span: 2,
+      field: money.key,
+      bins: 10,
+      unit: unitOf(money),
+    });
+  }
+
+  /*
+   * ヒートマップ。3本目の区分があるときだけ。クロス集計（下）と同じ組み合わせで
+   * 出すと同じ表が2枚並ぶので、別の軸を当てる。数字を1つずつ読むのではなく、
+   * 濃淡で「どこが厚いか」を先に掴むための図。
+   */
+  if (cats[0] && cats[2]) {
+    out.push({
+      id: genWidgetId(),
+      type: "heatmap",
+      title: `${cats[0].name} × ${cats[2].name}（件数）`,
+      collection: S,
+      span: 4,
+      rowField: cats[0].key,
+      colField: cats[2].key,
+      measure: { kind: "count" },
+      unit: "number",
+      rowLimit: 12,
+      colLimit: 8,
+      showTotals: true,
+    });
+  }
+
+  /*
+   * 散布図。数値が2本以上あるときだけ。集計すると必ず消えてしまう「外れ値」が、
+   * そのまま見える唯一の図で、押せばその行まで辿れる。
+   */
+  if (measures[1]) {
+    out.push({
+      id: genWidgetId(),
+      type: "scatter",
+      title: `${measures[0].name} × ${measures[1].name}`,
+      collection: S,
+      span: 2,
+      xField: measures[0].key,
+      yField: measures[1].key,
+      colorBy: cats[0]?.key,
+      labelField: detailColumns(sheet.fields, 1)[0]?.key,
+      limit: 500,
+      xUnit: unitOf(measures[0]),
+      yUnit: unitOf(measures[1]),
     });
   }
 
@@ -399,11 +574,15 @@ function layoutForSheet(sheet: ProfiledSheet, isPrimary: boolean): WidgetSpec[] 
     out.push(w);
   }
 
+  // 条件を満たすものを全部並べると多すぎる。価値の高い順に並べてあるので、
+  // 上から上限までを採る。明細表はこの後に必ず付くので、1枚分空けておく。
+  const capped = out.slice(0, MAX_WIDGETS_PER_SHEET - 1);
+
   /* ------------------------------- 明細 ---------------------------------- */
 
   const cols = detailColumns(sheet.fields, 6);
   if (cols.length > 0) {
-    out.push({
+    capped.push({
       id: genWidgetId(),
       type: "table",
       title: `${sheet.name} 明細`,
@@ -415,6 +594,63 @@ function layoutForSheet(sheet: ProfiledSheet, isPrimary: boolean): WidgetSpec[] 
     });
   }
 
+  return capped;
+}
+
+/**
+ * 幅2のウィジェットが1枚だけで行に取り残されないように並べ替える。
+ *
+ * 4カラムのグリッドで、幅2 → 幅4 と続くと、幅2の右隣が空白のまま次の行に
+ * 移る。中身は正しいのに、画面には「作りかけ」に見える穴が開く。順番そのものに
+ * 意味がある並び（KPIが先頭、明細が最後）は崩さず、**後ろから幅2を1枚だけ
+ * 繰り上げて**穴を埋める。
+ */
+function packRows(widgets: WidgetSpec[]): WidgetSpec[] {
+  const spanOf = (w: WidgetSpec) => Math.min(4, Math.max(1, w.span ?? 1));
+  const rest = [...widgets];
+  const out: WidgetSpec[] = [];
+
+  while (rest.length > 0) {
+    const row: WidgetSpec[] = [];
+    let width = 0;
+
+    // まずは順番どおりに、入るだけ入れる。
+    while (rest.length > 0 && width + spanOf(rest[0]) <= 4) {
+      const w = rest.shift()!;
+      row.push(w);
+      width += spanOf(w);
+    }
+
+    // まだ隙間があるなら、後ろからちょうど収まる1枚を繰り上げる。
+    while (width < 4 && rest.length > 0) {
+      const j = rest.findIndex((w) => spanOf(w) <= 4 - width);
+      if (j === -1) break;
+      const [w] = rest.splice(j, 1);
+      row.push(w);
+      width += spanOf(w);
+    }
+
+    /*
+     * それでも余るなら、その行の中身を広げて幅を使い切る。
+     *
+     * KPI は横に並ぶ帯なので、残った枚数で等分する（2枚なら 2+2）。
+     * グラフが1枚だけ残ったときは、その1枚を行いっぱいにする。どちらも
+     * 「右半分が空いた行」を作らないため——中身は正しいのに、穴が開いて
+     * いると作りかけに見える。
+     */
+    if (width < 4 && row.length > 0) {
+      if (row.every((w) => w.type === "kpi")) {
+        const base = Math.floor(4 / row.length);
+        const extra = 4 % row.length;
+        for (let k = 0; k < row.length; k++) {
+          row[k] = { ...row[k], span: base + (k < extra ? 1 : 0) };
+        }
+      } else if (row.length === 1) {
+        row[0] = { ...row[0], span: 4 };
+      }
+    }
+    out.push(...row);
+  }
   return out;
 }
 
@@ -426,7 +662,7 @@ export function autoLayoutFromProfiles(sheets: ProfiledSheet[]): WidgetSpec[] {
   const usable = sheets.filter((s) => s.fields.length > 0 && s.rowCount > 0);
   if (usable.length === 0) return [];
 
-  const out: WidgetSpec[] = layoutForSheet(usable[0], true);
+  const out: WidgetSpec[] = packRows(layoutForSheet(usable[0], true));
 
   for (const sheet of usable.slice(1)) {
     const money = orderedMeasures(sheet.fields)[0];

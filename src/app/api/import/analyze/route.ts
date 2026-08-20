@@ -13,13 +13,14 @@
  * 画面側は via を気にせず同じように描ける。
  */
 import { withAuth, ok, ApiError } from "@/lib/api";
+import { db } from "@/lib/db";
 import { readAllSheets, MAX_IMPORT_BYTES } from "@/lib/excel";
 import { adviseImport } from "@/lib/import-advisor";
 
 const ALLOWED_EXT = [".xlsx", ".xls", ".csv"];
 const MAX_LABEL = "15MB";
 
-export const POST = withAuth(async (req) => {
+export const POST = withAuth(async (req, { user }) => {
   let form: FormData;
   try {
     form = await req.formData();
@@ -56,11 +57,52 @@ export const POST = withAuth(async (req) => {
 
   const { advice, via } = await adviseImport(sheets);
 
+  /*
+   * 同じ名前のファイルが既に入っていないかを見る。
+   *
+   * 毎月同じ台帳を入れ直すのが普通の使い方なのに、これまでは入れるたびに
+   * 「売上台帳」が増え、シートもダッシュボードも同名で並んでいた。名前が同じ
+   * ものは見分けが付かないので、どれが最新か分からなくなる。
+   * ここでは判定材料を返すだけで、上書きするかどうかは利用者が選ぶ。
+   */
+  const fileBase = name.replace(/\.[^.]+$/, "").trim();
+  const found = fileBase
+    ? await db.workbook.findFirst({
+        where: { workspaceId: user.workspace.id, name: fileBase },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          name: true,
+          createdAt: true,
+          collections: {
+            orderBy: { position: "asc" },
+            select: {
+              name: true,
+              slug: true,
+              _count: { select: { records: true } },
+            },
+          },
+        },
+      })
+    : null;
+
   return ok({
     fileName: name,
-    fileBase: name.replace(/\.[^.]+$/, "").trim(),
+    fileBase,
     sheets,
     advice,
     via,
+    existing: found
+      ? {
+          workbookId: found.id,
+          name: found.name,
+          importedAt: found.createdAt.toISOString(),
+          sheets: found.collections.map((c) => ({
+            name: c.name,
+            slug: c.slug,
+            rowCount: c._count.records,
+          })),
+        }
+      : null,
   });
 });

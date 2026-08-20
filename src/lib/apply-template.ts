@@ -244,10 +244,27 @@ export async function createCustomDashboard(
 /** 傾向を掴むのに十分な行数。全件読む必要はない。 */
 const AUTO_PROFILE_SAMPLE = 5000;
 
+/**
+ * 自動作成したダッシュボードの説明文。
+ *
+ * ただの文言ではなく**目印**として使っている。同じファイルを入れ直すたびに
+ * 同じ名前のダッシュボードが増えると、サイドバーに区別の付かない行が並ぶ。
+ * 作り直しなら作り直しと分かるように、この文言を持つものだけを更新の対象に
+ * する（利用者が自分で作ったダッシュボードは、名前がたまたま同じでも触らない）。
+ */
+const AUTO_DESCRIPTION = "取り込んだデータから自動作成しました。";
+
 export async function createAutoDashboard(
   user: CurrentUser,
   opts: { workbookId?: string; collectionId?: string },
-): Promise<{ dashboardId: string; name: string }> {
+): Promise<{
+  dashboardId: string;
+  name: string;
+  /** 既存の自動ダッシュボードを作り直したか。false なら新規作成。 */
+  replaced: boolean;
+  /** 一緒に片付けた同名の重複の数。 */
+  merged: number;
+}> {
   const workspaceId = user.workspace.id;
 
   let sheets: AutoSheet[] = [];
@@ -331,13 +348,55 @@ export async function createAutoDashboard(
   }
 
   const usedSlugs = Array.from(new Set(layout.map((w) => w.collection)));
-  const { dashboardId } = await createCustomDashboard(user, {
-    name: `${baseName} ダッシュボード`,
-    description: "取り込んだデータから自動作成しました。",
+  const name = `${baseName} ダッシュボード`;
+
+  /*
+   * 同じ名前の自動ダッシュボードが既にあれば、新しく作らずに中身を差し替える。
+   *
+   * 利用者の指摘そのもの:「ダッシュボード重複しているやつとかわかりづらくなるね、
+   * 同じExcel名なら上書きとかが良さそうだよ」。URL も変わらないので、
+   * ブックマークや共有リンクもそのまま生きる。
+   */
+  const siblings = await db.dashboard.findMany({
+    where: { workspaceId, name, description: AUTO_DESCRIPTION },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, shareToken: true },
+  });
+
+  if (siblings.length === 0) {
+    const { dashboardId } = await createCustomDashboard(user, {
+      name,
+      description: AUTO_DESCRIPTION,
+      collectionSlugs: usedSlugs,
+      layout,
+    });
+    return { dashboardId, name, replaced: false, merged: 0 };
+  }
+
+  const keep = siblings[0];
+  await updateCustomDashboard(user, keep.id, {
+    name,
+    description: AUTO_DESCRIPTION,
     collectionSlugs: usedSlugs,
     layout,
   });
-  return { dashboardId, name: `${baseName} ダッシュボード` };
+
+  /*
+   * 過去に増えてしまった同名の自動ダッシュボードは、ここで1本にまとめる。
+   * どれも同じファイルから同じ手順で作られたもので、名前が同じである以上
+   * 利用者には見分けが付かない——残しても選べない。
+   *
+   * ただし共有リンクを配ってあるものは消さない。こちらの都合で、外の人が見て
+   * いるページを消してよい理由にはならない。
+   */
+  const removable = siblings.slice(1).filter((d) => d.shareToken === null);
+  if (removable.length > 0) {
+    await db.dashboard.deleteMany({
+      where: { id: { in: removable.map((d) => d.id) } },
+    });
+  }
+
+  return { dashboardId: keep.id, name, replaced: true, merged: removable.length };
 }
 
 /**

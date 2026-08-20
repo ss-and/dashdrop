@@ -209,3 +209,53 @@ describe("枚数の下限", () => {
     expect(kpi && "unit" in kpi && kpi.unit).toBe("currency");
   });
 });
+
+describe("行の詰め方", () => {
+  /** 4カラムのグリッドを行ごとに畳んで、各行の幅を数える。 */
+  function rowWidths(layout: ReturnType<typeof autoLayoutFromProfiles>): number[] {
+    const widths: number[] = [];
+    let width = 0;
+    for (const w of layout) {
+      const span = Math.min(4, Math.max(1, w.span ?? 1));
+      if (width + span > 4) {
+        widths.push(width);
+        width = 0;
+      }
+      width += span;
+    }
+    if (width > 0) widths.push(width);
+    return widths;
+  }
+
+  it("右半分が空いたままの行を作らない", () => {
+    // 中身は正しいのに、穴が開いていると「作りかけ」に見える。
+    for (const w of rowWidths(autoLayoutFromProfiles([sheet()]))) {
+      expect(w).toBe(4);
+    }
+  });
+
+  it("列の少ないファイルでも穴を開けない", () => {
+    const fields = [
+      { key: "名前", name: "名前", type: "text" },
+      { key: "区分", name: "区分", type: "text" },
+    ];
+    const records = Array.from({ length: 12 }, (_, i) => ({
+      名前: `項目${i + 1}`,
+      区分: ["A", "B", "C"][i % 3],
+    }));
+    const thin = {
+      slug: "薄い表",
+      name: "薄い表",
+      rowCount: records.length,
+      fields: profileFields(records, fields),
+    };
+    for (const w of rowWidths(autoLayoutFromProfiles([thin]))) {
+      expect(w).toBe(4);
+    }
+  });
+
+  it("明細表は最後のまま（並べ替えで前に出さない）", () => {
+    const layout = autoLayoutFromProfiles([sheet()]);
+    expect(layout[layout.length - 1].type).toBe("table");
+  });
+});

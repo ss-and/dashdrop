@@ -76,11 +76,20 @@ export const seriesMeasureSchema = z.object({
   measure: measureSchema,
   filters: z.array(filterSchema).optional(),
   color: z.string().optional(), // token name: khaki|success|warning|danger|info
+  /**
+   * 複合グラフ（combo）でこの系列をどう描くか。棒と線を1枚に重ねるのは
+   * 「件数（棒）と金額（線）」のように**単位の違う2つ**を並べて見るためで、
+   * 同じ軸に押し込むと片方が地面に貼り付いて読めなくなる。
+   * combo 以外のグラフでは無視される。
+   */
+  as: z.enum(["bar", "line", "area"]).optional(),
+  /** combo で右側の軸に載せる。単位が違う系列を左軸に混ぜないための逃げ道。 */
+  axis: z.enum(["left", "right"]).optional(),
 });
 export type SeriesMeasure = z.infer<typeof seriesMeasureSchema>;
 
 export const seriesWidgetSchema = baseWidget.extend({
-  type: z.enum(["line", "area", "bar"]),
+  type: z.enum(["line", "area", "bar", "combo"]),
   dateField: z.string().optional(), // defaults to createdAt
   bucket: z.enum(["day", "week", "month"]).default("day"),
   rangeCount: z.number().int().min(2).max(60).default(14),
@@ -98,14 +107,33 @@ export const seriesWidgetSchema = baseWidget.extend({
   anchor: z.enum(["now", "data"]).optional(),
   measures: z.array(seriesMeasureSchema).min(1).max(4),
   stacked: z.boolean().optional(),
+  /**
+   * 区分別に系列を割る（Tableau の「色に区分を載せる」）。
+   *
+   * 指定すると `measures[0]` の指標を、この列の値ごとに1本ずつ描く——
+   * 「月別の売上」が「月別・フェーズ別の売上」になる。合計の推移だけでは
+   * 「どこが伸びたのか」が分からないので、積み上げると内訳まで一度に読める。
+   * 値の種類が多いときは上位 `splitLimit` 本だけ残し、残りは「その他」に畳む。
+   */
+  splitBy: z.string().min(1).optional(),
+  /** 残す系列の本数。省略時は 5。 */
+  splitLimit: z.number().int().min(2).max(8).optional(),
 });
 export type SeriesWidget = z.infer<typeof seriesWidgetSchema>;
 
 export const breakdownWidgetSchema = baseWidget.extend({
-  type: z.enum(["donut", "hbar"]),
+  type: z.enum(["donut", "hbar", "treemap", "funnel"]),
   groupBy: z.string().min(1), // field key to group on
   measure: measureSchema.default({ kind: "count" }),
   limit: z.number().int().min(2).max(12).default(6),
+  /**
+   * 並び順。既定は値の大きい順。
+   *
+   * ファネルだけは違う——「A: 契約完了 / B: 内諾あり / C: 提案」のような段階は
+   * 値の大小ではなく**段階の順**に並んでいないと漏斗として読めない。選択肢型の
+   * 列では選択肢の定義順、そうでなければラベル順に並べる。
+   */
+  order: z.enum(["value", "label"]).optional(),
 });
 export type BreakdownWidget = z.infer<typeof breakdownWidgetSchema>;
 
@@ -139,19 +167,76 @@ export const pivotWidgetSchema = baseWidget.extend({
 });
 export type PivotWidget = z.infer<typeof pivotWidgetSchema>;
 
+/**
+ * ヒートマップ。中身はクロス集計とまったく同じ（行 × 列 × 指標）で、
+ * 読み方だけが違う。数字を1つずつ読むのではなく、濃淡で「どこが厚いか」を
+ * 一瞬で掴むためのもの。計算を共有しているので、同条件のクロス集計と
+ * 必ず同じ数字になる。
+ */
+export const heatmapWidgetSchema = pivotWidgetSchema.extend({
+  type: z.literal("heatmap"),
+});
+export type HeatmapWidget = z.infer<typeof heatmapWidgetSchema>;
+
+/**
+ * 散布図。1行 = 1点。2つの数値の関係（金額 × 数量、金額 × リードタイム）を
+ * 見るためのもので、集計すると消えてしまう「外れ値」が唯一そのまま見える図。
+ */
+export const scatterWidgetSchema = baseWidget.extend({
+  type: z.literal("scatter"),
+  xField: z.string().min(1),
+  yField: z.string().min(1),
+  /** 点の色を分ける区分（任意）。 */
+  colorBy: z.string().optional(),
+  /** 点のラベル（どの行かを言い当てるための列）。 */
+  labelField: z.string().optional(),
+  /** 描く点の上限。多すぎる点は図ではなく塗りつぶしになる。 */
+  limit: z.number().int().min(10).max(2000).default(500),
+  xUnit: unitSchema.optional(),
+  yUnit: unitSchema.optional(),
+});
+export type ScatterWidget = z.infer<typeof scatterWidgetSchema>;
+
+/**
+ * ヒストグラム（度数分布）。数値列を等間隔の区間に区切って、何件ずつ入るかを
+ * 数える。平均だけでは「10万の案件が大量にあり、1億が1件」なのか
+ * 「全部1000万前後」なのかが区別できない——分布はそれを一目で示す。
+ */
+export const histogramWidgetSchema = baseWidget.extend({
+  type: z.literal("histogram"),
+  field: z.string().min(1),
+  /** 区間の数。 */
+  bins: z.number().int().min(3).max(30).default(10),
+  unit: unitSchema.optional(),
+});
+export type HistogramWidget = z.infer<typeof histogramWidgetSchema>;
+
 export const widgetSchema = z.discriminatedUnion("type", [
   kpiWidgetSchema,
   seriesWidgetSchema.extend({ type: z.literal("line") }),
   seriesWidgetSchema.extend({ type: z.literal("area") }),
   seriesWidgetSchema.extend({ type: z.literal("bar") }),
+  seriesWidgetSchema.extend({ type: z.literal("combo") }),
   breakdownWidgetSchema.extend({ type: z.literal("donut") }),
   breakdownWidgetSchema.extend({ type: z.literal("hbar") }),
+  breakdownWidgetSchema.extend({ type: z.literal("treemap") }),
+  breakdownWidgetSchema.extend({ type: z.literal("funnel") }),
   tableWidgetSchema,
   pivotWidgetSchema,
+  heatmapWidgetSchema,
+  scatterWidgetSchema,
+  histogramWidgetSchema,
 ]);
 export type WidgetSpec = z.infer<typeof widgetSchema>;
 
-export const dashboardLayoutSchema = z.array(widgetSchema).min(1).max(24);
+/**
+ * 1枚に載せられるウィジェットの数。
+ *
+ * 自動作成は「基本8枚以上」を目安に組み立てるが、タブが複数あるファイルでは
+ * シートごとに積み上がる。16 では 3シートのファイルで頭打ちになり、
+ * 保存時に 400 で弾かれていた。
+ */
+export const dashboardLayoutSchema = z.array(widgetSchema).min(1).max(48);
 
 /* ------------------------ template collection spec ---------------------- */
 
@@ -218,13 +303,20 @@ export interface KpiData {
   target?: number;
 }
 export interface SeriesData {
-  type: "line" | "area" | "bar";
+  type: "line" | "area" | "bar" | "combo";
   points: Array<Record<string, string | number>>; // { x, [label]: number }
-  series: Array<{ label: string; color?: string }>;
+  series: Array<{
+    label: string;
+    color?: string;
+    /** combo でのこの系列の描き方。未指定なら棒。 */
+    as?: "bar" | "line" | "area";
+    /** combo で載せる軸。未指定なら左。 */
+    axis?: "left" | "right";
+  }>;
   stacked?: boolean;
 }
 export interface BreakdownData {
-  type: "donut" | "hbar";
+  type: "donut" | "hbar" | "treemap" | "funnel";
   slices: Array<{
     label: string;
     value: number;
@@ -264,7 +356,7 @@ export interface TableData {
   collectionId?: string;
 }
 export interface PivotData {
-  type: "pivot";
+  type: "pivot" | "heatmap";
   rowLabel: string;
   colLabel: string;
   /** Distinct row headers, in display order. */
@@ -279,9 +371,34 @@ export interface PivotData {
   unit: Unit;
   showTotals: boolean;
 }
+/** 散布図の1点 = 1レコード。 */
+export interface ScatterData {
+  type: "scatter";
+  points: Array<{
+    x: number;
+    y: number;
+    /** どの行なのか（明細を開くため／ツールチップの見出し）。 */
+    label: string;
+    /** レコードID。押したらその行へ飛ぶ。 */
+    id?: string;
+    /** 色分けの区分ラベル。 */
+    group?: string;
+  }>;
+  /** 区分ごとの色。points[].group と対応する。 */
+  groups: Array<{ label: string; color?: string }>;
+  xLabel: string;
+  yLabel: string;
+  xUnit: Unit;
+  yUnit: Unit;
+  collectionId?: string;
+  /** 上限で描き切れなかった点の数。0 でなければ画面で断る。 */
+  omitted: number;
+}
+
 export type WidgetData =
   | KpiData
   | PivotData
   | SeriesData
   | BreakdownData
-  | TableData;
+  | TableData
+  | ScatterData;

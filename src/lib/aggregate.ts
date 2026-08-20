@@ -13,9 +13,14 @@ import type {
   BreakdownWidget,
   TableWidget,
   PivotWidget,
+  HeatmapWidget,
+  ScatterWidget,
+  HistogramWidget,
+  SeriesData,
   Unit,
 } from "./widgets";
 import { foldWidthVariants } from "./formula";
+import { formatCompact } from "./utils";
 
 export interface AggRecord {
   id: string;
@@ -456,6 +461,119 @@ function uniqueSeriesLabels(labels: string[]): string[] {
   });
 }
 
+/** 区分別に割るときの既定の系列本数。これ以上は「その他」に畳む。 */
+const DEFAULT_SPLIT_LIMIT = 5;
+
+/** 1本の系列。measures そのままのときも、区分で割ったときも同じ形にそろえる。 */
+interface SeriesDef {
+  label: string;
+  measure: Measure;
+  filters?: Filter[];
+  color?: string;
+  as?: "bar" | "line" | "area";
+  axis?: "left" | "right";
+  /** 区分別のときの、この系列が受け持つ生キー。残余は OTHER_KEY。 */
+  splitKey?: string;
+}
+
+/** 区分キーから系列番号を引く。残余（その他）は最後の1本が受ける。 */
+function indexOfSplitKey(defs: SeriesDef[], key: string): number {
+  let other = -1;
+  for (let i = 0; i < defs.length; i++) {
+    if (defs[i].splitKey === key) return i;
+    if (defs[i].splitKey === OTHER_KEY) other = i;
+  }
+  return other;
+}
+
+/**
+ * 系列の一覧を決める。
+ *
+ * `splitBy` が無ければ measures がそのまま系列。あるときは、**窓の中に入る行
+ * だけ**で区分ごとの重みを数え、重い順に splitLimit 本を残す。窓の外まで
+ * 数えると、画面に出ていない期間の大きさで系列が選ばれてしまう。
+ */
+function seriesDefs(
+  w: SeriesWidget,
+  col: AggCollection,
+  rows: AggRecord[],
+  indexOfStart: Map<number, number>,
+): SeriesDef[] {
+  if (!w.splitBy) {
+    return w.measures.map((sm) => ({
+      label: sm.label,
+      measure: sm.measure,
+      filters: sm.filters,
+      color: sm.color,
+      as: sm.as,
+      axis: sm.axis,
+    }));
+  }
+
+  const base = w.measures[0];
+  const field = col.fields.find((f) => f.key === w.splitBy);
+  const optionMeta = new Map((field?.options ?? []).map((o) => [o.value, o]));
+
+  const weights = new Map<string, number>();
+  for (const r of rows) {
+    const d = recordDate(r, w.dateField);
+    if (!d) continue;
+    if (indexOfStart.get(bucketStartMs(d, w.bucket)) === undefined) continue;
+    if (base.filters && !base.filters.every((f) => matchFilter(r, f))) continue;
+    const v = contributionOf(r, base.measure);
+    if (v === null) continue;
+    for (const k of bucketKeys(r.data[w.splitBy])) {
+      weights.set(k, (weights.get(k) ?? 0) + Math.abs(v));
+    }
+  }
+
+  const ranked = Array.from(weights.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([k]) => k);
+  if (ranked.length === 0) {
+    // 区分の値が1つも読めなかった。指標そのものを1本だけ描くほうが、
+    // 空のグラフを出すより読める。
+    return [
+      {
+        label: base.label,
+        measure: base.measure,
+        filters: base.filters,
+        color: base.color,
+        as: base.as,
+        axis: base.axis,
+      },
+    ];
+  }
+
+  const limit = w.splitLimit ?? DEFAULT_SPLIT_LIMIT;
+  const overflow = ranked.length > limit;
+  const kept = overflow ? ranked.slice(0, limit - 1) : ranked;
+  const labels = kept.map((k) => optionMeta.get(k)?.label ?? k);
+
+  const defs: SeriesDef[] = kept.map((k, i) => ({
+    label: labels[i],
+    measure: base.measure,
+    filters: base.filters,
+    color: optionMeta.get(k)?.color ?? COLOR_CYCLE[i % COLOR_CYCLE.length],
+    as: base.as,
+    axis: base.axis,
+    splitKey: k,
+  }));
+
+  if (overflow) {
+    defs.push({
+      label: otherLabelFor(new Set(labels)),
+      measure: base.measure,
+      filters: base.filters,
+      color: "neutral",
+      as: base.as,
+      axis: base.axis,
+      splitKey: OTHER_KEY,
+    });
+  }
+  return defs;
+}
+
 /**
  * 時系列（折れ線 / エリア / 棒）。
  *
@@ -509,19 +627,45 @@ function computeSeries(w: SeriesWidget, col: AggCollection, now: Date): WidgetDa
   const indexOfStart = new Map<number, number>();
   starts.forEach((ms, i) => indexOfStart.set(ms, i));
 
-  const labels = uniqueSeriesLabels(w.measures.map((sm) => sm.label));
-  // acc[バケット][measure]
-  const acc: MeasureBucket[][] = starts.map(() =>
-    w.measures.map(() => emptyBucket()),
-  );
+  /*
+   * 系列の定義。
+   *
+   * 通常は measures がそのまま系列になる。`splitBy` があるときは違って、
+   * 「measures[0] の指標を、区分の値ごとに1本ずつ」になる（Tableau で色に
+   * ディメンションを載せたときと同じ）。合計の推移だけでは「どこが伸びたか」が
+   * 分からないので、内訳を保ったまま同じ時間軸に載せる。
+   */
+  const defs = seriesDefs(w, col, rows, indexOfStart);
+  const labels = uniqueSeriesLabels(defs.map((d) => d.label));
+
+  // acc[バケット][系列]
+  const acc: MeasureBucket[][] = starts.map(() => defs.map(() => emptyBucket()));
 
   for (const r of rows) {
     const d = recordDate(r, w.dateField);
     if (!d) continue;
     const bi = indexOfStart.get(bucketStartMs(d, bucket));
     if (bi === undefined) continue;
-    for (let mi = 0; mi < w.measures.length; mi++) {
-      const sm = w.measures[mi];
+
+    if (w.splitBy) {
+      // 区分別。1レコードが同じ系列に2回入らないようにする（複数選択の列で
+      // 2つの値がどちらも残余「その他」に落ちるときに二重計上になるため）。
+      const def0 = defs[0];
+      if (def0.filters && !def0.filters.every((f) => matchFilter(r, f))) continue;
+      const v = contributionOf(r, def0.measure);
+      if (v === null) continue;
+      const seen = new Set<number>();
+      for (const k of bucketKeys(r.data[w.splitBy])) {
+        const di = indexOfSplitKey(defs, k);
+        if (di === -1 || seen.has(di)) continue;
+        seen.add(di);
+        addValue(acc[bi][di], v);
+      }
+      continue;
+    }
+
+    for (let mi = 0; mi < defs.length; mi++) {
+      const sm = defs[mi];
       if (sm.filters && !sm.filters.every((f) => matchFilter(r, f))) continue;
       const v = contributionOf(r, sm.measure);
       if (v === null) continue;
@@ -533,7 +677,7 @@ function computeSeries(w: SeriesWidget, col: AggCollection, now: Date): WidgetDa
     const row: Record<string, string | number> = {
       [X_KEY]: bucketLabel(new Date(ms), bucket),
     };
-    w.measures.forEach((sm, mi) => {
+    defs.forEach((sm, mi) => {
       row[labels[mi]] = round2(bucketValue(acc[bi][mi], sm.measure.kind) ?? 0);
     });
     return row;
@@ -542,10 +686,13 @@ function computeSeries(w: SeriesWidget, col: AggCollection, now: Date): WidgetDa
   return {
     type: w.type,
     points,
-    stacked: w.stacked,
-    series: w.measures.map((sm, i) => ({
+    // 区分別は積み上げが既定。1本ずつ重ねて描くと、色が重なって読めない。
+    stacked: w.stacked ?? (w.splitBy ? true : undefined),
+    series: defs.map((sm, i) => ({
       label: labels[i],
       color: sm.color ?? COLOR_CYCLE[i % COLOR_CYCLE.length],
+      as: sm.as,
+      axis: sm.axis,
     })),
   };
 }
@@ -620,6 +767,29 @@ function computeBreakdown(w: BreakdownWidget, col: AggCollection): WidgetData {
       // 合成した残余であることを構造で示す。表示側がラベル文字列で判定すると、
       // 本物の「その他」項目まで巻き添えにする。
       synthetic: true,
+    });
+  }
+
+  /*
+   * 表示順。
+   *
+   * 既定は値の大きい順（限度を超えた分を残余に畳むときも、まず大きい順に選ぶ）。
+   * ファネルだけは段階の順でなければ漏斗として読めないので、選択肢型の列なら
+   * 選択肢の定義順、そうでなければラベル順に並べ替える。残余は必ず最後。
+   */
+  const order = w.order ?? (w.type === "funnel" ? "label" : "value");
+  if (order === "label") {
+    const optionIndex = new Map(
+      (field?.options ?? []).map((o, i) => [o.value, i] as const),
+    );
+    slices.sort((a, b) => {
+      if (a.synthetic !== b.synthetic) return a.synthetic ? 1 : -1;
+      const ai = a.key === undefined ? undefined : optionIndex.get(a.key);
+      const bi = b.key === undefined ? undefined : optionIndex.get(b.key);
+      if (ai !== undefined && bi !== undefined) return ai - bi;
+      if (ai !== undefined) return -1;
+      if (bi !== undefined) return 1;
+      return a.label.localeCompare(b.label, "ja");
     });
   }
 
@@ -708,7 +878,10 @@ function computeTable(w: TableWidget, col: AggCollection): WidgetData {
  * `null` (rendered as 「—」) rather than 0 — "no data" and "zero" are different
  * answers and conflating them misleads.
  */
-function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
+function computePivot(
+  w: PivotWidget | HeatmapWidget,
+  col: AggCollection,
+): WidgetData {
   const filtered = applyFilters(col.records, w.filters);
   const rowField = col.fields.find((f) => f.key === w.rowField);
   const colField = col.fields.find((f) => f.key === w.colField);
@@ -786,7 +959,8 @@ function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
   };
 
   return {
-    type: "pivot",
+    // ヒートマップはクロス集計と同じ計算で、描き方だけが違う。
+    type: w.type,
     rowLabel: rowField?.name ?? w.rowField,
     colLabel: colField?.name ?? w.colField,
     rows: headers(rowKeys, rowField),
@@ -797,6 +971,177 @@ function computePivot(w: PivotWidget, col: AggCollection): WidgetData {
     grandTotal,
     unit: w.unit ?? "number",
     showTotals: w.showTotals,
+  };
+}
+
+/* -------------------------------- 散布図 -------------------------------- */
+
+/** 色分けの上限。これを超える区分は「その他」に畳む。 */
+const SCATTER_GROUP_LIMIT = 6;
+
+/**
+ * 散布図。1行 = 1点。
+ *
+ * 集計するとどうしても消えるのが「外れ値」で、平均も合計も内訳もそれを均して
+ * しまう。1件だけ桁違いに大きい案件があるのか、全体がなだらかなのかは、点を
+ * そのまま置くのがいちばん速い。押せばその行に飛べる。
+ */
+function computeScatter(w: ScatterWidget, col: AggCollection): WidgetData {
+  const filtered = applyFilters(col.records, w.filters);
+  const nameOf = (key: string) =>
+    col.fields.find((f) => f.key === key)?.name ?? key;
+  const groupField = w.colorBy
+    ? col.fields.find((f) => f.key === w.colorBy)
+    : undefined;
+  const optionMeta = new Map((groupField?.options ?? []).map((o) => [o.value, o]));
+
+  const raw: Array<{
+    x: number;
+    y: number;
+    label: string;
+    id: string;
+    groupKey?: string;
+  }> = [];
+
+  for (const r of filtered) {
+    const x = toNumber(r.data[w.xField]);
+    const y = toNumber(r.data[w.yField]);
+    // どちらか一方でも数値として読めない行は、置く場所が決まらない。
+    if (x === null || y === null) continue;
+    const labelRaw = w.labelField ? r.data[w.labelField] : null;
+    raw.push({
+      x,
+      y,
+      label:
+        labelRaw === null || labelRaw === undefined || labelRaw === ""
+          ? ""
+          : String(labelRaw),
+      id: r.id,
+      groupKey: w.colorBy ? bucketKeys(r.data[w.colorBy])[0] : undefined,
+    });
+  }
+
+  // 色分けは種類の多い順ではなく件数の多い順。全部違う色にすると凡例が読めない。
+  const counts = new Map<string, number>();
+  for (const p of raw) {
+    if (p.groupKey === undefined) continue;
+    counts.set(p.groupKey, (counts.get(p.groupKey) ?? 0) + 1);
+  }
+  const ranked = Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([k]) => k);
+  const overflow = ranked.length > SCATTER_GROUP_LIMIT;
+  const kept = new Set(
+    overflow ? ranked.slice(0, SCATTER_GROUP_LIMIT - 1) : ranked,
+  );
+  const labelOfGroup = (k: string) => optionMeta.get(k)?.label ?? k;
+  const keptLabels = Array.from(kept).map(labelOfGroup);
+  const otherLabel = otherLabelFor(new Set(keptLabels));
+
+  const groups = Array.from(kept).map((k, i) => ({
+    label: labelOfGroup(k),
+    color: optionMeta.get(k)?.color ?? COLOR_CYCLE[i % COLOR_CYCLE.length],
+  }));
+  if (overflow) groups.push({ label: otherLabel, color: "neutral" });
+
+  // 上限を超える分は描かない。数万点を重ねても図ではなく塗りつぶしになる。
+  // 何点落としたかは返して、画面で断る。
+  const shown = raw.slice(0, w.limit);
+
+  return {
+    type: "scatter",
+    points: shown.map((p) => ({
+      x: p.x,
+      y: p.y,
+      label: p.label,
+      id: p.id,
+      group:
+        p.groupKey === undefined
+          ? undefined
+          : kept.has(p.groupKey)
+            ? labelOfGroup(p.groupKey)
+            : otherLabel,
+    })),
+    groups,
+    xLabel: nameOf(w.xField),
+    yLabel: nameOf(w.yField),
+    xUnit: w.xUnit ?? "number",
+    yUnit: w.yUnit ?? "number",
+    collectionId: col.id,
+    omitted: raw.length - shown.length,
+  };
+}
+
+/* ------------------------------ ヒストグラム ----------------------------- */
+
+/**
+ * 区間の幅を「読める数字」に丸める。1 / 2 / 5 × 10^n だけを使う。
+ * 生の (最大-最小)/区間数 をそのまま使うと 137,428 のような幅になり、
+ * 目盛りが読めなくなる。
+ */
+function niceStep(raw: number): number {
+  if (!Number.isFinite(raw) || raw <= 0) return 1;
+  const exp = Math.floor(Math.log10(raw));
+  const base = Math.pow(10, exp);
+  const f = raw / base;
+  const mult = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+  return mult * base;
+}
+
+/** 区間の数の上限。丸めで増えることはあっても、増えすぎないように止める。 */
+const HISTOGRAM_MAX_BINS = 40;
+
+/**
+ * ヒストグラム（度数分布）。
+ *
+ * 平均と合計だけでは分布が分からない。「平均1,000万」が、1,000万前後に集まって
+ * いるのか、100万が9件と1億が1件なのかで打ち手はまったく違う。等間隔に区切って
+ * 件数を数えるだけだが、それが分かるのはこの図しかない。
+ */
+function computeHistogram(w: HistogramWidget, col: AggCollection): SeriesData {
+  const filtered = applyFilters(col.records, w.filters);
+  const values: number[] = [];
+  for (const r of filtered) {
+    const v = toNumber(r.data[w.field]);
+    if (v !== null) values.push(v);
+  }
+  const series = [{ label: "件数", color: "khaki" }];
+  if (values.length === 0) return { type: "bar", points: [], series: [] };
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const fmt = (n: number) =>
+    w.unit === "percent" ? `${round2(n)}%` : formatCompact(n);
+
+  // 全部同じ値なら区間を切る意味が無い。1本だけ立てる。
+  if (min === max) {
+    return {
+      type: "bar",
+      points: [{ [X_KEY]: fmt(min), 件数: values.length }],
+      series,
+    };
+  }
+
+  const step = niceStep((max - min) / w.bins);
+  const start = Math.floor(min / step) * step;
+  const binCount = Math.min(
+    HISTOGRAM_MAX_BINS,
+    Math.max(1, Math.ceil((max - start) / step)),
+  );
+  const counts = new Array<number>(binCount).fill(0);
+  for (const v of values) {
+    // 最大値はちょうど境界に乗ることがあるので、最後の区間に含める。
+    const i = Math.min(binCount - 1, Math.floor((v - start) / step));
+    counts[i >= 0 ? i : 0] += 1;
+  }
+
+  return {
+    type: "bar",
+    points: counts.map((c, i) => ({
+      [X_KEY]: `${fmt(start + step * i)}〜`,
+      件数: c,
+    })),
+    series,
   };
 }
 
@@ -818,15 +1163,32 @@ export function computeWidget(
       case "line":
       case "area":
       case "bar":
+      case "combo":
         return { type: widget.type, points: [], series: [] };
+      case "histogram":
+        return { type: "bar", points: [], series: [] };
       case "donut":
       case "hbar":
+      case "treemap":
+      case "funnel":
         return { type: widget.type, slices: [], total: 0 };
       case "table":
         return { type: "table", columns: [], rows: [] };
-      case "pivot":
+      case "scatter":
         return {
-          type: "pivot",
+          type: "scatter",
+          points: [],
+          groups: [],
+          xLabel: "",
+          yLabel: "",
+          xUnit: "number",
+          yUnit: "number",
+          omitted: 0,
+        };
+      case "pivot":
+      case "heatmap":
+        return {
+          type: widget.type,
           rowLabel: "",
           colLabel: "",
           rows: [],
@@ -847,14 +1209,22 @@ export function computeWidget(
     case "line":
     case "area":
     case "bar":
+    case "combo":
       return computeSeries(widget, col, now);
     case "donut":
     case "hbar":
+    case "treemap":
+    case "funnel":
       return computeBreakdown(widget, col);
     case "table":
       return computeTable(widget, col);
     case "pivot":
+    case "heatmap":
       return computePivot(widget, col);
+    case "scatter":
+      return computeScatter(widget, col);
+    case "histogram":
+      return computeHistogram(widget, col);
   }
 }
 

@@ -5,6 +5,7 @@ import { SeriesChart } from "./widgets/SeriesChart";
 import { BreakdownChart } from "./widgets/BreakdownChart";
 import { DataTable } from "./widgets/DataTable";
 import { PivotTable } from "./widgets/PivotTable";
+import { ScatterPlot } from "./widgets/ScatterPlot";
 
 /**
  * Renders a computed dashboard layout on a 4-column responsive grid. Each
@@ -32,14 +33,20 @@ function WidgetBody({ data }: { data: WidgetData }) {
     case "line":
     case "area":
     case "bar":
+    case "combo":
       return <SeriesChart data={data} />;
     case "donut":
     case "hbar":
+    case "treemap":
+    case "funnel":
       return <BreakdownChart data={data} />;
     case "table":
       return <DataTable data={data} />;
     case "pivot":
+    case "heatmap":
       return <PivotTable data={data} />;
+    case "scatter":
+      return <ScatterPlot data={data} />;
     default:
       return (
         <div className="flex h-24 items-center justify-center text-sm text-ink-faint">

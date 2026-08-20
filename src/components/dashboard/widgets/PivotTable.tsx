@@ -16,19 +16,31 @@ import type { PivotData } from "@/lib/widgets";
  *    without ever widening the page.
  */
 
-/** Max wash opacity for the heaviest cell. Deliberately subtle. */
-const HEAT_MAX_ALPHA = 0.12;
+/**
+ * 濃淡の上限。
+ *
+ * クロス集計は「数字を読む表」なので、色は数字の邪魔をしない程度に留める。
+ * ヒートマップは逆で、数字より先に濃淡で全体の形を掴むための図なので、
+ * 同じ計算のまま塗りだけを強くする。
+ */
+const HEAT_MAX_ALPHA = { pivot: 0.12, heatmap: 0.85 } as const;
+/** この濃さを超えたら、文字は白でないと読めなくなる。 */
+const INVERT_TEXT_ABOVE = 0.45;
 /** khaki-500 as an rgb triple (see tailwind.config.ts). */
 const HEAT_RGB = "111, 104, 63";
 
 function heatStyle(
   value: number | null,
   max: number,
+  variant: PivotData["type"],
 ): React.CSSProperties | undefined {
   if (value === null || max <= 0) return undefined;
-  const alpha = (Math.abs(value) / max) * HEAT_MAX_ALPHA;
+  const alpha = (Math.abs(value) / max) * HEAT_MAX_ALPHA[variant];
   if (alpha <= 0.005) return undefined;
-  return { backgroundColor: `rgba(${HEAT_RGB}, ${alpha.toFixed(3)})` };
+  return {
+    backgroundColor: `rgba(${HEAT_RGB}, ${alpha.toFixed(3)})`,
+    ...(alpha > INVERT_TEXT_ABOVE ? { color: "#ffffff" } : {}),
+  };
 }
 
 function Num({ value, unit }: { value: number | null; unit: PivotData["unit"] }) {
@@ -46,6 +58,7 @@ const TOTAL_SURFACE = "bg-paper-sunken font-medium text-ink";
 
 export function PivotTable({ data }: { data: PivotData }) {
   const {
+    type,
     rowLabel,
     colLabel,
     rows,
@@ -86,7 +99,8 @@ export function PivotTable({ data }: { data: PivotData }) {
       <div className="max-h-[28rem] w-full overflow-auto rounded-md border border-ink-line">
         <table className="w-full border-separate border-spacing-0 text-sm">
           <caption className="sr-only">
-            {rowLabel} × {colLabel} のクロス集計
+            {rowLabel} × {colLabel} の
+            {type === "heatmap" ? "ヒートマップ" : "クロス集計"}
           </caption>
           <thead>
             <tr>
@@ -130,7 +144,7 @@ export function PivotTable({ data }: { data: PivotData }) {
                   return (
                     <td
                       key={c}
-                      style={heatStyle(v, maxAbs)}
+                      style={heatStyle(v, maxAbs, type)}
                       className={`${CELL} text-right tabular-nums text-ink`}
                     >
                       <Num value={v} unit={unit} />

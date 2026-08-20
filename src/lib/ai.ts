@@ -91,8 +91,18 @@ const SPEC_PROMPT = `あなたはBIダッシュボード設計アシスタント
 共通: { "id": string(一意), "title": string(日本語), "collection": <コレクションslug>, "span": 1〜4, "filters"?: Filter[] }
 - kpi:   { "type":"kpi", "measure": Measure, "unit"?:"number"|"currency"|"percent"|"days", "icon"?:string, "rateNumerator"?: Filter[], "delta"?:{ "dateField"?:string, "period":"week"|"month" }, "target"?:number }
          ※ rateNumerator を使うと「一致件数 / 全件」の割合(%)になる。delta を付けると値が当該期間(今週/今月)に限定されるので title も「今週の…」等にする。
-- line/area/bar: { "type":"line"|"area"|"bar", "dateField"?:<date型フィールドkey>, "bucket":"day"|"week"|"month", "rangeCount": 2〜60, "measures":[{ "label":string, "measure":Measure, "filters"?:Filter[], "color"?:"khaki"|"info"|"success"|"warning"|"danger" }] (1〜4), "stacked"?:boolean }
-- donut/hbar: { "type":"donut"|"hbar", "groupBy": <フィールドkey>, "measure"?: Measure, "limit": 2〜12 }
+- line/area/bar: { "type":"line"|"area"|"bar", "dateField"?:<date型フィールドkey>, "bucket":"day"|"week"|"month", "rangeCount": 2〜60, "measures":[{ "label":string, "measure":Measure, "filters"?:Filter[], "color"?:"khaki"|"info"|"success"|"warning"|"danger" }] (1〜4), "stacked"?:boolean, "splitBy"?:<分類フィールドkey>, "splitLimit"?: 2〜8 }
+         ※ splitBy を付けると「区分ごとに1本ずつ」の積み上げになる（月別の売上 → 月別・フェーズ別の売上）。measures は1つだけ書く。
+- combo: { "type":"combo", …line/area/bar と同じ項目…, "measures":[{ …, "as":"bar"|"line", "axis":"left"|"right" }] }
+         ※ 件数(棒・左軸)と金額(線・右軸)のように、単位の違う2つを1枚に重ねるときに使う。
+- donut/hbar/treemap/funnel: { "type":"donut"|"hbar"|"treemap"|"funnel", "groupBy": <フィールドkey>, "measure"?: Measure, "limit": 2〜12, "order"?:"value"|"label" }
+         ※ treemap は項目が多い構成比向け。funnel は「フェーズ」「ステータス」のような段階の列に使い、order は "label"（段階の順）にする。
+- histogram: { "type":"histogram", "field": <number/currency型フィールドkey>, "bins": 3〜30, "unit"?:"number"|"currency" }
+         ※ 数値の分布。合計や平均では分からない「偏り」を見るためのもの。
+- scatter: { "type":"scatter", "xField": <数値key>, "yField": <数値key>, "colorBy"?:<分類key>, "labelField"?:<フィールドkey>, "limit": 10〜2000 }
+         ※ 数値が2つ以上あるときだけ。2つの関係と外れ値を見る。
+- pivot/heatmap: { "type":"pivot"|"heatmap", "rowField": <フィールドkey>, "colField": <フィールドkey>, "measure"?: Measure, "unit"?:"number"|"currency", "rowLimit": 2〜50, "colLimit": 2〜20, "showTotals": boolean }
+         ※ 数字を読ませたいときは pivot、全体の厚みを掴ませたいときは heatmap。
 - table: { "type":"table", "columns": [<フィールドkey>] (1〜8), "sort"?:{ "field":<フィールドkey>, "dir":"asc"|"desc" }, "limit": 1〜50 }
 
 Measure = { "kind":"count" } | { "kind":"sum"|"avg"|"min"|"max", "field": <number/currency型フィールドkey> }
@@ -102,7 +112,8 @@ Filter  = { "field": <フィールドkey>, "op":"eq"|"neq"|"in"|"gt"|"gte"|"lt"|
 - すべての widget.collection は、いずれかの collections[].slug と完全一致すること。
 - widget 内で参照する全フィールド(dateField / groupBy / columns / measure.field / filter.field / sort.field)は、そのコレクションに実在する field.key であること。
 - グリッドは横4カラム。各「行」の widget.span の合計が 4 になるように並べる (例: kpi×4、または span2+span2、span1+span1+span2)。
-- KPIは先頭に3〜4個、続けて時系列(line/area)1〜2個、内訳(donut/hbar)2個前後、最後にtable1個、という構成が定番。
+- KPIは先頭に3〜4個、続けて時系列1〜2個、内訳2個前後、最後にtable1個、という構成が定番。全体で8〜14個を目安に、同じ図ばかりにならないよう種類を混ぜる。
+- 図の種類は「読ませたいこと」で選ぶ。枚数合わせに、同じ組み合わせの図を2枚並べない。
 - 文言はすべて日本語。key/slug/field.key/option.value は英小文字。
 - 出力は JSON オブジェクト1つのみ。`;
 

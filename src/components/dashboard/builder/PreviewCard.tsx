@@ -6,6 +6,7 @@ import { SeriesChart } from "@/components/dashboard/widgets/SeriesChart";
 import { BreakdownChart } from "@/components/dashboard/widgets/BreakdownChart";
 import { DataTable } from "@/components/dashboard/widgets/DataTable";
 import { PivotTable } from "@/components/dashboard/widgets/PivotTable";
+import { ScatterPlot } from "@/components/dashboard/widgets/ScatterPlot";
 
 /**
  * Live preview area for one builder widget. Mirrors DashboardGrid's dispatch
@@ -30,14 +31,20 @@ function Body({ data }: { data: WidgetData }) {
     case "line":
     case "area":
     case "bar":
+    case "combo":
       return <SeriesChart data={data} />;
     case "donut":
     case "hbar":
+    case "treemap":
+    case "funnel":
       return <BreakdownChart data={data} />;
     case "table":
       return <DataTable data={data} />;
     case "pivot":
+    case "heatmap":
       return <PivotTable data={data} />;
+    case "scatter":
+      return <ScatterPlot data={data} />;
     default:
       return <Note>データなし</Note>;
   }

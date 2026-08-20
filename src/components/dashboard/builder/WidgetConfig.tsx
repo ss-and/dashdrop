@@ -175,7 +175,8 @@ export function WidgetConfig({ widget, sheets, onChange }: Props) {
 
       {(widget.type === "bar" ||
         widget.type === "line" ||
-        widget.type === "area") && (
+        widget.type === "area" ||
+        widget.type === "combo") && (
         <>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -323,10 +324,164 @@ export function WidgetConfig({ widget, sheets, onChange }: Props) {
               </div>
             )}
           </div>
+          <div>
+            <Label htmlFor={`${idp}-split`}>区分で分ける（色）</Label>
+            <Select
+              id={`${idp}-split`}
+              className="h-9"
+              value={widget.splitBy ?? ""}
+              onChange={(e) =>
+                onChange({ ...widget, splitBy: e.target.value || undefined })
+              }
+            >
+              <option value="">分けない（合計だけ）</option>
+              {groups.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.name}
+                </option>
+              ))}
+            </Select>
+            {widget.splitBy && (
+              <p className="mt-1 text-2xs text-ink-muted">
+                上位5つを積み上げ、残りは「その他」にまとめます
+              </p>
+            )}
+          </div>
         </>
       )}
 
-      {(widget.type === "donut" || widget.type === "hbar") && (
+      {widget.type === "funnel" && (
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-soft">
+          <input
+            type="checkbox"
+            checked={(widget.order ?? "label") === "label"}
+            onChange={(e) =>
+              onChange({ ...widget, order: e.target.checked ? "label" : "value" })
+            }
+            className="h-4 w-4 accent-khaki-500"
+          />
+          段階の順に並べる（外すと多い順）
+        </label>
+      )}
+
+      {widget.type === "histogram" && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor={`${idp}-hfield`}>対象項目</Label>
+            <Select
+              id={`${idp}-hfield`}
+              className="h-9"
+              value={widget.field}
+              onChange={(e) => onChange({ ...widget, field: e.target.value })}
+            >
+              {nums.length === 0 && <option value="">数値項目なし</option>}
+              {nums.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor={`${idp}-hbins`}>区間の数</Label>
+            <Input
+              id={`${idp}-hbins`}
+              type="number"
+              min={3}
+              max={30}
+              className="h-9"
+              value={widget.bins}
+              onChange={(e) => {
+                const n = Math.round(Number(e.target.value));
+                if (!Number.isFinite(n)) return;
+                onChange({ ...widget, bins: Math.min(30, Math.max(3, n)) });
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {widget.type === "scatter" && (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor={`${idp}-sx`}>横軸</Label>
+              <Select
+                id={`${idp}-sx`}
+                className="h-9"
+                value={widget.xField}
+                onChange={(e) => onChange({ ...widget, xField: e.target.value })}
+              >
+                {nums.length === 0 && <option value="">数値項目なし</option>}
+                {nums.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor={`${idp}-sy`}>縦軸</Label>
+              <Select
+                id={`${idp}-sy`}
+                className="h-9"
+                value={widget.yField}
+                onChange={(e) => onChange({ ...widget, yField: e.target.value })}
+              >
+                {nums.length === 0 && <option value="">数値項目なし</option>}
+                {nums.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor={`${idp}-scolor`}>色分け</Label>
+              <Select
+                id={`${idp}-scolor`}
+                className="h-9"
+                value={widget.colorBy ?? ""}
+                onChange={(e) =>
+                  onChange({ ...widget, colorBy: e.target.value || undefined })
+                }
+              >
+                <option value="">分けない</option>
+                {groups.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor={`${idp}-slabel`}>点の名前</Label>
+              <Select
+                id={`${idp}-slabel`}
+                className="h-9"
+                value={widget.labelField ?? ""}
+                onChange={(e) =>
+                  onChange({ ...widget, labelField: e.target.value || undefined })
+                }
+              >
+                <option value="">なし</option>
+                {fields.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
+        </>
+      )}
+
+      {(widget.type === "donut" ||
+        widget.type === "hbar" ||
+        widget.type === "treemap" ||
+        widget.type === "funnel") && (
         <>
           <div>
             <Label htmlFor={`${idp}-group`}>分類項目</Label>
@@ -411,7 +566,7 @@ export function WidgetConfig({ widget, sheets, onChange }: Props) {
         </>
       )}
 
-      {widget.type === "pivot" && (
+      {(widget.type === "pivot" || widget.type === "heatmap") && (
         <>
           <div className="grid grid-cols-2 gap-3">
             <div>
