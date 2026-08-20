@@ -84,6 +84,30 @@ export default function MarketingLayout({
                   ログイン
                 </Link>
               </div>
+              {/*
+                規約・ポリシー・特商法は、フッターから常に辿れる場所に置く。
+                有料で提供する以上、探さないと見つからない場所ではいけない。
+              */}
+              <div className="flex flex-col gap-2">
+                <Link
+                  href="/terms"
+                  className="text-sm text-ink-soft transition-colors hover:text-ink"
+                >
+                  利用規約
+                </Link>
+                <Link
+                  href="/privacy"
+                  className="text-sm text-ink-soft transition-colors hover:text-ink"
+                >
+                  プライバシーポリシー
+                </Link>
+                <Link
+                  href="/legal"
+                  className="text-sm text-ink-soft transition-colors hover:text-ink"
+                >
+                  特定商取引法に基づく表記
+                </Link>
+              </div>
             </nav>
           </div>
           <div className="mt-8 border-t border-ink-line pt-6">

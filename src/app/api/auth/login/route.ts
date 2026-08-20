@@ -3,6 +3,14 @@ import { db } from "@/lib/db";
 import { ok, fail } from "@/lib/api";
 import { verifyPassword, setSessionCookie } from "@/lib/auth";
 import { loginSchema } from "@/lib/validation";
+import {
+  consume,
+  consumeOptional,
+  reset,
+  ipKey,
+  retryMessage,
+  LOGIN_RULE,
+} from "@/lib/rate-limit";
 
 /**
  * Pre-auth login endpoint. Verifies credentials and issues a session cookie.
@@ -27,6 +35,32 @@ export async function POST(req: Request) {
     }
 
     const { email, password } = loginSchema.parse(body);
+
+    /*
+     * 総当たり対策。IPとメールアドレスの**両方**で数える。
+     *
+     * 片方だけだと、IPを変えれば1アカウントを狙い撃ちでき、逆に1つのIPから
+     * 多数のアカウントを薄く試す攻撃も通ってしまう。
+     *
+     * 数える順はメール→IP。先に数えた方だけが増えるのを避けるため、片方が
+     * 塞がっていてももう片方も必ず数える（塞がっている間も試行は試行）。
+     */
+    const byIpKey = ipKey(req, "login");
+    const idKey = `login:id:${email.toLowerCase()}`;
+    const [byId, byIp] = await Promise.all([
+      consume(idKey, LOGIN_RULE),
+      consumeOptional(byIpKey, LOGIN_RULE),
+    ]);
+    if (!byId.allowed || !byIp.allowed) {
+      const retryAt =
+        [byId.retryAt, byIp.retryAt]
+          .filter((d): d is Date => d !== null)
+          .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+      return fail(
+        `ログインの試行回数が多すぎます。${retryMessage(retryAt)}`,
+        429,
+      );
+    }
 
     const user = await db.user.findUnique({
       where: { email: email.toLowerCase() },
@@ -57,6 +91,9 @@ export async function POST(req: Request) {
         403,
       );
     }
+
+    // 正しいパスワードで入れた人まで締め出さない。
+    await Promise.all([reset(idKey), byIpKey ? reset(byIpKey) : Promise.resolve()]);
 
     await setSessionCookie(user.id);
     return ok({ redirect: "/home" });

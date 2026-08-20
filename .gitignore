@@ -3,6 +3,9 @@
 /.pnp
 .pnp.*
 
+# prisma — provider を差し替えた生成物（scripts/db-provider.mjs）
+/prisma/schema.generated.prisma
+
 # next.js
 /.next/
 # 本番ビルドの出力（開発サーバーの .next と混ざらないように分けてある）

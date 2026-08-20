@@ -10,6 +10,9 @@ import { NavIcon } from "@/components/app/icons";
 import { SlackCard } from "@/components/settings/SlackCard";
 import { NotionCard } from "@/components/settings/NotionCard";
 import { getIntegration } from "@/lib/integrations";
+import { PrivacyCard } from "@/components/settings/PrivacyCard";
+import { DangerZone } from "@/components/settings/DangerZone";
+import { db } from "@/lib/db";
 
 export const metadata = { title: "設定" };
 
@@ -49,6 +52,46 @@ export default async function SettingsPage() {
   // Masked summary only — the sealed webhook URL never reaches the client.
   const slack = await getIntegration(user.workspace.id, "slack");
   const notion = await getIntegration(user.workspace.id, "notion");
+
+  /*
+   * 退会したときに何が消えて何が残るかを、押す前に出すために数えておく。
+   * 「あなたが唯一の所有者」の場所だけが消える。
+   */
+  const account = await (async () => {
+    const memberships = await db.membership.findMany({
+      where: { userId: user.id },
+      select: { role: true, workspace: { select: { id: true, name: true } } },
+    });
+    const owned: string[] = [];
+    const shared: string[] = [];
+    const ownedIds: string[] = [];
+    for (const m of memberships) {
+      if (m.role !== "owner") {
+        shared.push(m.workspace.name);
+        continue;
+      }
+      const otherOwners = await db.membership.count({
+        where: {
+          workspaceId: m.workspace.id,
+          role: "owner",
+          userId: { not: user.id },
+        },
+      });
+      if (otherOwners === 0) {
+        owned.push(m.workspace.name);
+        ownedIds.push(m.workspace.id);
+      } else {
+        shared.push(m.workspace.name);
+      }
+    }
+    const rows =
+      ownedIds.length === 0
+        ? 0
+        : await db.record.count({
+            where: { collection: { workspaceId: { in: ownedIds } } },
+          });
+    return { owned, shared, rows };
+  })();
 
   return (
     <>
@@ -120,6 +163,17 @@ export default async function SettingsPage() {
             <NotionCard initial={notion} />
           </section>
 
+          {/* データの扱い */}
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-ink-muted">データの扱い</h2>
+            <PrivacyCard
+              initialAiEnabled={user.workspace.aiEnabled}
+              canEdit={
+                user.workspace.role === "owner" || user.workspace.role === "admin"
+              }
+            />
+          </section>
+
           {/* Session */}
           <Card>
             <CardHeader>
@@ -139,6 +193,17 @@ export default async function SettingsPage() {
               </div>
             </CardBody>
           </Card>
+
+          {/* 退会 */}
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-ink-muted">アカウント</h2>
+            <DangerZone
+              email={user.email}
+              ownedWorkspaces={account.owned}
+              sharedWorkspaces={account.shared}
+              totalRows={account.rows}
+            />
+          </section>
         </div>
       </main>
     </>

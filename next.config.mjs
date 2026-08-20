@@ -49,6 +49,63 @@ const nextConfig = {
    * 振る舞いは変わらない。
    */
   distDir: process.env.NEXT_DIST_DIR || ".next",
+
+  /*
+   * セキュリティヘッダ。
+   *
+   * 何も付いていない状態だと、このアプリは他所の iframe に埋め込めるし、
+   * ブラウザ側の防御も一切効かない。公開する前に必ず要る。
+   *
+   * CSP は「厳しくして壊れる」より「確実に効く範囲で確実に付ける」を採る。
+   *  - script-src に 'unsafe-inline' が要る: Next.js は起動用のスクリプトを
+   *    インラインで埋め込む。nonce を配るにはミドルウェアで全ページの HTML を
+   *    書き換える必要があり、静的最適化を捨てることになる。
+   *  - style-src も同じ理由（Recharts が要素に style を直接書く）。
+   *  - 逆に **frame-ancestors / object-src / base-uri** は無条件に締められる。
+   *    クリックジャッキングと base タグの乗っ取りは、これで実際に止まる。
+   *  - connect-src は自分自身のみ。取り込んだデータが外へ送られる経路を
+   *    ブラウザ側でも塞ぐ（サーバー側の送信は別経路なので影響しない）。
+   */
+  async headers() {
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+      "frame-ancestors 'none'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join("; ");
+
+    const headers = [
+      { key: "Content-Security-Policy", value: csp },
+      // frame-ancestors を理解しない古いブラウザ向けの二重化。
+      { key: "X-Frame-Options", value: "DENY" },
+      { key: "X-Content-Type-Options", value: "nosniff" },
+      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+      {
+        key: "Permissions-Policy",
+        value: "camera=(), microphone=(), geolocation=(), payment=()",
+      },
+    ];
+
+    /*
+     * HSTS は本番だけ。開発機（http://localhost）に付けると、ブラウザが
+     * localhost 全体を https に強制するようになり、他のプロジェクトまで
+     * 開けなくなる。しかも一度覚えると消すのが面倒。
+     */
+    if (process.env.NODE_ENV === "production") {
+      headers.push({
+        key: "Strict-Transport-Security",
+        value: "max-age=63072000; includeSubDomains; preload",
+      });
+    }
+
+    return [{ source: "/:path*", headers }];
+  },
 };
 
 export default nextConfig;

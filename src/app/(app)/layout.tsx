@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { Sidebar } from "@/components/app/Sidebar";
 import { SidebarProvider, SidebarPane } from "@/components/app/SidebarShell";
+import { VerifyEmailBanner } from "@/components/app/VerifyEmailBanner";
 
 /**
  * Authenticated app shell. Guards every /(app) route: unauthenticated users
@@ -23,7 +24,11 @@ export default async function AppLayout({
         <SidebarPane>
           <Sidebar user={user} />
         </SidebarPane>
-        <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* 未確認のときだけ。中の機能は止めない（止めるのは公開リンクだけ）。 */}
+          {!user.emailVerified && <VerifyEmailBanner email={user.email} />}
+          {children}
+        </div>
       </div>
     </SidebarProvider>
   );

@@ -112,7 +112,16 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <Label htmlFor="password">パスワード</Label>
+            <div className="flex items-baseline justify-between">
+              <Label htmlFor="password">パスワード</Label>
+              {/* 忘れた人の逃げ道は、入力欄の隣に置く。探させない。 */}
+              <Link
+                href="/forgot"
+                className="text-xs text-khaki-700 hover:underline"
+              >
+                お忘れですか？
+              </Link>
+            </div>
             <Input
               id="password"
               type="password"

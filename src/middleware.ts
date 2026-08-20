@@ -27,7 +27,12 @@ const PROTECTED_PREFIXES = [
   "/samples",
   "/logs",
 ];
-const AUTH_PAGES = ["/login", "/signup"];
+/*
+ * 未ログインで開くページ。ログイン済みで来たらホームへ返す。
+ * /reset は、メールのリンクから開かれるので必ずここに入れること
+ * （保護対象に入れると、パスワードを忘れた人が永久にログインへ弾かれる）。
+ */
+const AUTH_PAGES = ["/login", "/signup", "/forgot", "/reset"];
 
 async function hasValidSession(token: string | undefined): Promise<boolean> {
   if (!token) return false;
@@ -103,5 +108,9 @@ export const config = {
     "/settings/:path*",
     "/login",
     "/signup",
+    // AUTH_PAGES と必ず一致させること（ここに書き忘れると、ログイン済みの
+    // 利用者が再設定画面を開けてしまう）。
+    "/forgot",
+    "/reset",
   ],
 };

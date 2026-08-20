@@ -95,12 +95,14 @@ async function createUser(): Promise<CurrentUser> {
     id: user.id,
     email: user.email,
     name: user.name,
+    emailVerified: true,
     workspace: {
       id: workspace.id,
       name: workspace.name,
       slug: workspace.slug,
       plan: workspace.plan,
       role: "owner",
+      aiEnabled: true,
     },
   };
 }

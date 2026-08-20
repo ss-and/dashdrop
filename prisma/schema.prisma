@@ -6,9 +6,16 @@
 // field key. Built-in templates (Inquiries, Tasks) are just Collections seeded
 // with a predefined set of Fields.
 //
-// Dev uses SQLite. To go to production, switch `provider` to "postgresql" and
-// point DATABASE_URL at Postgres — the schema is written to port cleanly
-// (String-typed enums validated in the app layer via Zod, Json for row data).
+// 手元は SQLite（インストール不要ですぐ動く）、本番は PostgreSQL。
+//
+// Prisma の `provider` は文字列リテラルしか受け付けないので、切り替えは
+// scripts/db-provider.mjs が生成する写し（prisma/schema.generated.prisma）で行う。
+// このファイルは常に sqlite のままで良い——本番向けのコマンドは生成側を見る。
+//
+//   DATABASE_PROVIDER=postgresql DATABASE_URL=postgresql://… npm run db:deploy
+//
+// スキーマ自体は最初から両対応で書いてある（列挙型は String + Zod、
+// 行データは Json）。移行手順は docs/OPERATIONS.md。
 
 generator client {
   provider = "prisma-client-js"
@@ -20,16 +27,59 @@ datasource db {
 }
 
 model User {
-  id           String       @id @default(cuid())
-  email        String       @unique
-  passwordHash String
-  name         String
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  memberships  Membership[]
-  records      Record[]     @relation("RecordAuthor")
+  id              String       @id @default(cuid())
+  email           String       @unique
+  passwordHash    String
+  name            String
+  // メール確認が済んだ日時。null は未確認。
+  // 未確認でもアプリは使えるが、外に出る操作（公開リンク）だけは止める。
+  emailVerifiedAt DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  memberships     Membership[]
+  records         Record[]     @relation("RecordAuthor")
+  tokens          AuthToken[]
 
   @@index([email])
+}
+
+/**
+ * パスワード再設定とメール確認の使い捨てトークン。
+ * 生の値は保存しない。DBが漏れたときに、そのままアカウントを乗っ取れる鍵が
+ * 並んでいることになるため、ハッシュだけを持つ（パスワードと同じ考え方）。
+ */
+model AuthToken {
+  id        String    @id @default(cuid())
+  userId    String
+  // Purpose: "password_reset" | "email_verify"
+  purpose   String
+  // SHA-256 のハッシュ。照合は送られてきた値をハッシュして引く。
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+}
+
+/**
+ * 総当たり対策の試行回数。
+ * メモリに持つとインスタンスを増やした時点で意味を失い、再起動でも消える
+ * （攻撃者にとっては都合が良い）。DBに置けば台数が増えても効く。
+ * 書き込みはログイン試行のときだけなので、量は問題にならない。
+ */
+model RateLimit {
+  // 例: "login:user@example.com" / "login:203.0.113.9"
+  key          String    @id
+  count        Int       @default(0)
+  windowStart  DateTime  @default(now())
+  // ここまでは試行を受け付けない（ロック解除の時刻）。
+  blockedUntil DateTime?
+  updatedAt    DateTime  @updatedAt
+
+  @@index([windowStart])
 }
 
 model Workspace {
@@ -38,6 +88,12 @@ model Workspace {
   slug            String           @unique
   // Plan: "free" | "pro" | "business"
   plan            String           @default("free")
+  /**
+   * 取り込み時に AI へ内容を渡してよいか。
+   * 列名とサンプル値が外部（Anthropic）に出るので、社内規程で外に出せない
+   * 会社が必ずある。既定は有効だが、切れば決定的なルールだけで動く。
+   */
+  aiEnabled       Boolean          @default(true)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   memberships     Membership[]

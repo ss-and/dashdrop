@@ -14,6 +14,19 @@ function shareUrl(token: string): string {
 }
 
 export const POST = withAuth(async (_req, { user, params }) => {
+  /*
+   * メール未確認のうちは、ログイン不要で開けるページを作らせない。
+   *
+   * 捨てアドで登録して匿名の公開ページを量産する、が誰でもできる状態は
+   * 出す前に塞いでおく必要がある。中の機能は止めない——止めるのはここだけ。
+   */
+  if (!user.emailVerified) {
+    throw new ApiError(
+      "メールアドレスの確認が済んでいないため、公開リンクを作成できません。登録時にお送りした確認メールのリンクを開くか、ホーム画面から再送してください。",
+      403,
+    );
+  }
+
   const dash = await db.dashboard.findFirst({
     where: { id: params.id, workspaceId: user.workspace.id },
     select: { id: true, shareToken: true },

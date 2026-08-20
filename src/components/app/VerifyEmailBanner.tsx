@@ -1,0 +1,63 @@
+"use client";
+
+import { useState } from "react";
+import { Button } from "@/components/ui/Button";
+import { NavIcon } from "./icons";
+
+/**
+ * メールアドレスの確認をうながす帯。
+ *
+ * 確認が済むまで**中の機能は止めない**。止めるのは公開リンクの作成だけで、
+ * それはここに書いておく（何ができないのかが分からない警告は、ただの雑音）。
+ * 一度閉じたらその画面では出さない——毎ページ出す帯は読まれなくなる。
+ */
+export function VerifyEmailBanner({ email }: { email: string }) {
+  const [hidden, setHidden] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (hidden) return null;
+
+  async function resend() {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const res = await fetch("/api/auth/resend-verification", { method: "POST" });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) throw new Error(json?.error ?? "送信に失敗しました");
+      setNote(
+        json.data?.alreadyVerified
+          ? "確認は既に完了しています。画面を再読み込みしてください。"
+          : "確認メールを再送しました。",
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "送信に失敗しました");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-warning/30 bg-warning-soft px-5 py-2.5 text-sm">
+      <NavIcon name="bell" className="h-4 w-4 shrink-0 text-warning" />
+      <p className="min-w-0 flex-1 text-ink-soft">
+        <span className="font-medium text-ink">{email}</span> の確認が済んでいません。
+        確認が済むまで、ダッシュボードの<span className="font-medium text-ink">公開リンク</span>は作成できません。
+      </p>
+      {note && <span className="text-ink-soft">{note}</span>}
+      {error && (
+        <span role="alert" className="text-danger">
+          {error}
+        </span>
+      )}
+      <Button size="sm" variant="secondary" onClick={resend} disabled={busy}>
+        {busy ? "送信中…" : "確認メールを再送"}
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => setHidden(true)}>
+        閉じる
+      </Button>
+    </div>
+  );
+}

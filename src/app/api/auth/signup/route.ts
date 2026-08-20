@@ -6,6 +6,10 @@ import { signupSchema } from "@/lib/validation";
 import { slugify } from "@/lib/utils";
 import { TEMPLATES, type CollectionTemplate } from "@/lib/templates";
 import { logActivity } from "@/lib/workspace";
+import { env } from "@/lib/env";
+import { issueToken, EMAIL_VERIFY_TTL_HOURS } from "@/lib/auth-tokens";
+import { sendMail, emailVerifyMail, emailConfigured } from "@/lib/email";
+import { consumeOptional, ipKey, retryMessage, SIGNUP_RULE } from "@/lib/rate-limit";
 import { installCrm } from "@/lib/install-crm";
 import type { Prisma } from "@prisma/client";
 
@@ -71,6 +75,18 @@ export async function POST(req: Request) {
     }
 
     const input = signupSchema.parse(body);
+
+    /*
+     * 1つのIPからの大量作成を止める。捨てアドで無限にワークスペースを
+     * 作られると、無料枠の計算も、あとで消す手間も成り立たなくなる。
+     */
+    const limit = await consumeOptional(ipKey(req, "signup"), SIGNUP_RULE);
+    if (!limit.allowed) {
+      return fail(
+        `登録の試行回数が多すぎます。${retryMessage(limit.retryAt)}`,
+        429,
+      );
+    }
     // Schema already lowercases, but be explicit and defensive.
     const email = input.email.toLowerCase();
 
@@ -133,18 +149,38 @@ export async function POST(req: Request) {
           id: user.id,
           email,
           name: input.name,
+          emailVerified: true,
           workspace: {
             id: workspaceId,
             name: workspaceName,
             slug,
             plan: "free",
             role: "owner",
+            aiEnabled: true,
           },
         },
         { withSampleData: false },
       );
     } catch (err) {
       console.error("CRM bootstrap failed for new workspace:", err);
+    }
+
+    /*
+     * 確認メール。送れなくても登録は止めない——SMTP が未設定の環境でも
+     * 使い始められる方が良く、未確認でも中は使えるようにしてある
+     * （止めるのは公開リンクの作成だけ）。
+     */
+    if (emailConfigured()) {
+      try {
+        const { token } = await issueToken(user.id, "email_verify");
+        const url = `${env.APP_URL.replace(/\/$/, "")}/api/auth/verify?token=${encodeURIComponent(token)}`;
+        await sendMail({
+          to: email,
+          ...emailVerifyMail(url, EMAIL_VERIFY_TTL_HOURS),
+        });
+      } catch (err) {
+        console.error("Verification mail failed for new user:", err);
+      }
     }
 
     await setSessionCookie(user.id);

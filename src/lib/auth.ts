@@ -81,12 +81,16 @@ export interface CurrentUser {
   id: string;
   email: string;
   name: string;
+  /** メール確認が済んでいるか。未確認でも中は使えるが、公開リンクは作れない。 */
+  emailVerified: boolean;
   workspace: {
     id: string;
     name: string;
     slug: string;
     plan: string;
     role: string;
+    /** 取り込み時に AI へ内容を渡してよいか。 */
+    aiEnabled: boolean;
   };
 }
 
@@ -121,12 +125,14 @@ export async function getSession(): Promise<CurrentUser | null> {
     id: user.id,
     email: user.email,
     name: user.name,
+    emailVerified: user.emailVerifiedAt !== null,
     workspace: {
       id: membership.workspace.id,
       name: membership.workspace.name,
       slug: membership.workspace.slug,
       plan: membership.workspace.plan,
       role: membership.role,
+      aiEnabled: membership.workspace.aiEnabled,
     },
   };
 }

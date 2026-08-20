@@ -35,6 +35,11 @@ const schema = z.object({
    * 意図は自動で推測せず、運用者に宣言してもらう。
    */
   SLACK_WEBHOOK_SINGLE_TENANT: z.string().optional().default(""),
+  /**
+   * 例外の通知先（任意）。設定すると、拾えなかった例外を1件ずつ POST する。
+   * Slack の Incoming Webhook でも、監視SaaS の受け口でも良い。
+   */
+  ERROR_WEBHOOK_URL: z.string().optional().default(""),
   SMTP_HOST: z.string().optional().default(""),
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_USER: z.string().optional().default(""),

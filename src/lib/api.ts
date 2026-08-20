@@ -12,6 +12,7 @@ import { installJapaneseZodMessages, fieldLabelForPath } from "./zod-ja";
 installJapaneseZodMessages();
 import { getSession, type CurrentUser } from "./auth";
 import { ApiError } from "./errors";
+import { reportError } from "./observability";
 
 export function ok<T>(data: T, init?: ResponseInit): NextResponse {
   return NextResponse.json({ ok: true, data }, init);
@@ -69,7 +70,11 @@ export function withAuth(handler: Handler) {
           issues: err.flatten().fieldErrors,
         });
       }
-      console.error("Unhandled API error:", err);
+      // 本番で誰も見ないログにしない。機械が読める形で必ず残す。
+      reportError(err, {
+        where: `api:${new URL(req.url).pathname}`,
+        workspaceId: user.workspace.id,
+      });
       return fail(
         "サーバーでエラーが発生しました。しばらくして再度お試しください。",
         500,

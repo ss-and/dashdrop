@@ -55,7 +55,9 @@ export const POST = withAuth(async (req, { user }) => {
     throw new ApiError("シートから列を検出できませんでした", 422);
   }
 
-  const { advice, via } = await adviseImport(sheets);
+  const { advice, via } = await adviseImport(sheets, {
+    aiEnabled: user.workspace.aiEnabled,
+  });
 
   /*
    * 同じ名前のファイルが既に入っていないかを見る。

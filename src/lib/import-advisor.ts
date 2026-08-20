@@ -412,9 +412,18 @@ export function reconcileAdvice(
 /**
  * 下見の提案を返す。APIキーが無ければ即座に決定的な提案を返し、例外は投げない。
  */
-export async function adviseImport(sheets: SheetParse[]): Promise<AdviceResult> {
+export async function adviseImport(
+  sheets: SheetParse[],
+  opts: { aiEnabled?: boolean } = {},
+): Promise<AdviceResult> {
   const usable = sheets.filter((s) => !s.empty);
-  if (usable.length === 0 || !env.ANTHROPIC_API_KEY) {
+  /*
+   * `aiEnabled: false` は、そのワークスペースが「中身を外に出さない」と
+   * 決めているということ。列名とサンプル値が Anthropic に渡るので、社内規程で
+   * 外に出せない会社が必ずある。切られていたら通信そのものを行わない。
+   */
+  const allowed = opts.aiEnabled !== false;
+  if (usable.length === 0 || !allowed || !env.ANTHROPIC_API_KEY) {
     return { advice: heuristicAdvice(sheets), via: "heuristic" };
   }
 
