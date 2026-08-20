@@ -54,7 +54,7 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
     db.dashboard.findMany({
       where: { workspaceId: user.workspace.id },
       orderBy: { position: "asc" },
-      select: { id: true, name: true, icon: true },
+      select: { id: true, name: true, icon: true, collectionSlugs: true },
     }),
   ]);
 
@@ -104,6 +104,72 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
     .map((w) => ({ ...w, sheets: byWorkbook.get(w.id) ?? [] }))
     .filter((w) => w.sheets.length > 0);
 
+  /*
+   * ダッシュボードを、それが読んでいるシートから「どのExcelのものか」に解決する。
+   *
+   * 1つのファイルだけを見ているダッシュボードは、そのファイルの持ち物なので
+   * ファイルの中に置く（受注データ.xlsx → 受注一覧 / 受注データ ダッシュボード）。
+   * 複数のファイルにまたがるもの、どのファイルにも属さないシート（顧客データベース
+   * など）を見ているものだけが「横断ダッシュボード」に残り、そこでは中身として
+   * 出どころを並べる。「これは何を結合した表なのか」が名前だけでは分からない。
+   */
+  const collectionBySlug = new Map(collections.map((c) => [c.slug, c]));
+  const workbookById = new Map(workbooks.map((w) => [w.id, w]));
+
+  interface DashboardSource {
+    key: string;
+    name: string;
+    href: string;
+  }
+  const dashboardsByWorkbook = new Map<string, typeof dashboards>();
+  /** どのファイルにも属さないシートだけを見ているもの（「その他」の中に置く）。 */
+  const looseDashboards: typeof dashboards = [];
+  const crossDashboards: Array<
+    (typeof dashboards)[number] & { sources: DashboardSource[] }
+  > = [];
+
+  for (const d of dashboards) {
+    const slugs = Array.isArray(d.collectionSlugs)
+      ? d.collectionSlugs.filter((x): x is string => typeof x === "string")
+      : [];
+    const sheets = slugs
+      .map((slug) => collectionBySlug.get(slug))
+      .filter((c): c is (typeof collections)[number] => Boolean(c));
+
+    const workbookIds = [
+      ...new Set(sheets.map((c) => c.workbookId).filter((id): id is string => Boolean(id))),
+    ];
+    const looseSheets = sheets.filter((c) => !c.workbookId);
+
+    const sources: DashboardSource[] = [
+      ...workbookIds.map((id) => ({
+        key: `w-${id}`,
+        name: workbookById.get(id)?.name ?? "ファイル",
+        href: `/f/${id}`,
+      })),
+      ...looseSheets.map((c) => ({
+        key: `c-${c.id}`,
+        name: c.name,
+        href: `/c/${c.id}`,
+      })),
+    ];
+
+    // 「横断」を名乗れるのは、出どころが2つ以上あるものだけ。1つしか見ていない
+    // ものは、その出どころの中に置く方が探しやすい。
+    if (sources.length <= 1) {
+      if (workbookIds.length === 1) {
+        const arr = dashboardsByWorkbook.get(workbookIds[0]) ?? [];
+        arr.push(d);
+        dashboardsByWorkbook.set(workbookIds[0], arr);
+      } else {
+        looseDashboards.push(d);
+      }
+      continue;
+    }
+
+    crossDashboards.push({ ...d, sources });
+  }
+
   const hasMaster = usedCrmSheets.length > 0 || usedHrSheets.length > 0;
 
   return (
@@ -124,28 +190,53 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
             下部の「追加」にある）。 */}
         {rest.length > 0 && (
           <details open className="group/sheets">
-            <SectionSummary label="スプレッドシート" groupName="sheets" />
+            <SectionSummary label="Excel" groupName="sheets" />
 
-            {fileGroups.map((w) => (
-              <FileGroup key={w.id} title={w.name} href={`/f/${w.id}`} count={w.sheets.length}>
-                {w.sheets.map((c) => (
-                  <SheetLink
-                    key={c.id}
-                    id={c.id}
-                    icon={c.icon}
-                    name={c.name}
-                    count={c._count.records}
-                    nested
-                  />
-                ))}
-              </FileGroup>
-            ))}
+            {fileGroups.map((w) => {
+              const own = dashboardsByWorkbook.get(w.id) ?? [];
+              return (
+                <FileGroup
+                  key={w.id}
+                  title={w.name}
+                  href={`/f/${w.id}`}
+                  count={w.sheets.length + own.length}
+                >
+                  {w.sheets.map((c) => (
+                    <SheetLink
+                      key={c.id}
+                      id={c.id}
+                      icon={c.icon}
+                      name={c.name}
+                      count={c._count.records}
+                      nested
+                    />
+                  ))}
+                  {/* このファイルだけから作ったダッシュボードは、ファイルの持ち物。
+                      シートと同じ階層に並べる。 */}
+                  {own.map((d) => (
+                    <li key={d.id}>
+                      <NavItem href={`/d/${d.id}`} className="py-1.5">
+                        <CollectionIcon
+                          name={d.icon}
+                          className="h-4 w-4 shrink-0 text-ink-muted"
+                        />
+                        <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                      </NavItem>
+                    </li>
+                  ))}
+                </FileGroup>
+              );
+            })}
 
             {/* Sheets with no parent file. Only wrapped in 「その他」 when there is
                 an actual file tree to distinguish them from. */}
             {loose.length > 0 &&
               (fileGroups.length > 0 ? (
-                <FileGroup title="その他" count={loose.length} muted>
+                <FileGroup
+                  title="その他"
+                  count={loose.length + looseDashboards.length}
+                  muted
+                >
                   {loose.map((c) => (
                     <SheetLink
                       key={c.id}
@@ -155,6 +246,17 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
                       count={c._count.records}
                       nested
                     />
+                  ))}
+                  {looseDashboards.map((d) => (
+                    <li key={d.id}>
+                      <NavItem href={`/d/${d.id}`} className="py-1.5">
+                        <CollectionIcon
+                          name={d.icon}
+                          className="h-4 w-4 shrink-0 text-ink-muted"
+                        />
+                        <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                      </NavItem>
+                    </li>
                   ))}
                 </FileGroup>
               ) : (
@@ -173,21 +275,46 @@ export async function Sidebar({ user }: { user: CurrentUser }) {
           </details>
         )}
 
-        {/* Saved dashboards — 1枚も作っていないうちは見出しも出さない。 */}
-        {dashboards.length > 0 && (
+        {/*
+          横断ダッシュボード — 複数のExcel（あるいはデータベース）をまたぐものだけ。
+          1つのファイルしか見ていないダッシュボードは上のファイルの中にいる。
+
+          名前だけでは「何と何を結合した表なのか」が分からないので、出どころを
+          そのまま子として並べ、押せばその元データへ飛べるようにする。
+        */}
+        {crossDashboards.length > 0 && (
           <details open className="group/dash">
             <SectionSummary
-              label="ダッシュボード"
+              label="横断ダッシュボード"
               groupName="dash"
               action={{ href: "/dashboards", label: "ギャラリー" }}
             />
-            <ul className="space-y-0.5">
-              {dashboards.map((d) => (
+            <ul className="space-y-1">
+              {crossDashboards.map((d) => (
                 <li key={d.id}>
                   <NavItem href={`/d/${d.id}`}>
                     <CollectionIcon name={d.icon} className="h-4 w-4 shrink-0 text-ink-muted" />
-                    <span className="truncate">{d.name}</span>
+                    <span className="min-w-0 flex-1 truncate">{d.name}</span>
                   </NavItem>
+                  {d.sources.length > 0 && (
+                    <ul className="mb-1 ml-6 mt-0.5 space-y-0.5 border-l border-ink-line pl-2">
+                      {d.sources.map((src) => (
+                        <li key={src.key}>
+                          <Link
+                            href={src.href}
+                            title={src.name}
+                            className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-ink-muted transition-colors duration-fast hover:bg-paper-sunken hover:text-ink active:bg-ink-line"
+                          >
+                            <NavIcon
+                              name="folder"
+                              className="h-3 w-3 shrink-0 text-ink-faint"
+                            />
+                            <span className="min-w-0 flex-1 truncate">{src.name}</span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </li>
               ))}
             </ul>
