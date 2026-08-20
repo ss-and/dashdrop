@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { displayValue, isFieldType, type SelectOption } from "@/lib/field-types";
 import { Badge, toneFromColor } from "@/components/ui/Badge";
 import type { TableData } from "@/lib/widgets";
@@ -57,7 +58,13 @@ function Cell({ col, value }: { col: Column; value: unknown }) {
 const NUMERIC = new Set(["number", "currency"]);
 
 export function DataTable({ data }: { data: TableData }) {
-  const { columns, rows } = data;
+  const { columns, rows, rowIds, collectionId } = data;
+  /*
+   * 行からレコードを開けるようにする。利用者の指摘「ドリルダウンもできずに、
+   * どの案件なのかも全くわからないから使い物にならない」への直接の答え。
+   * 明細表が読むだけの箱だと、気になった行の続きがどこにも無い。
+   */
+  const linkable = Boolean(collectionId && rowIds && rowIds.length === rows.length);
 
   if (columns.length === 0 || rows.length === 0) {
     return (
@@ -82,21 +89,49 @@ export function DataTable({ data }: { data: TableData }) {
                 {c.name}
               </th>
             ))}
+            {linkable && <th className="w-10 border-b border-ink-line" />}
           </tr>
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={i} className="hover:bg-paper-sunken/50">
-              {columns.map((c) => (
+            <tr
+              key={i}
+              className={
+                linkable
+                  ? "group transition-colors duration-fast hover:bg-khaki-50"
+                  : "hover:bg-paper-sunken/50"
+              }
+            >
+              {columns.map((c, ci) => (
                 <td
                   key={c.key}
                   className={`whitespace-nowrap border-b border-ink-line px-3 py-2 text-ink ${
                     NUMERIC.has(c.type) ? "text-right tabular-nums" : "text-left"
                   }`}
                 >
-                  <Cell col={c} value={row[c.key]} />
+                  {linkable && ci === 0 ? (
+                    <Link
+                      href={`/r/${collectionId}/${rowIds![i]}`}
+                      className="font-medium text-ink hover:text-khaki-700 hover:underline"
+                    >
+                      <Cell col={c} value={row[c.key]} />
+                    </Link>
+                  ) : (
+                    <Cell col={c} value={row[c.key]} />
+                  )}
                 </td>
               ))}
+              {linkable && (
+                <td className="border-b border-ink-line px-2 text-right">
+                  <Link
+                    href={`/r/${collectionId}/${rowIds![i]}`}
+                    aria-label="この行を開く"
+                    className="text-ink-faint opacity-0 transition-opacity group-hover:opacity-100 hover:text-khaki-700"
+                  >
+                    ›
+                  </Link>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

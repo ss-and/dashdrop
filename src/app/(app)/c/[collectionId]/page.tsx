@@ -25,19 +25,32 @@ import { AutoDashboardButton } from "@/components/dashboard/AutoDashboardButton"
 import { SheetTabs } from "@/components/sheet/SheetTabs";
 import { AnalyzeView } from "@/components/sheet/AnalyzeView";
 
+/** 絞り込み時に読む最大行数。全件読みにしないための上限。 */
+const DRILL_SCAN_LIMIT = 5000;
+
 export default async function CollectionPage({
   params,
   searchParams,
 }: {
   params: Promise<{ collectionId: string }>;
-  searchParams: Promise<{ view?: string }>;
+  searchParams: Promise<{ view?: string; f?: string; v?: string }>;
 }) {
   const user = await getSession();
   if (!user) redirect("/login");
 
   const { collectionId } = await params;
-  const { view } = await searchParams;
+  const { view, f: filterField, v: filterValue } = await searchParams;
   const isAnalyze = view === "analyze";
+  /**
+   * ダッシュボードからの絞り込み（?f=列キー&v=値）。
+   *
+   * グラフのひと切れを押したときに、その内訳の行だけを開くための入口。これが
+   * 無いと「フェーズBが3,600万」で終わってしまい、どの案件なのかに辿り着けない。
+   */
+  const drill =
+    filterField && filterValue !== undefined
+      ? { field: filterField, value: filterValue }
+      : null;
 
   let collection: Awaited<ReturnType<typeof getCollectionForUser>>;
   try {
@@ -56,18 +69,30 @@ export default async function CollectionPage({
 
   /** Everything only the 表 tab needs — skipped entirely on the 分析 tab. */
   async function loadGrid() {
+    /*
+     * 絞り込み中は多めに読んでからアプリ側で突き合わせる。値は JSON の中にあり、
+     * SQLite では Prisma の JSON パス検索が使えないため、DB 側では絞れない。
+     * 上限つきなので、巨大なシートでも読み切りにはならない。
+     */
     const records = await db.record.findMany({
       where: { collectionId: collection.id },
       orderBy: { createdAt: "desc" },
-      take: 100,
+      take: drill ? DRILL_SCAN_LIMIT : 100,
       select: { id: true, data: true },
     });
+
+    const matched = drill
+      ? records.filter((r) => {
+          const v = (r.data as Record<string, unknown>)?.[drill.field];
+          return v !== null && v !== undefined && String(v) === drill.value;
+        })
+      : records;
 
     // Resolve cross-spreadsheet lookup/rollup values + relation labels.
     const resolved = await resolveCollectionRecords(
       user!.workspace.id,
       collection as unknown as EngineCollection,
-      records.map((r) => ({
+      matched.slice(0, 200).map((r) => ({
         id: r.id,
         data: (r.data as Record<string, unknown>) ?? {},
       })),
@@ -193,6 +218,31 @@ export default async function CollectionPage({
                 )}
               </div>
             )}
+
+          {/*
+            ダッシュボードから飛んできたときの絞り込み表示。何で絞られているのかと、
+            解除の導線を必ず出す。出さないと「行が少ない表」に見えてしまう。
+          */}
+          {drill && gridData && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-khaki-300 bg-khaki-50 px-3 py-2 text-sm">
+              <span className="text-ink-soft">絞り込み中:</span>
+              <span className="font-medium text-ink">
+                {collection.fields.find((f) => f.key === drill.field)?.name ??
+                  drill.field}
+                {" = "}
+                {drill.value}
+              </span>
+              <span className="text-ink-muted">
+                {gridData.resolved.records.length} 件
+              </span>
+              <Link
+                href={`/c/${collection.id}`}
+                className="ml-auto font-medium text-khaki-700 hover:underline"
+              >
+                絞り込みを解除
+              </Link>
+            </div>
+          )}
 
           {gridData ? (
             <DataGrid

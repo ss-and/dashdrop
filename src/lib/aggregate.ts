@@ -27,6 +27,12 @@ export interface AggRecord {
 export interface AggCollection {
   slug: string;
   name: string;
+  /**
+   * スプレッドシートの実体ID。ウィジェットから「その明細を開く」ためのリンクに
+   * 使う。slug は URL に出せるが、レコード画面もグリッドも id で引くので、
+   * ここまで持ち回らないとダッシュボードが行き止まりになる。
+   */
+  id?: string;
   fields: Array<{
     key: string;
     name: string;
@@ -460,11 +466,44 @@ function uniqueSeriesLabels(labels: string[]): string[] {
  */
 function computeSeries(w: SeriesWidget, col: AggCollection, now: Date): WidgetData {
   const bucket = w.bucket;
-  const currentStart = bucketStart(now, bucket);
+  const rows = applyFilters(col.records, w.filters);
+
+  /*
+   * 窓の右端と本数を決める。
+   *
+   * 既定は「今日まで」。ただし取り込んだ表は未来の日付を持っていることが多く
+   * （完了予定日・納期・支払期日）、今日で切ると全部が窓の外に落ちる。
+   * anchor: "data" のときはデータ自身の範囲に合わせ、持っている期間だけを出す。
+   */
+  let currentStart = bucketStart(now, bucket);
+  let count = w.rangeCount;
+
+  if (w.anchor === "data") {
+    let minMs: number | null = null;
+    let maxMs: number | null = null;
+    for (const r of rows) {
+      const d = recordDate(r, w.dateField);
+      if (!d) continue;
+      const ms = bucketStartMs(d, bucket);
+      if (minMs === null || ms < minMs) minMs = ms;
+      if (maxMs === null || ms > maxMs) maxMs = ms;
+    }
+    if (maxMs !== null && minMs !== null) {
+      currentStart = new Date(maxMs);
+      // min から max までが何バケットあるか数え、上限で頭打ちにする。
+      let span = 1;
+      let cursor = new Date(minMs);
+      while (cursor.getTime() < maxMs && span < w.rangeCount) {
+        cursor = addBucket(cursor, bucket, 1);
+        span += 1;
+      }
+      count = Math.max(2, span);
+    }
+  }
 
   // Build the ordered list of bucket starts (oldest → newest).
   const starts: number[] = [];
-  for (let i = w.rangeCount - 1; i >= 0; i--) {
+  for (let i = count - 1; i >= 0; i--) {
     starts.push(addBucket(currentStart, bucket, -i).getTime());
   }
   const indexOfStart = new Map<number, number>();
@@ -476,7 +515,7 @@ function computeSeries(w: SeriesWidget, col: AggCollection, now: Date): WidgetDa
     w.measures.map(() => emptyBucket()),
   );
 
-  for (const r of applyFilters(col.records, w.filters)) {
+  for (const r of rows) {
     const d = recordDate(r, w.dateField);
     if (!d) continue;
     const bi = indexOfStart.get(bucketStartMs(d, bucket));
@@ -557,10 +596,18 @@ function computeBreakdown(w: BreakdownWidget, col: AggCollection): WidgetData {
     value: number;
     color?: string;
     synthetic?: boolean;
+    key?: string;
   }> = head.map(
     (e) => {
       const meta = optionMeta.get(e.key);
-      return { label: meta?.label ?? e.key, value: e.value, color: meta?.color };
+      // `key` は絞り込み用の生キー。表示ラベルは選択肢名に置き換わるので、
+      // ラベルで絞り込むと選択肢型の列で一致しなくなる。
+      return {
+        label: meta?.label ?? e.key,
+        value: e.value,
+        color: meta?.color,
+        key: e.key,
+      };
     },
   );
 
@@ -587,6 +634,8 @@ function computeBreakdown(w: BreakdownWidget, col: AggCollection): WidgetData {
     total: round2(
       bucketValue(mergeBuckets(entries.map((e) => e.bucket)), w.measure.kind) ?? 0,
     ),
+    groupBy: w.groupBy,
+    collectionId: col.id,
   };
 }
 
@@ -643,6 +692,10 @@ function computeTable(w: TableWidget, col: AggCollection): WidgetData {
       for (const c of w.columns) out[c] = r.data[c];
       return out;
     }),
+    // 行から実レコードへ辿れるようにする。「どの案件なのか全く分からない」という
+    // 指摘の直接の答えで、明細表が読むだけの箱で終わらなくなる。
+    rowIds: rows.map((r) => r.id),
+    collectionId: col.id,
   };
 }
 

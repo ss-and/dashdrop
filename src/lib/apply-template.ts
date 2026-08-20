@@ -21,6 +21,8 @@ import {
   type WidgetSpec,
 } from "./widgets";
 import { autoLayout, type AutoSheet } from "./widget-builder";
+import { profileFields } from "./data-profile";
+import { autoLayoutFromProfiles, type ProfiledSheet } from "./auto-layout";
 import type { CurrentUser } from "./auth";
 import type { AggCollection, CollectionMap } from "./aggregate";
 import {
@@ -239,6 +241,9 @@ export async function createCustomDashboard(
  * imported file (workbook) or a single sheet, using autoLayout heuristics.
  * Returns the new dashboard id + name so the caller can navigate to it.
  */
+/** 傾向を掴むのに十分な行数。全件読む必要はない。 */
+const AUTO_PROFILE_SAMPLE = 5000;
+
 export async function createAutoDashboard(
   user: CurrentUser,
   opts: { workbookId?: string; collectionId?: string },
@@ -283,7 +288,41 @@ export async function createAutoDashboard(
     throw new ApiError("対象が指定されていません", 400);
   }
 
-  const layout = autoLayout(sheets);
+  /*
+   * 列の中身を数えてから組み立てる。
+   *
+   * 列名と型だけで決めていたときは、`案件ID` を軸にドーナツを作り（全部1件の
+   * スライス）、値の無い数式列を合計して 0 を並べていた。1行読めば分かることを
+   * 読まずに推測していたのが原因なので、ここでレコードを取り、統計を渡す。
+   * 行数は上限つき——傾向を見るのに全件は要らない。
+   */
+  const profiled: ProfiledSheet[] = [];
+  for (const sheet of sheets) {
+    const collection = await db.collection.findFirst({
+      where: { workspaceId, slug: sheet.slug },
+      select: { id: true },
+    });
+    if (!collection) continue;
+    const records = await db.record.findMany({
+      where: { collectionId: collection.id },
+      select: { data: true },
+      take: AUTO_PROFILE_SAMPLE,
+    });
+    const rows = records.map(
+      (r) => (r.data as Record<string, unknown>) ?? {},
+    );
+    profiled.push({
+      slug: sheet.slug,
+      name: sheet.name,
+      rowCount: rows.length,
+      fields: profileFields(rows, sheet.fields),
+    });
+  }
+
+  // 中身が読めたときはそれを使い、読めなければ従来の型ベースに落とす。
+  const layout = profiled.some((p) => p.rowCount > 0)
+    ? autoLayoutFromProfiles(profiled)
+    : autoLayout(sheets);
   if (layout.length === 0) {
     throw new ApiError(
       "自動作成できる項目が見つかりませんでした。ビルダーから手動で作成してください。",
@@ -391,6 +430,7 @@ export async function loadDashboardCollections(
     const agg: AggCollection = {
       slug: c.slug,
       name: c.name,
+      id: c.id,
       fields: c.fields.map((f) => ({
         key: f.key,
         name: f.name,

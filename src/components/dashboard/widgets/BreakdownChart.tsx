@@ -1,5 +1,8 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+
 import {
   ResponsiveContainer,
   PieChart,
@@ -47,8 +50,23 @@ const tooltipStyle = {
 } as const;
 
 export function BreakdownChart({ data }: { data: BreakdownData }) {
-  const { type, slices, total } = data;
+  const { type, slices, total, groupBy, collectionId } = data;
   const empty = slices.length === 0 || total === 0;
+  const router = useRouter();
+
+  /*
+   * ひと切れ押したら、その内訳の行を開く。
+   *
+   * 「フェーズB が 3,600万」で終わってしまうと、どの案件なのかに辿り着けない。
+   * 残余（その他）は複数の値をまとめた合成なので、絞り込み先が定まらず押せない。
+   */
+  const canDrill = Boolean(groupBy && collectionId);
+  const drillTo = (slice: { key?: string; synthetic?: boolean }) => {
+    if (!canDrill || slice.synthetic || slice.key === undefined) return;
+    router.push(
+      `/c/${collectionId}?f=${encodeURIComponent(groupBy!)}&v=${encodeURIComponent(slice.key)}`,
+    );
+  };
 
   if (empty) {
     return (
@@ -87,10 +105,24 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
               tick={{ fill: TEXT, fontSize: 12 }}
               tickLine={false}
               axisLine={false}
-              width={96}
+              /*
+               * 日本語の会社名は 96px では頭が切れて「ィンテック・ラボ」のように
+               * 読めなくなる。幅を広げ、それでも溢れる分だけ末尾を省略する。
+               */
+              width={150}
+              tickFormatter={(v: string) =>
+                v.length > 11 ? `${v.slice(0, 10)}…` : v
+              }
             />
             <Tooltip cursor={{ fill: "rgba(138,130,80,0.06)" }} contentStyle={tooltipStyle} />
-            <Bar dataKey="value" radius={[0, 2, 2, 0]} maxBarSize={26} isAnimationActive={false}>
+            <Bar
+              dataKey="value"
+              radius={[0, 2, 2, 0]}
+              maxBarSize={26}
+              isAnimationActive={false}
+              onClick={(_: unknown, index: number) => drillTo(rows[index])}
+              cursor={canDrill ? "pointer" : undefined}
+            >
               {rows.map((r) => (
                 <Cell key={r.label} fill={r.fill} />
               ))}
@@ -108,7 +140,7 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
 
   // Donut
   const rows = slices.map((s, i) => ({ ...s, fill: hexFor(s.color, i) }));
-  return (
+  const chart = (
     <div className="relative h-56 w-full">
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
@@ -124,6 +156,8 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
             startAngle={90}
             endAngle={-270}
             isAnimationActive={false}
+            onClick={(_: unknown, index: number) => drillTo(rows[index])}
+            cursor={canDrill ? "pointer" : undefined}
           >
             {rows.map((r) => (
               <Cell key={r.label} fill={r.fill} />
@@ -139,6 +173,55 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
         </span>
         <span className="text-2xs uppercase tracking-wide text-ink-muted">合計</span>
       </div>
+    </div>
+  );
+
+  /*
+   * 凡例。色だけ塗られた円は「どの色がどのフェーズか」が分からず読めない。
+   * ここを本物のリンクにすることで、読めるようにするのと、明細へ辿れるように
+   * するのを同時に片付ける（円弧そのもののクリックは、ドーナツの穴の上では
+   * 当たらないので、これが確実な導線になる）。
+   */
+  const legend = (
+    <ul className="mt-2 space-y-0.5">
+      {rows.map((r) => {
+        const label = (
+          <>
+            <span
+              aria-hidden="true"
+              className="h-2.5 w-2.5 shrink-0 rounded-sm"
+              style={{ backgroundColor: r.fill }}
+            />
+            <span className="min-w-0 flex-1 truncate">{r.label}</span>
+            <span className="shrink-0 tabular-nums text-ink-muted">
+              {formatNumber(r.value, Number.isInteger(r.value) ? 0 : 1)}
+            </span>
+          </>
+        );
+        const cls =
+          "flex items-center gap-2 rounded px-2 py-1 text-sm text-ink-soft";
+        return (
+          <li key={r.label}>
+            {canDrill && !r.synthetic && r.key !== undefined ? (
+              <Link
+                href={`/c/${collectionId}?f=${encodeURIComponent(groupBy!)}&v=${encodeURIComponent(r.key)}`}
+                className={`${cls} transition-colors duration-fast hover:bg-paper-sunken hover:text-ink active:bg-ink-line`}
+              >
+                {label}
+              </Link>
+            ) : (
+              <span className={cls}>{label}</span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+
+  return (
+    <div>
+      {chart}
+      {legend}
     </div>
   );
 }

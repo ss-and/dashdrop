@@ -84,6 +84,18 @@ export const seriesWidgetSchema = baseWidget.extend({
   dateField: z.string().optional(), // defaults to createdAt
   bucket: z.enum(["day", "week", "month"]).default("day"),
   rangeCount: z.number().int().min(2).max(60).default(14),
+  /**
+   * 期間の合わせ先。
+   *
+   * "now"（既定）は「今日までの直近 rangeCount 期間」。運用中の記録を見るには
+   * これで良いが、取り込んだ表には**未来の日付**が普通に入っている（完了予定日・
+   * 納期・支払期日）。実際、営業案件Excelでは完了予定日が全件未来だったため、
+   * 窓の外に落ちて棒が1本しか立たなかった。
+   *
+   * "data" はデータ自身の範囲に窓を合わせる。過去だけの表も未来だけの表も、
+   * 持っている期間がそのまま出る。
+   */
+  anchor: z.enum(["now", "data"]).optional(),
   measures: z.array(seriesMeasureSchema).min(1).max(4),
   stacked: z.boolean().optional(),
 });
@@ -226,8 +238,16 @@ export interface BreakdownData {
      * 本物の「その他」までドリルダウン不可にしてしまう。
      */
     synthetic?: boolean;
+    /**
+     * 絞り込みに使う生のキー（表示ラベルではない）。選択肢型の列ではラベルが
+     * 選択肢名に置き換わるため、ラベルで絞ると一致しない。残余（その他）には無い。
+     */
+    key?: string;
   }>;
   total: number;
+  /** 絞り込み先を組み立てるための情報。 */
+  groupBy?: string;
+  collectionId?: string;
 }
 export interface TableData {
   type: "table";
@@ -238,6 +258,10 @@ export interface TableData {
     options?: SelectOption[] | null;
   }>;
   rows: Array<Record<string, unknown>>;
+  /** 行を開くためのレコードID（`rows` と同じ並び）。 */
+  rowIds?: string[];
+  /** 行のリンク先を組み立てるためのスプレッドシートID。 */
+  collectionId?: string;
 }
 export interface PivotData {
   type: "pivot";

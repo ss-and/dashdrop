@@ -247,6 +247,28 @@ function isEmptyRow(row: unknown[]): boolean {
   return !row || row.every((c) => cellToString(c) === "");
 }
 
+/**
+ * 表の末尾に付く「合計」行かどうか。
+ *
+ * 日本の業務Excelはほぼ必ず最終行に 合計 / 小計 / 総計 / 平均 を置く。これを明細
+ * として取り込むと、件数が1件増え、平均が狂い、明細表に中身の無い行が現れる。
+ * 実データ（営業案件管理）でも 10案件が 11件として集計されていた。
+ *
+ * 「見出しっぽい語が1つ入っていて、他はほとんど空」を条件にする。金額の入った
+ * 集計行（合計 / 12,000,000）は誤検出したくないので、**埋まっている列が全体の
+ * 半分未満** のときだけ落とす。データ行の1列目にたまたま「合計」と書いてある
+ * ケース（埋まっている列が多い）は残る。
+ */
+const TOTAL_ROW_LABEL = /^(合計|小計|総計|累計|平均|総合計|計)([\s\/／・]|$)|^total$|^subtotal$|^sum$|^average$/i;
+
+function isTotalRow(row: unknown[]): boolean {
+  const filled = row.filter((c) => cellToString(c) !== "");
+  if (filled.length === 0) return false;
+  // 半分以上の列が埋まっていれば、それは普通のデータ行。
+  if (filled.length >= Math.ceil(row.length / 2)) return false;
+  return row.some((c) => TOTAL_ROW_LABEL.test(cellToString(c)));
+}
+
 /** 2桁ゼロ埋め。 */
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
@@ -549,6 +571,8 @@ function readSheetFromWorkbook(
   for (let r = headerRowIndex + 1; r <= lastRow; r++) {
     const rawRow = readRow(ws, r, colNames);
     if (isEmptyRow(rawRow)) continue;
+    // 「合計 / 平均」行は明細ではない。件数と平均を静かに狂わせるので落とす。
+    if (isTotalRow(rawRow)) continue;
     if (rows.length >= maxRows) {
       // 予算を超える「実データの行」が存在した ＝ 確実に打ち切っている。
       truncated = true;
