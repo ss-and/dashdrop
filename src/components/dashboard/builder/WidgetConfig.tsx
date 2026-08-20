@@ -69,8 +69,28 @@ export function WidgetConfig({ widget, sheets, onChange }: Props) {
   function onSheetChange(slug: string) {
     const next = sheets.find((s) => s.slug === slug);
     const rebuilt = newWidget(widget.type, slug, next?.fields ?? []);
+    /*
+     * 見た目を決める指定は、データ元を替えても引き継ぐ。
+     *
+     * `newWidget` は種類ごとの既定を作り直すので、そのまま差し替えると
+     * 「100%積み上げ」で作った棒がただの棒に戻り、バブルの大きさが消える。
+     * 利用者はデータ元を替えただけのつもりなので、勝手に図が変わると混乱する。
+     * 参照している列は替わった先には無いかもしれないので、列そのものではなく
+     * **表示の指定**だけを引き継ぐ。
+     */
+    const keep: Partial<WidgetSpec> = {};
+    if ("stackMode" in widget && widget.stackMode) {
+      (keep as { stackMode?: unknown }).stackMode = widget.stackMode;
+      (keep as { stacked?: unknown }).stacked = true;
+    }
     // Preserve identity, span, and the user's title.
-    onChange({ ...rebuilt, id: widget.id, span: widget.span, title: widget.title });
+    onChange({
+      ...rebuilt,
+      ...keep,
+      id: widget.id,
+      span: widget.span,
+      title: widget.title,
+    } as WidgetSpec);
   }
 
   return (
@@ -347,7 +367,220 @@ export function WidgetConfig({ widget, sheets, onChange }: Props) {
               </p>
             )}
           </div>
+          {/*
+            100% 表示は積み上がっているときだけ出す。1本しかない棒を
+            100% に伸ばしても、常に全部が1色になるだけで意味がない。
+          */}
+          {(widget.stacked || widget.splitBy) && widget.type !== "combo" && (
+            <label className="flex items-center gap-2 text-sm text-ink-soft">
+              <input
+                type="checkbox"
+                checked={widget.stackMode === "percent"}
+                onChange={(e) =>
+                  onChange({
+                    ...widget,
+                    stacked: true,
+                    stackMode: e.target.checked ? "percent" : undefined,
+                  })
+                }
+                className="h-4 w-4 rounded border-ink-rule"
+              />
+              100%表示にする（実数ではなく構成比の推移）
+            </label>
+          )}
         </>
+      )}
+
+      {widget.type === "gauge" && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor={`${idp}-agg`}>集計</Label>
+            <Select
+              id={`${idp}-agg`}
+              className="h-9"
+              value={widget.measure.kind}
+              onChange={(e) =>
+                onChange({
+                  ...widget,
+                  measure: buildMeasure(
+                    e.target.value as Measure["kind"],
+                    fieldOf(widget.measure) ?? nums[0]?.key,
+                  ),
+                })
+              }
+            >
+              {MEASURE_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>
+                  {k.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          {widget.measure.kind !== "count" && (
+            <div>
+              <Label htmlFor={`${idp}-field`}>対象項目</Label>
+              <Select
+                id={`${idp}-field`}
+                className="h-9"
+                value={fieldOf(widget.measure) ?? ""}
+                onChange={(e) =>
+                  onChange({
+                    ...widget,
+                    measure: buildMeasure(widget.measure.kind, e.target.value),
+                  })
+                }
+              >
+                {nums.length === 0 && <option value="">数値項目なし</option>}
+                {nums.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          )}
+          <div>
+            <Label htmlFor={`${idp}-target`}>目標値</Label>
+            <Input
+              id={`${idp}-target`}
+              type="number"
+              className="h-9"
+              value={String(widget.target)}
+              onChange={(e) =>
+                onChange({
+                  ...widget,
+                  // 空欄や文字が入ったときに NaN を仕様へ入れない。
+                  target: Number.isFinite(Number(e.target.value))
+                    ? Number(e.target.value)
+                    : 0,
+                })
+              }
+            />
+          </div>
+          <div>
+            <Label htmlFor={`${idp}-unit`}>単位</Label>
+            <Select
+              id={`${idp}-unit`}
+              className="h-9"
+              value={widget.unit ?? "number"}
+              onChange={(e) =>
+                onChange({ ...widget, unit: e.target.value as Unit })
+              }
+            >
+              {UNITS.map((u) => (
+                <option key={u.value} value={u.value}>
+                  {u.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <label className="col-span-2 flex items-center gap-2 text-sm text-ink-soft">
+            <input
+              type="checkbox"
+              checked={widget.lowerIsBetter ?? false}
+              onChange={(e) =>
+                onChange({ ...widget, lowerIsBetter: e.target.checked })
+              }
+              className="h-4 w-4 rounded border-ink-rule"
+            />
+            小さいほど良い（コスト・リードタイムなど）
+          </label>
+        </div>
+      )}
+
+      {widget.type === "waterfall" && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor={`${idp}-group`}>分解する軸</Label>
+            <Select
+              id={`${idp}-group`}
+              className="h-9"
+              value={widget.groupBy}
+              onChange={(e) => onChange({ ...widget, groupBy: e.target.value })}
+            >
+              {groups.length === 0 && <option value="">項目なし</option>}
+              {groups.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor={`${idp}-agg`}>集計</Label>
+            <Select
+              id={`${idp}-agg`}
+              className="h-9"
+              value={widget.measure.kind}
+              onChange={(e) =>
+                onChange({
+                  ...widget,
+                  measure: buildMeasure(
+                    e.target.value as Measure["kind"],
+                    fieldOf(widget.measure) ?? nums[0]?.key,
+                  ),
+                })
+              }
+            >
+              {MEASURE_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>
+                  {k.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          {widget.measure.kind !== "count" && (
+            <div>
+              <Label htmlFor={`${idp}-field`}>対象項目</Label>
+              <Select
+                id={`${idp}-field`}
+                className="h-9"
+                value={fieldOf(widget.measure) ?? ""}
+                onChange={(e) =>
+                  onChange({
+                    ...widget,
+                    measure: buildMeasure(widget.measure.kind, e.target.value),
+                  })
+                }
+              >
+                {nums.length === 0 && <option value="">数値項目なし</option>}
+                {nums.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          )}
+          <div>
+            <Label htmlFor={`${idp}-order`}>並び順</Label>
+            <Select
+              id={`${idp}-order`}
+              className="h-9"
+              value={widget.order ?? "value"}
+              onChange={(e) =>
+                onChange({
+                  ...widget,
+                  order: e.target.value as "value" | "label",
+                })
+              }
+            >
+              <option value="value">大きい順（押し上げた順に読む）</option>
+              <option value="label">項目の順（売上→原価→利益など）</option>
+            </Select>
+          </div>
+          <label className="col-span-2 flex items-center gap-2 text-sm text-ink-soft">
+            <input
+              type="checkbox"
+              checked={widget.showTotal}
+              onChange={(e) =>
+                onChange({ ...widget, showTotal: e.target.checked })
+              }
+              className="h-4 w-4 rounded border-ink-rule"
+            />
+            最後に合計の段を置く
+          </label>
+        </div>
       )}
 
       {widget.type === "funnel" && (
@@ -450,6 +683,24 @@ export function WidgetConfig({ widget, sheets, onChange }: Props) {
               >
                 <option value="">分けない</option>
                 {groups.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor={`${idp}-ssize`}>点の大きさ</Label>
+              <Select
+                id={`${idp}-ssize`}
+                className="h-9"
+                value={widget.sizeField ?? ""}
+                onChange={(e) =>
+                  onChange({ ...widget, sizeField: e.target.value || undefined })
+                }
+              >
+                <option value="">一定（ふつうの散布図）</option>
+                {nums.map((f) => (
                   <option key={f.key} value={f.key}>
                     {f.name}
                   </option>

@@ -6,6 +6,8 @@ import { BreakdownChart } from "./widgets/BreakdownChart";
 import { DataTable } from "./widgets/DataTable";
 import { PivotTable } from "./widgets/PivotTable";
 import { ScatterPlot } from "./widgets/ScatterPlot";
+import { GaugeTile } from "./widgets/GaugeTile";
+import { WaterfallChart } from "./widgets/WaterfallChart";
 import { PaletteProvider } from "./PaletteContext";
 
 /**
@@ -48,6 +50,10 @@ function WidgetBody({ data }: { data: WidgetData }) {
       return <PivotTable data={data} />;
     case "scatter":
       return <ScatterPlot data={data} />;
+    case "gauge":
+      return <GaugeTile data={data} />;
+    case "waterfall":
+      return <WaterfallChart data={data} />;
     default:
       return (
         <div className="flex h-24 items-center justify-center text-sm text-ink-faint">

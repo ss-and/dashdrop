@@ -16,6 +16,11 @@ import type {
   HeatmapWidget,
   ScatterWidget,
   HistogramWidget,
+  GaugeWidget,
+  GaugeData,
+  WaterfallWidget,
+  WaterfallData,
+  WaterfallStep,
   SeriesData,
   Unit,
 } from "./widgets";
@@ -451,6 +456,149 @@ function computeKpi(w: KpiWidget, col: AggCollection, now: Date): WidgetData {
   };
 }
 
+/**
+ * ゲージ — 目標に対する進捗。
+ *
+ * 達成度の計算だけをここで済ませ、描く側には「大きいほど良い」形で渡す。
+ * 「小さいほど良い」（コスト・リードタイム・不良率）の反転を各レンダラーに
+ * 任せると、片方だけ直し忘れたときに**超過が達成の色で塗られる**——
+ * しかも数字は合っているので、見た人は間違いに気づけない。
+ */
+function computeGauge(w: GaugeWidget, col: AggCollection): GaugeData {
+  const base = applyFilters(col.records, w.filters);
+  const value = round2(computeMeasure(base, w.measure));
+  const unit: Unit = w.unit ?? "number";
+  const lowerIsBetter = w.lowerIsBetter ?? false;
+
+  /*
+   * 目標が 0 のときは割り算が定義できない。0 を返すと「まったく達していない」、
+   * 1 を返すと「達成」に見えるが、どちらも嘘なので null にして
+   * 描く側に「達成度は出せない」と伝える。
+   */
+  let ratio: number | null = null;
+  if (w.target !== 0) {
+    ratio = lowerIsBetter ? w.target / (value || w.target) : value / w.target;
+    if (!Number.isFinite(ratio)) ratio = null;
+  }
+
+  return {
+    type: "gauge",
+    value,
+    target: w.target,
+    unit,
+    ratio: ratio === null ? null : round2(ratio),
+    lowerIsBetter,
+  };
+}
+
+/**
+ * ウォーターフォール — 増減の内訳。
+ *
+ * 各段は「前の段の終わりから、いくつ動いたか」を表す。内訳の合計と最後の
+ * 合計段が一致することが、この図の唯一の約束——ここがずれると、読んだ人は
+ * 「足りない分はどこへ行ったのか」を延々と探すことになる。だから残余（その他）も
+ * 必ず段として置き、畳んだ分を黙って捨てない。
+ */
+function computeWaterfall(w: WaterfallWidget, col: AggCollection): WaterfallData {
+  const filtered = applyFilters(col.records, w.filters);
+  const field = col.fields.find((f) => f.key === w.groupBy);
+  const optionMeta = new Map((field?.options ?? []).map((o) => [o.value, o]));
+
+  const groups = new Map<string, MeasureBucket>();
+  for (const r of filtered) {
+    const v = contributionOf(r, w.measure);
+    if (v === null) continue;
+    for (const k of bucketKeys(r.data[w.groupBy])) {
+      let b = groups.get(k);
+      if (!b) {
+        b = emptyBucket();
+        groups.set(k, b);
+      }
+      addValue(b, v);
+    }
+  }
+
+  const entries = Array.from(groups.entries()).map(([key, bucket]) => ({
+    key,
+    label: optionMeta.get(key)?.label ?? key,
+    value: round2(bucketValue(bucket, w.measure.kind) ?? 0),
+  }));
+
+  /*
+   * 並び順。既定は押し上げた順（大きい順）で読めるようにする。
+   * "label" は費目の定義順（選択肢の順、なければラベル順）。売上→原価→販管費の
+   * ように**順序に意味がある**分解では、大きい順に並べ替えると図が壊れる。
+   */
+  if (w.order === "label") {
+    const optionIndex = new Map(
+      (field?.options ?? []).map((o, i) => [o.value, i] as const),
+    );
+    entries.sort((a, b) => {
+      const ai = optionIndex.get(a.key);
+      const bi = optionIndex.get(b.key);
+      if (ai !== undefined && bi !== undefined) return ai - bi;
+      if (ai !== undefined) return -1;
+      if (bi !== undefined) return 1;
+      return a.label.localeCompare(b.label, "ja");
+    });
+  } else {
+    entries.sort((a, b) => b.value - a.value);
+  }
+
+  const overflow = entries.length > w.limit;
+  const head = overflow ? entries.slice(0, w.limit - 1) : entries;
+  const tail = overflow ? entries.slice(w.limit - 1) : [];
+
+  const steps: WaterfallStep[] = [];
+  let running = 0;
+  const push = (
+    label: string,
+    value: number,
+    extra: { synthetic?: boolean; key?: string } = {},
+  ) => {
+    const start = running;
+    running = round2(running + value);
+    steps.push({
+      label,
+      value,
+      start: Math.min(start, running),
+      end: Math.max(start, running),
+      kind: value < 0 ? "decrease" : "increase",
+      ...extra,
+    });
+  };
+
+  for (const e of head) push(e.label, e.value, { key: e.key });
+  if (tail.length > 0) {
+    push(
+      otherLabelFor(new Set(steps.map((s) => s.label))),
+      round2(tail.reduce((n, e) => n + e.value, 0)),
+      { synthetic: true },
+    );
+  }
+
+  const total = running;
+  if (w.showTotal) {
+    steps.push({
+      label: "合計",
+      value: total,
+      start: Math.min(0, total),
+      end: Math.max(0, total),
+      kind: "total",
+      synthetic: true,
+    });
+  }
+
+  return {
+    type: "waterfall",
+    steps,
+    total,
+    unit: w.unit ?? "number",
+    groupBy: w.groupBy,
+    collectionId: col.id,
+  };
+}
+
 /** points の中で横軸が使う予約キー。系列名がこれと衝突すると軸が消える。 */
 const X_KEY = "x";
 
@@ -701,6 +849,14 @@ function computeSeries(w: SeriesWidget, col: AggCollection, now: Date): WidgetDa
     points,
     // 区分別は積み上げが既定。1本ずつ重ねて描くと、色が重なって読めない。
     stacked: w.stacked ?? (w.splitBy ? true : undefined),
+    /*
+     * 100% 表示は積み上げていないと意味を持たない（1本を100%に伸ばしても
+     * 常に全部が1色になる）。積み上がっているときだけ通す。
+     */
+    stackMode:
+      (w.stacked ?? Boolean(w.splitBy)) && w.stackMode === "percent"
+        ? "percent"
+        : undefined,
     series: defs.map((sm, i) => ({
       label: labels[i],
       color: sm.color,
@@ -1007,6 +1163,7 @@ function computeScatter(w: ScatterWidget, col: AggCollection): WidgetData {
   const raw: Array<{
     x: number;
     y: number;
+    z?: number;
     label: string;
     id: string;
     groupKey?: string;
@@ -1017,10 +1174,17 @@ function computeScatter(w: ScatterWidget, col: AggCollection): WidgetData {
     const y = toNumber(r.data[w.yField]);
     // どちらか一方でも数値として読めない行は、置く場所が決まらない。
     if (x === null || y === null) continue;
+    /*
+     * 大きさ（バブル）。読めない行は落とさず、大きさだけ無しにする。
+     * 3本目が欠けていることと、置く場所が決まらないことは別の話で、
+     * ここで落とすと「金額が未入力の案件だけ図から消える」ことになる。
+     */
+    const z = w.sizeField ? (toNumber(r.data[w.sizeField]) ?? undefined) : undefined;
     const labelRaw = w.labelField ? r.data[w.labelField] : null;
     raw.push({
       x,
       y,
+      z: z === undefined ? undefined : Math.max(0, z),
       label:
         labelRaw === null || labelRaw === undefined || labelRaw === ""
           ? ""
@@ -1062,6 +1226,7 @@ function computeScatter(w: ScatterWidget, col: AggCollection): WidgetData {
     points: shown.map((p) => ({
       x: p.x,
       y: p.y,
+      z: p.z,
       label: p.label,
       id: p.id,
       group:
@@ -1076,6 +1241,8 @@ function computeScatter(w: ScatterWidget, col: AggCollection): WidgetData {
     yLabel: nameOf(w.yField),
     xUnit: w.xUnit ?? "number",
     yUnit: w.yUnit ?? "number",
+    sizeLabel: w.sizeField ? nameOf(w.sizeField) : undefined,
+    sizeUnit: w.sizeField ? (w.sizeUnit ?? "number") : undefined,
     collectionId: col.id,
     omitted: raw.length - shown.length,
   };
@@ -1183,6 +1350,22 @@ export function computeWidget(
         return { type: widget.type, slices: [], total: 0 };
       case "table":
         return { type: "table", columns: [], rows: [] };
+      case "gauge":
+        return {
+          type: "gauge",
+          value: 0,
+          target: widget.target,
+          unit: widget.unit ?? "number",
+          ratio: null,
+          lowerIsBetter: widget.lowerIsBetter ?? false,
+        };
+      case "waterfall":
+        return {
+          type: "waterfall",
+          steps: [],
+          total: 0,
+          unit: widget.unit ?? "number",
+        };
       case "scatter":
         return {
           type: "scatter",
@@ -1234,6 +1417,10 @@ export function computeWidget(
       return computeScatter(widget, col);
     case "histogram":
       return computeHistogram(widget, col);
+    case "gauge":
+      return computeGauge(widget, col);
+    case "waterfall":
+      return computeWaterfall(widget, col);
   }
 }
 

@@ -12,16 +12,20 @@ import type { WidgetSpec } from "./widgets";
 
 export type BuilderWidgetType =
   | "kpi"
+  | "gauge"
   | "bar"
   | "line"
   | "area"
   | "combo"
+  | "stacked100"
+  | "waterfall"
   | "histogram"
   | "donut"
   | "hbar"
   | "treemap"
   | "funnel"
   | "scatter"
+  | "bubble"
   | "pivot"
   | "heatmap"
   | "table";
@@ -46,16 +50,20 @@ export interface WidgetMeta {
 /** Palette order = display order. */
 export const WIDGET_TYPES: BuilderWidgetType[] = [
   "kpi",
+  "gauge",
   "bar",
   "line",
   "area",
   "combo",
+  "stacked100",
+  "waterfall",
   "histogram",
   "donut",
   "hbar",
   "treemap",
   "funnel",
   "scatter",
+  "bubble",
   "pivot",
   "heatmap",
   "table",
@@ -66,6 +74,13 @@ export const WIDGET_META: Record<BuilderWidgetType, WidgetMeta> = {
     label: "KPI 数値",
     icon: "dashboard",
     hint: "合計・件数などの単一指標",
+    defaultSpan: 1,
+    group: "指標",
+  },
+  gauge: {
+    label: "ゲージ（目標）",
+    icon: "dashboard",
+    hint: "目標に対して、いま何％か",
     defaultSpan: 1,
     group: "指標",
   },
@@ -111,6 +126,20 @@ export const WIDGET_META: Record<BuilderWidgetType, WidgetMeta> = {
     defaultSpan: 2,
     group: "グラフ",
   },
+  stacked100: {
+    label: "100%積み上げ",
+    icon: "report",
+    hint: "構成比の推移（各期間を100%に伸ばす）",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
+  waterfall: {
+    label: "ウォーターフォール",
+    icon: "report",
+    hint: "増減の内訳（何が押し上げ、何が引き下げたか）",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
   histogram: {
     label: "ヒストグラム",
     icon: "report",
@@ -136,6 +165,13 @@ export const WIDGET_META: Record<BuilderWidgetType, WidgetMeta> = {
     label: "散布図",
     icon: "report",
     hint: "2つの数値の関係と外れ値",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
+  bubble: {
+    label: "バブル",
+    icon: "report",
+    hint: "散布図に3つ目の量を大きさで載せる",
     defaultSpan: 2,
     group: "グラフ",
   },
@@ -210,6 +246,19 @@ export function canAddWidget(
     case "scatter":
       // 縦横それぞれに数値が要る。1本しか無ければ図にならない。
       return numericFields(fields).length >= 2;
+    case "bubble":
+      // 縦・横・大きさで3本。2本しか無いなら普通の散布図で足りる。
+      return numericFields(fields).length >= 3;
+    case "gauge":
+      // 目標と比べる数値が1本。件数を目標と比べる使い方もあるので、
+      // 数値列が無くても作れる（count に対する目標）。
+      return true;
+    case "waterfall":
+      // 増減を分解する軸が1本。数値が無ければ件数の増減として成立する。
+      return groupableFields(fields).length >= 1;
+    case "stacked100":
+      // 割合を出す以上、割る先の区分が要る。
+      return groupableFields(fields).length >= 1;
     case "histogram":
       // 分布を数える対象の数値が1本。
       return numericFields(fields).length >= 1;
@@ -304,6 +353,80 @@ export function newWidget(
             ]
           : [{ label: "件数", measure: { kind: "count" }, as: "bar" }],
       };
+    case "gauge": {
+      const m = nums[0];
+      /*
+       * 目標の初期値は「いまの水準のきりの良い上」ではなく、単純に 100。
+       * データから目標を推測すると、必ず達成しているゲージが出来上がって
+       * しまい、しかもそれらしく見えるので直されないまま残る。
+       * 目標は人が入れるものなので、明らかに仮の値を置いて促す。
+       */
+      return {
+        ...base,
+        type: "gauge",
+        title: m ? `${m.name}の目標達成` : "件数の目標達成",
+        measure: m ? { kind: "sum", field: m.key } : { kind: "count" },
+        target: 100,
+        unit: m?.type === "currency" ? "currency" : "number",
+      };
+    }
+    case "waterfall": {
+      const g = groups[0];
+      const m = nums[0];
+      return {
+        ...base,
+        type: "waterfall",
+        title: g
+          ? `${g.name}別の${m ? m.name : "件数"}（増減）`
+          : "増減の内訳",
+        groupBy: g?.key ?? fields[0]?.key ?? "",
+        measure: m ? { kind: "sum", field: m.key } : { kind: "count" },
+        limit: 8,
+        showTotal: true,
+        unit: m?.type === "currency" ? "currency" : "number",
+      };
+    }
+    case "stacked100": {
+      const g = groups[0];
+      const m = nums[0];
+      return {
+        ...base,
+        type: "bar",
+        title: g ? `${g.name}別の構成比の推移` : "構成比の推移",
+        bucket: "month",
+        rangeCount: 12,
+        anchor: "data",
+        stacked: true,
+        stackMode: "percent",
+        splitBy: g?.key,
+        splitLimit: 5,
+        measures: [
+          m
+            ? { label: m.name, measure: { kind: "sum", field: m.key } }
+            : { label: "件数", measure: { kind: "count" } },
+        ],
+      };
+    }
+    case "bubble": {
+      const [xF, yF, zF] = nums;
+      return {
+        ...base,
+        type: "scatter",
+        title:
+          xF && yF && zF
+            ? `${xF.name} × ${yF.name}（大きさ: ${zF.name}）`
+            : "バブル",
+        xField: xF?.key ?? fields[0]?.key ?? "",
+        yField: yF?.key ?? xF?.key ?? fields[0]?.key ?? "",
+        sizeField: zF?.key ?? yF?.key,
+        colorBy: groups[0]?.key,
+        labelField: groups[0]?.key,
+        limit: 500,
+        xUnit: xF?.type === "currency" ? "currency" : "number",
+        yUnit: yF?.type === "currency" ? "currency" : "number",
+        sizeUnit: zF?.type === "currency" ? "currency" : "number",
+      };
+    }
     case "histogram":
       return {
         ...base,

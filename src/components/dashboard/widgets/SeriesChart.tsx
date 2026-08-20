@@ -68,7 +68,7 @@ function ChartTooltip({
 // NOTE: Recharts identifies axes/grid/legend by walking its DIRECT children and
 // does NOT look through React Fragments — so these MUST be returned as a keyed
 // array (flattened into the chart's children), never wrapped in <>…</>.
-function commonAxes(showLegend: boolean) {
+function commonAxes(showLegend: boolean, expand = false) {
   return [
     <CartesianGrid key="grid" stroke={GRID} strokeDasharray="3 3" vertical={false} />,
     <XAxis
@@ -89,9 +89,11 @@ function commonAxes(showLegend: boolean) {
        * 36px では 15,000,000 が「000」だけに切れていた。万・億 に丸めたうえで
        * 幅も足す。業務データの金額は8〜9桁が普通なので、生の数字は軸に載らない。
        */
-      width={68}
-      tickFormatter={(v: number) => formatCompact(v)}
-      domain={[0, "auto"]}
+      width={expand ? 46 : 68}
+      tickFormatter={(v: number) =>
+        expand ? `${Math.round(v * 100)}%` : formatCompact(v)
+      }
+      domain={expand ? [0, 1] : [0, "auto"]}
     />,
     <Tooltip key="tip" content={<ChartTooltip />} cursor={{ stroke: GRID, strokeWidth: 1 }} />,
     ...(showLegend
@@ -207,7 +209,7 @@ function comboChildren(series: SeriesData["series"], palette: Palette) {
 }
 
 export function SeriesChart({ data }: { data: SeriesData }) {
-  const { type, points, series, stacked } = data;
+  const { type, points, series, stacked, stackMode } = data;
   const palette = usePalette();
 
   if (points.length === 0 || series.length === 0) {
@@ -220,7 +222,15 @@ export function SeriesChart({ data }: { data: SeriesData }) {
 
   const margin = { top: 8, right: 12, bottom: 0, left: -8 };
   const showLegend = series.length > 1;
-  const axes = commonAxes(showLegend);
+  /*
+   * 100% 積み上げ。
+   *
+   * Recharts の `stackOffset="expand"` は値を 0〜1 に正規化するので、縦軸の
+   * 目盛りもそのまま 0〜1 になる。「0.4」ではなく「40%」と読ませないと、
+   * 割合の図として成立しない。軸の書式だけを差し替える。
+   */
+  const expand = stackMode === "percent";
+  const axes = commonAxes(showLegend, expand);
 
   return (
     <div className="h-60 w-full">
@@ -230,7 +240,11 @@ export function SeriesChart({ data }: { data: SeriesData }) {
             {comboChildren(series, palette)}
           </ComposedChart>
         ) : type === "area" ? (
-          <AreaChart data={points} margin={margin}>
+          <AreaChart
+            data={points}
+            margin={margin}
+            stackOffset={expand ? "expand" : undefined}
+          >
             {axes}
             {series.map((s, i) => {
               const hex = seriesColor(palette, i, s.color);
@@ -252,7 +266,11 @@ export function SeriesChart({ data }: { data: SeriesData }) {
             })}
           </AreaChart>
         ) : type === "bar" ? (
-          <BarChart data={points} margin={margin}>
+          <BarChart
+            data={points}
+            margin={margin}
+            stackOffset={expand ? "expand" : undefined}
+          >
             {axes}
             {series.map((s, i) => (
               <Bar

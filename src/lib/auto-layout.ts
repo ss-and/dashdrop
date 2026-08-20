@@ -85,6 +85,13 @@ function orderedMeasures(fields: ProfiledField[]): ProfiledField[] {
 /**
  * 1シート分のウィジェットを組み立てる。
  * 4列グリッドなので、各行の span 合計が 4 になるように積む。
+ *
+ * 【ゲージを自動では置かない理由】
+ * ゲージは目標があって初めて意味を持つが、**目標はExcelのどこにも書いていない**。
+ * 「今の合計をきりの良い数字に切り上げる」ような推測で目標を作ると、
+ * 必ず達成しているゲージが出来上がり、しかもそれらしく見えるので誰も直さない。
+ * 嘘の目標に緑が点いている画面は、目標が無い画面より悪い。ビルダーから
+ * 人が目標を入れたときだけ出す。
  */
 function layoutForSheet(
   sheet: ProfiledSheet,
@@ -345,6 +352,61 @@ function layoutForSheet(
   }
 
   /*
+   * ウォーターフォール（増減の内訳）。
+   *
+   * 負の値を持つ数値列があるときだけ、中核に置く。差異・損益・増減のように
+   * 上下する列は、合計や構成比では「何が押し上げ、何が引き下げたか」が
+   * 出せない——プラスとマイナスが相殺されて、動いていないように見える。
+   * 全部が正の列でこれを出すと、ただの積み上げランキングになるので出さない
+   * （「内訳を知りたい」を選んだときだけ、下の lensExtras が足す）。
+   */
+  const signed = measures.find((m) => m.stats.hasNegativeNumber);
+  if (signed && cats[0]) {
+    out.push({
+      id: genWidgetId(),
+      type: "waterfall",
+      title: `${cats[0].name}別の${signed.name}（増減）`,
+      collection: S,
+      span: 2,
+      groupBy: cats[0].key,
+      measure: { kind: "sum", field: signed.key },
+      limit: 8,
+      showTotal: true,
+      unit: unitOf(signed),
+    });
+  }
+
+  /*
+   * 100% 積み上げ（構成比の推移）。
+   *
+   * 実数の積み上げと必ず対で置く。実数だけでは「全体が増えたのか、割合が
+   * 動いたのか」を切り分けられない——母数が倍になれば、比率が落ちていても
+   * 棒は伸びる。同じ集計の見せ方違いなので、数字が食い違うことはない。
+   */
+  if (dates[0] && cats[0]) {
+    out.push({
+      id: genWidgetId(),
+      type: "bar",
+      title: `${dates[0].name}別の${cats[0].name}構成比`,
+      collection: S,
+      span: 2,
+      dateField: dates[0].key,
+      bucket: "month",
+      rangeCount: 24,
+      anchor: "data",
+      stacked: true,
+      stackMode: "percent",
+      splitBy: cats[0].key,
+      splitLimit: 5,
+      measures: [
+        money
+          ? { label: money.name, measure: { kind: "sum", field: money.key } }
+          : { label: "件数", measure: { kind: "count" } },
+      ],
+    });
+  }
+
+  /*
    * ヒートマップ。3本目の区分があるときだけ。クロス集計（下）と同じ組み合わせで
    * 出すと同じ表が2枚並ぶので、別の軸を当てる。数字を1つずつ読むのではなく、
    * 濃淡で「どこが厚いか」を先に掴むための図。
@@ -379,6 +441,14 @@ function layoutForSheet(
       span: 2,
       xField: measures[0].key,
       yField: measures[1].key,
+      /*
+       * 数値が3本以上あるなら、3本目を点の大きさに載せる（バブル）。
+       * 縦横だけでは2つの量しか比べられないので、載せられるなら載せる。
+       * 2本しか無いときは大きさを一定にする——何も載っていない大小があると、
+       * 見る人は必ず意味を読み取ろうとする。
+       */
+      sizeField: measures[2]?.key,
+      sizeUnit: measures[2] ? unitOf(measures[2]) : undefined,
       colorBy: cats[0]?.key,
       labelField: detailColumns(sheet.fields, 1)[0]?.key,
       limit: 500,
@@ -622,6 +692,10 @@ function roleOf(w: WidgetSpec): WidgetRole {
   switch (w.type) {
     case "kpi":
       return "kpi";
+    case "gauge":
+      return "target";
+    case "waterfall":
+      return "delta";
     case "line":
     case "area":
     case "bar":
@@ -729,10 +803,44 @@ function restyle(w: WidgetSpec, lens: Lens): WidgetSpec {
  * 「ばらつきを見たい」と答えた人にとっては、そこが本題なので足す。
  */
 function lensExtras(sheet: ProfiledSheet, lens: Lens): WidgetSpec[] {
-  if (lens !== "distribution") return [];
   const S = sheet.slug;
   const measures = orderedMeasures(sheet.fields);
   const out: WidgetSpec[] = [];
+
+  /*
+   * 「内訳を知りたい」なら、正の値しかない列でもウォーターフォールを出す。
+   *
+   * 全部が正だと段は上がる一方なので、増減の図というより「これらを足すと
+   * 合計になる」の図になる。ドーナツと同じ問いに別の答え方をしていて、
+   * 円では読み取れない**積み上がりの順序と、合計との差**が見える。
+   */
+  if (lens === "composition") {
+    const cats = categoryFields(sheet.fields);
+    /*
+     * 上下する列があるときは、中核が既に増減の図を置いている。
+     * ここで足すと同じ軸のウォーターフォールが2枚並ぶ——数字は正しいが、
+     * 見た人は「何が違うのか」を探すことになる。
+     */
+    const alreadySigned = measures.some((m) => m.stats.hasNegativeNumber);
+    if (cats[0] && !alreadySigned) {
+      out.push({
+        id: genWidgetId(),
+        type: "waterfall",
+        title: `${cats[0].name}別の${measures[0]?.name ?? "件数"}（積み上がり）`,
+        collection: S,
+        span: 2,
+        groupBy: cats[0].key,
+        measure: measures[0]
+          ? { kind: "sum", field: measures[0].key }
+          : { kind: "count" },
+        limit: 8,
+        showTotal: true,
+        unit: measures[0] ? unitOf(measures[0]) : "number",
+      });
+    }
+  }
+
+  if (lens !== "distribution") return out;
 
   for (const m of measures.slice(1, 3)) {
     out.push({

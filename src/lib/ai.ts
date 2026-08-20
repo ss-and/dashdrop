@@ -91,16 +91,21 @@ const SPEC_PROMPT = `あなたはBIダッシュボード設計アシスタント
 共通: { "id": string(一意), "title": string(日本語), "collection": <コレクションslug>, "span": 1〜4, "filters"?: Filter[] }
 - kpi:   { "type":"kpi", "measure": Measure, "unit"?:"number"|"currency"|"percent"|"days", "icon"?:string, "rateNumerator"?: Filter[], "delta"?:{ "dateField"?:string, "period":"week"|"month" }, "target"?:number }
          ※ rateNumerator を使うと「一致件数 / 全件」の割合(%)になる。delta を付けると値が当該期間(今週/今月)に限定されるので title も「今週の…」等にする。
-- line/area/bar: { "type":"line"|"area"|"bar", "dateField"?:<date型フィールドkey>, "bucket":"day"|"week"|"month", "rangeCount": 2〜60, "measures":[{ "label":string, "measure":Measure, "filters"?:Filter[], "color"?:"khaki"|"info"|"success"|"warning"|"danger" }] (1〜4), "stacked"?:boolean, "splitBy"?:<分類フィールドkey>, "splitLimit"?: 2〜8 }
+- line/area/bar: { "type":"line"|"area"|"bar", "dateField"?:<date型フィールドkey>, "bucket":"day"|"week"|"month", "rangeCount": 2〜60, "measures":[{ "label":string, "measure":Measure, "filters"?:Filter[], "color"?:"khaki"|"info"|"success"|"warning"|"danger" }] (1〜4), "stacked"?:boolean, "splitBy"?:<分類フィールドkey>, "splitLimit"?: 2〜8, "stackMode"?:"value"|"percent" }
          ※ splitBy を付けると「区分ごとに1本ずつ」の積み上げになる（月別の売上 → 月別・フェーズ別の売上）。measures は1つだけ書く。
+         ※ stackMode:"percent" は各期間を100%に伸ばした構成比の推移。実数版と対で置くと「全体が増えたのか、割合が動いたのか」を切り分けられる。積み上げのときだけ有効。
 - combo: { "type":"combo", …line/area/bar と同じ項目…, "measures":[{ …, "as":"bar"|"line", "axis":"left"|"right" }] }
          ※ 件数(棒・左軸)と金額(線・右軸)のように、単位の違う2つを1枚に重ねるときに使う。
 - donut/hbar/treemap/funnel: { "type":"donut"|"hbar"|"treemap"|"funnel", "groupBy": <フィールドkey>, "measure"?: Measure, "limit": 2〜12, "order"?:"value"|"label" }
          ※ treemap は項目が多い構成比向け。funnel は「フェーズ」「ステータス」のような段階の列に使い、order は "label"（段階の順）にする。
 - histogram: { "type":"histogram", "field": <number/currency型フィールドkey>, "bins": 3〜30, "unit"?:"number"|"currency" }
          ※ 数値の分布。合計や平均では分からない「偏り」を見るためのもの。
-- scatter: { "type":"scatter", "xField": <数値key>, "yField": <数値key>, "colorBy"?:<分類key>, "labelField"?:<フィールドkey>, "limit": 10〜2000 }
-         ※ 数値が2つ以上あるときだけ。2つの関係と外れ値を見る。
+- scatter: { "type":"scatter", "xField": <数値key>, "yField": <数値key>, "sizeField"?:<数値key>, "colorBy"?:<分類key>, "labelField"?:<フィールドkey>, "limit": 10〜2000 }
+         ※ 数値が2つ以上あるときだけ。2つの関係と外れ値を見る。sizeField を付けると点の大きさが3つ目の量になる（バブル）。数値が3本以上あるなら付ける。
+- gauge: { "type":"gauge", "measure": Measure, "target": number, "unit"?:"number"|"currency"|"percent"|"days", "lowerIsBetter"?:boolean }
+         ※ **利用者が目標値を明示したときだけ使う。** データから目標を推測して作らないこと——必ず達成しているゲージが出来上がり、それらしく見えるので誰も直せない。コスト・リードタイムのように小さいほど良い指標には lowerIsBetter:true。
+- waterfall: { "type":"waterfall", "groupBy": <フィールドkey>, "measure"?: Measure, "limit": 2〜12, "showTotal": boolean, "unit"?:"number"|"currency", "order"?:"value"|"label" }
+         ※ 増減の内訳。差異・損益・増減のように**負の値を含む**列で最も効く（何が押し上げ、何が引き下げたか）。売上→原価→利益のように順序に意味があるときは order:"label"。
 - pivot/heatmap: { "type":"pivot"|"heatmap", "rowField": <フィールドkey>, "colField": <フィールドkey>, "measure"?: Measure, "unit"?:"number"|"currency", "rowLimit": 2〜50, "colLimit": 2〜20, "showTotals": boolean }
          ※ 数字を読ませたいときは pivot、全体の厚みを掴ませたいときは heatmap。
 - table: { "type":"table", "columns": [<フィールドkey>] (1〜8), "sort"?:{ "field":<フィールドkey>, "dir":"asc"|"desc" }, "limit": 1〜50 }

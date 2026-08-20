@@ -12,7 +12,7 @@ import {
   Tooltip,
   Legend,
 } from "recharts";
-import { formatCompact } from "@/lib/utils";
+import { formatCompact, formatValue } from "@/lib/utils";
 import type { ScatterData } from "@/lib/widgets";
 
 /**
@@ -39,11 +39,15 @@ function PointTooltip({
   payload,
   xLabel,
   yLabel,
+  sizeLabel,
+  sizeUnit,
 }: {
   active?: boolean;
   payload?: Array<{ payload?: Point }>;
   xLabel: string;
   yLabel: string;
+  sizeLabel?: string;
+  sizeUnit?: ScatterData["sizeUnit"];
 }) {
   const p = payload?.[0]?.payload;
   if (!active || !p) return null;
@@ -64,13 +68,27 @@ function PointTooltip({
           {formatCompact(p.y)}
         </span>
       </p>
+      {/*
+        大きさに載せた量は、図では「だいたい大きい／小さい」しか読めない。
+        実数はここで出す。未入力の行は大きさが無いので、行そのものを
+        落とさずに「—」と示す。
+      */}
+      {sizeLabel && (
+        <p className="text-ink-soft">
+          {sizeLabel}
+          <span className="ml-2 tabular-nums font-medium text-ink">
+            {p.z === undefined ? "—" : formatValue(p.z, sizeUnit ?? "number")}
+          </span>
+        </p>
+      )}
     </div>
   );
 }
 
 export function ScatterPlot({ data }: { data: ScatterData }) {
   const palette = usePalette();
-  const { points, groups, xLabel, yLabel, collectionId, omitted } = data;
+  const { points, groups, xLabel, yLabel, sizeLabel, sizeUnit, collectionId, omitted } =
+    data;
   const router = useRouter();
 
   if (points.length === 0) {
@@ -125,11 +143,30 @@ export function ScatterPlot({ data }: { data: ScatterData }) {
               width={68}
               tickFormatter={(v: number) => formatCompact(v)}
             />
-            {/* 点の大きさは固定。面積に意味を持たせない（誤読のもとになる）。 */}
-            <ZAxis range={[46, 46]} />
+            {/*
+              3つ目の量が指定されていれば、点の大きさに載せる（バブル）。
+              指定が無いときは固定。大きさに何も載っていないのに大小があると、
+              見る人は必ず意味を読み取ろうとする。
+
+              下限を 0 ではなく 24 にしてあるのは、最小の行が「点にすらならない」
+              のを防ぐため。金額 0 の案件も、そこに在ることは見えなければ困る。
+            */}
+            <ZAxis
+              type="number"
+              dataKey={sizeLabel ? "z" : undefined}
+              name={sizeLabel}
+              range={sizeLabel ? [24, 420] : [46, 46]}
+            />
             <Tooltip
               cursor={{ strokeDasharray: "3 3", stroke: GRID }}
-              content={<PointTooltip xLabel={xLabel} yLabel={yLabel} />}
+              content={
+                <PointTooltip
+                  xLabel={xLabel}
+                  yLabel={yLabel}
+                  sizeLabel={sizeLabel}
+                  sizeUnit={sizeUnit}
+                />
+              }
             />
             {series.length > 1 && (
               <Legend wrapperStyle={{ fontSize: 12, color: TEXT, paddingTop: 8 }} />

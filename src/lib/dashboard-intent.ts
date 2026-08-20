@@ -183,6 +183,10 @@ export const audienceMeta = (key: Audience): AudienceMeta =>
  */
 export type WidgetRole =
   | "kpi"
+  /** 目標に対する進捗（ゲージ）。値そのものより「あとどれだけか」が主題。 */
+  | "target"
+  /** 増減の内訳（ウォーターフォール）。合計の動きを要因に分解する。 */
+  | "delta"
   | "trend"
   | "trend-split"
   | "ranking"
@@ -200,24 +204,24 @@ export type WidgetRole =
  */
 const WEIGHTS: Record<Exclude<Lens, "auto">, Record<WidgetRole, number>> = {
   performance: {
-    kpi: 10, trend: 9, "trend-split": 8, ranking: 7, composition: 4,
-    stage: 3, distribution: 2, relation: 2, cross: 4, detail: 5,
+    kpi: 10, target: 10, delta: 8, trend: 9, "trend-split": 8, ranking: 7,
+    composition: 4, stage: 3, distribution: 2, relation: 2, cross: 4, detail: 5,
   },
   pipeline: {
-    kpi: 8, trend: 5, "trend-split": 7, ranking: 4, composition: 5,
-    stage: 10, distribution: 2, relation: 2, cross: 9, detail: 6,
+    kpi: 8, target: 7, delta: 5, trend: 5, "trend-split": 7, ranking: 4,
+    composition: 5, stage: 10, distribution: 2, relation: 2, cross: 9, detail: 6,
   },
   composition: {
-    kpi: 7, trend: 4, "trend-split": 6, ranking: 9, composition: 10,
-    stage: 5, distribution: 3, relation: 2, cross: 8, detail: 4,
+    kpi: 7, target: 4, delta: 9, trend: 4, "trend-split": 6, ranking: 9,
+    composition: 10, stage: 5, distribution: 3, relation: 2, cross: 8, detail: 4,
   },
   distribution: {
-    kpi: 6, trend: 4, "trend-split": 3, ranking: 5, composition: 3,
-    stage: 2, distribution: 10, relation: 9, cross: 6, detail: 7,
+    kpi: 6, target: 3, delta: 3, trend: 4, "trend-split": 3, ranking: 5,
+    composition: 3, stage: 2, distribution: 10, relation: 9, cross: 6, detail: 7,
   },
   monitor: {
-    kpi: 9, trend: 6, "trend-split": 4, ranking: 6, composition: 4,
-    stage: 4, distribution: 3, relation: 3, cross: 5, detail: 10,
+    kpi: 9, target: 8, delta: 4, trend: 6, "trend-split": 4, ranking: 6,
+    composition: 4, stage: 4, distribution: 3, relation: 3, cross: 5, detail: 10,
   },
 };
 

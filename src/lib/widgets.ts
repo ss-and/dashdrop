@@ -118,6 +118,14 @@ export const seriesWidgetSchema = baseWidget.extend({
   splitBy: z.string().min(1).optional(),
   /** 残す系列の本数。省略時は 5。 */
   splitLimit: z.number().int().min(2).max(8).optional(),
+  /**
+   * 積み上げの見せ方。`stacked` が立っているときだけ効く。
+   *
+   * "value"（既定）は実数の積み上げ。"percent" は各期間を 100% に伸ばして
+   * **割合の推移**を見せる。実数だけでは「全体が増えたのか、割合が動いたのか」
+   * が切り分けられない——母数が倍になれば、比率が落ちていても棒は伸びる。
+   */
+  stackMode: z.enum(["value", "percent"]).optional(),
 });
 export type SeriesWidget = z.infer<typeof seriesWidgetSchema>;
 
@@ -194,6 +202,15 @@ export const scatterWidgetSchema = baseWidget.extend({
   limit: z.number().int().min(10).max(2000).default(500),
   xUnit: unitSchema.optional(),
   yUnit: unitSchema.optional(),
+  /**
+   * 点の大きさに載せる3つ目の数値（バブルチャート）。
+   *
+   * 縦横だけでは2つの量しか比べられない。「単価×数量」の散布に受注金額を
+   * 大きさで載せると、右上に居る＝良い案件とは限らない（単価も数量も高いのに
+   * 金額が小さい＝値引きが大きい、が点の小ささで見える）。
+   */
+  sizeField: z.string().optional(),
+  sizeUnit: unitSchema.optional(),
 });
 export type ScatterWidget = z.infer<typeof scatterWidgetSchema>;
 
@@ -211,6 +228,55 @@ export const histogramWidgetSchema = baseWidget.extend({
 });
 export type HistogramWidget = z.infer<typeof histogramWidgetSchema>;
 
+/**
+ * ゲージ（目標に対する進捗）。
+ *
+ * これまで「目標」を表せる図が1つも無かった。KPI タイルに `target` はあるが、
+ * 数字の横に小さく出るだけで、**達したのか、まだ遠いのか**が一目で分からない。
+ * 予算消化・売上目標・KPI 達成率のように、値そのものより「目標との距離」が
+ * 主題になる場面は多い。
+ */
+export const gaugeWidgetSchema = baseWidget.extend({
+  type: z.literal("gauge"),
+  measure: measureSchema,
+  /** 目標値。ゲージは目標があって初めて意味を持つので必須。 */
+  target: z.number(),
+  unit: unitSchema.optional(),
+  /**
+   * 小さいほど良い指標（コスト・リードタイム・不良率）。
+   *
+   * これが無いと、コスト超過が「達成」の色で塗られる。良し悪しの向きは
+   * データから読み取れないので、作るときに決めておく必要がある。
+   */
+  lowerIsBetter: z.boolean().optional(),
+});
+export type GaugeWidget = z.infer<typeof gaugeWidgetSchema>;
+
+/**
+ * ウォーターフォール（増減の内訳）。
+ *
+ * 「今期は前期から 1,200万 増えた」の**内訳**を段で見せる図。合計と構成比の
+ * グラフでは「どれが押し上げ、どれが引き下げたか」が出せない。予実差異の分析、
+ * 利益の分解（売上→原価→販管費→営業利益）で使う。
+ */
+export const waterfallWidgetSchema = baseWidget.extend({
+  type: z.literal("waterfall"),
+  /** 段を並べる軸。区分（部門・費目）の値がそのまま段になる。 */
+  groupBy: z.string().min(1),
+  measure: measureSchema.default({ kind: "count" }),
+  /** 段の数の上限。超えた分は「その他」に畳む。 */
+  limit: z.number().int().min(2).max(12).default(8),
+  /** 最後に合計の段を置く。 */
+  showTotal: z.boolean().default(true),
+  unit: unitSchema.optional(),
+  /**
+   * 並び順。既定は値の大きい順（押し上げた順に読める）。
+   * "label" は費目の定義順どおりに並べたいとき。
+   */
+  order: z.enum(["value", "label"]).optional(),
+});
+export type WaterfallWidget = z.infer<typeof waterfallWidgetSchema>;
+
 export const widgetSchema = z.discriminatedUnion("type", [
   kpiWidgetSchema,
   seriesWidgetSchema.extend({ type: z.literal("line") }),
@@ -226,6 +292,8 @@ export const widgetSchema = z.discriminatedUnion("type", [
   heatmapWidgetSchema,
   scatterWidgetSchema,
   histogramWidgetSchema,
+  gaugeWidgetSchema,
+  waterfallWidgetSchema,
 ]);
 export type WidgetSpec = z.infer<typeof widgetSchema>;
 
@@ -314,6 +382,8 @@ export interface SeriesData {
     axis?: "left" | "right";
   }>;
   stacked?: boolean;
+  /** 積み上げの見せ方。"percent" なら各期間を 100% に伸ばす。 */
+  stackMode?: "value" | "percent";
 }
 export interface BreakdownData {
   type: "donut" | "hbar" | "treemap" | "funnel";
@@ -377,6 +447,8 @@ export interface ScatterData {
   points: Array<{
     x: number;
     y: number;
+    /** バブルの大きさに使う3つ目の量。未指定なら一定の大きさで描く。 */
+    z?: number;
     /** どの行なのか（明細を開くため／ツールチップの見出し）。 */
     label: string;
     /** レコードID。押したらその行へ飛ぶ。 */
@@ -386,6 +458,9 @@ export interface ScatterData {
   }>;
   /** 区分ごとの色。points[].group と対応する。 */
   groups: Array<{ label: string; color?: string }>;
+  /** 大きさに載せた数値の名前。未指定なら点の大きさは一定。 */
+  sizeLabel?: string;
+  sizeUnit?: Unit;
   xLabel: string;
   yLabel: string;
   xUnit: Unit;
@@ -395,8 +470,47 @@ export interface ScatterData {
   omitted: number;
 }
 
+/** ゲージ。値と目標だけを持ち、達成度の判断は描く側に任せない。 */
+export interface GaugeData {
+  type: "gauge";
+  value: number;
+  target: number;
+  unit: Unit;
+  /**
+   * 達成度（0〜）。目標が 0 のときは割り算できないので null。
+   * 「小さいほど良い」の反転はここで済ませてあるので、描く側は
+   * 大きいほど良い前提で読んで良い。
+   */
+  ratio: number | null;
+  lowerIsBetter: boolean;
+}
+
+/** ウォーターフォールの1段。 */
+export interface WaterfallStep {
+  label: string;
+  /** その段の増減量（合計段では合計そのもの）。 */
+  value: number;
+  /** 段の下端・上端（積み上げの位置）。合計段は 0 から立つ。 */
+  start: number;
+  end: number;
+  kind: "increase" | "decrease" | "total";
+  /** まとめた残余の段。ドリルダウンの対象にしない。 */
+  synthetic?: boolean;
+  key?: string;
+}
+export interface WaterfallData {
+  type: "waterfall";
+  steps: WaterfallStep[];
+  total: number;
+  unit: Unit;
+  groupBy?: string;
+  collectionId?: string;
+}
+
 export type WidgetData =
   | KpiData
+  | GaugeData
+  | WaterfallData
   | PivotData
   | SeriesData
   | BreakdownData

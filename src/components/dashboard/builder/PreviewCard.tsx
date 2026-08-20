@@ -7,6 +7,8 @@ import { BreakdownChart } from "@/components/dashboard/widgets/BreakdownChart";
 import { DataTable } from "@/components/dashboard/widgets/DataTable";
 import { PivotTable } from "@/components/dashboard/widgets/PivotTable";
 import { ScatterPlot } from "@/components/dashboard/widgets/ScatterPlot";
+import { GaugeTile } from "@/components/dashboard/widgets/GaugeTile";
+import { WaterfallChart } from "@/components/dashboard/widgets/WaterfallChart";
 
 /**
  * Live preview area for one builder widget. Mirrors DashboardGrid's dispatch
@@ -45,6 +47,10 @@ function Body({ data }: { data: WidgetData }) {
       return <PivotTable data={data} />;
     case "scatter":
       return <ScatterPlot data={data} />;
+    case "gauge":
+      return <GaugeTile data={data} />;
+    case "waterfall":
+      return <WaterfallChart data={data} />;
     default:
       return <Note>データなし</Note>;
   }
@@ -68,9 +74,9 @@ export function PreviewCard({
   if (data === null) {
     return <Note>設定を完成させてください</Note>;
   }
-  // KPI tiles carry their own label in the grid; here the card header already
-  // shows the title, so render the figure directly.
-  if (widget.type === "kpi") {
+  // 数字1つのウィジェット（KPI・ゲージ）は、そのままだと縦に潰れて
+  // 隣のカードと高さが揃わない。最低の高さだけ与える。
+  if (widget.type === "kpi" || widget.type === "gauge") {
     return (
       <div className="min-h-[6rem]">
         <Body data={data} />

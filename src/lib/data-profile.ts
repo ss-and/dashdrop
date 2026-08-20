@@ -25,6 +25,14 @@ export interface FieldStats {
   idLike: boolean;
   /** 数値列で、0 以外の値が1つでもあるか。合計が常に0の列を除くために使う。 */
   hasNonZeroNumber: boolean;
+  /**
+   * 負の値が1つでもあるか。
+   *
+   * 差異・損益・増減のように上下する列と、金額・数量のように積み上がるだけの
+   * 列は、同じ「数値」でも向いている図が違う。前者はウォーターフォール
+   * （何が押し上げ、何が引き下げたか）が一番よく効く。
+   */
+  hasNegativeNumber: boolean;
   /** 多い順の値（上位のみ）。軸の見当をつけるのに使う。 */
   topValues: Array<{ value: string; count: number }>;
 }
@@ -60,6 +68,7 @@ export function profileField(
   const counts = new Map<string, number>();
   let nonNull = 0;
   let hasNonZeroNumber = false;
+  let hasNegativeNumber = false;
 
   for (const r of records) {
     const v = r[key];
@@ -68,6 +77,7 @@ export function profileField(
 
     const n = typeof v === "number" ? v : Number(String(v).replace(/[,\s¥%]/g, ""));
     if (Number.isFinite(n) && n !== 0) hasNonZeroNumber = true;
+    if (Number.isFinite(n) && n < 0) hasNegativeNumber = true;
 
     const label = String(v);
     counts.set(label, (counts.get(label) ?? 0) + 1);
@@ -88,6 +98,7 @@ export function profileField(
     // それは一意ではなく、単に行が少ないだけ。
     idLike: nonNull >= 8 && distinct / nonNull >= 0.9,
     hasNonZeroNumber,
+    hasNegativeNumber,
     topValues,
   };
 }
