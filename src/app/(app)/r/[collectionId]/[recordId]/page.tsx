@@ -34,6 +34,7 @@ import {
   toIdArray,
   type RecordFieldDef,
 } from "@/components/record/RecordValue";
+import { RememberVisit } from "@/components/app/RememberVisit";
 
 /** How many related lists / rows per list / highlight fields we render. */
 const MAX_RELATED_LISTS = 6;
@@ -257,6 +258,14 @@ export default async function RecordPage({
   return (
     <>
       <Topbar user={user} title={title} />
+      {/* レコードは「どの表の行か」まで書かないと、履歴で見分けが付かない。 */}
+      <RememberVisit
+        workspaceId={user.workspace.id}
+        kind="record"
+        href={`/r/${collection.id}/${record.id}`}
+        name={title}
+        sub={collection.name}
+      />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-5xl animate-fade-in space-y-5">
           <RecordHeader

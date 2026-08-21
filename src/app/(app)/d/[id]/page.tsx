@@ -11,6 +11,7 @@ import type { WidgetSpec } from "@/lib/widgets";
 import { Topbar } from "@/components/app/Topbar";
 import { DashboardGrid } from "@/components/dashboard/DashboardGrid";
 import { DashboardActions } from "@/components/dashboard/DashboardActions";
+import { RememberVisit } from "@/components/app/RememberVisit";
 
 export default async function DashboardRendererPage({
   params,
@@ -51,6 +52,12 @@ export default async function DashboardRendererPage({
   return (
     <>
       <Topbar user={user} title={dashboard.name} />
+      <RememberVisit
+        workspaceId={user.workspace.id}
+        kind="dashboard"
+        href={`/d/${dashboard.id}`}
+        name={dashboard.name}
+      />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-6xl space-y-5">
           {/* Header row */}

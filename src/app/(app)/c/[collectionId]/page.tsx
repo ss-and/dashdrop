@@ -26,6 +26,7 @@ import { SheetTabs } from "@/components/sheet/SheetTabs";
 import { DeleteDataButton } from "@/components/data/DeleteDataButton";
 import { collectDeleteImpact } from "@/lib/data-delete";
 import { AnalyzeView } from "@/components/sheet/AnalyzeView";
+import { RememberVisit } from "@/components/app/RememberVisit";
 
 /** 絞り込み時に読む最大行数。全件読みにしないための上限。 */
 const DRILL_SCAN_LIMIT = 5000;
@@ -133,6 +134,12 @@ export default async function CollectionPage({
   return (
     <>
       <Topbar user={user} title={collection.name} />
+      <RememberVisit
+        workspaceId={user.workspace.id}
+        kind="sheet"
+        href={`/c/${collection.id}`}
+        name={collection.name}
+      />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-6xl space-y-5">
           <div className="flex items-start justify-between gap-4">

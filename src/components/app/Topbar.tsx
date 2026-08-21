@@ -154,7 +154,10 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
           </h1>
         </div>
 
-        <GlobalSearch className="mx-4 hidden shrink-0 sm:block" />
+        <GlobalSearch
+          workspaceId={user.workspace.id}
+          className="mx-4 hidden shrink-0 sm:block"
+        />
 
         <div className="flex items-center gap-3">
           <span className="hidden sm:flex items-center gap-1.5 text-sm text-ink-muted">

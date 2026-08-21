@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CollectionIcon, NavIcon } from "@/components/app/icons";
 import { cn } from "@/lib/utils";
+import { readRecent, type RecentItem } from "@/lib/recent";
+import { matchActions, SEARCH_ACTIONS, type SearchAction } from "@/lib/search-actions";
 
 /**
  * Salesforce-style global search that lives in the topbar.
@@ -23,6 +25,13 @@ import { cn } from "@/lib/utils";
  * 確定する操作は、日本語のこの製品では一番よく通る道なのに、変換確定の Enter を
  * 「選択中の結果を開く」と解釈して勝手に画面遷移していた。`isComposing` が
  * true の間は、この入力はまだ検索語ですらない。
+ *
+ * 何も打っていないときも空にしない:
+ * 検索窓を開いた瞬間に「最近見たもの」（その端末の履歴）と「最近更新された
+ * もの」（サーバ）、そして「操作」を出す。以前は空の枠が出るだけで、
+ * **打つ前に何ができるのかが分からなかった**——名前を覚えている人しか
+ * 使えない検索窓になっていた。Salesforce の検索窓が押した瞬間に履歴を出すのは、
+ * これを避けるため。
  *
  * 読み上げについて:
  * listbox の直接の子は option / group だけにし、見出しは装飾（aria-hidden）
@@ -78,6 +87,21 @@ interface SearchData {
 
 const DEBOUNCE_MS = 250;
 
+/**
+ * 打つ前に出す「場所」の行数。履歴と入口を合わせてこの数まで。
+ * これに操作が3行つくので、パネルは常に1画面に収まる。
+ */
+const IDLE_ROWS = 6;
+
+interface Starters {
+  dashboards: { id: string; name: string }[];
+  sheets: { id: string; name: string; icon: string }[];
+  files: { id: string; name: string }[];
+}
+
+/** ワークスペースID。履歴を別のワークスペースと混ぜないための鍵。 */
+const EMPTY_STARTERS: Starters = { dashboards: [], sheets: [], files: [] };
+
 const EMPTY: SearchData = {
   query: "",
   groups: [],
@@ -86,6 +110,20 @@ const EMPTY: SearchData = {
   dashboards: [],
   more: { objects: false, files: false, dashboards: false },
   scope: { rowsPerCollection: 0, collections: 0, computedFields: false },
+};
+
+/** 履歴・入口の行に添えるアイコンと呼び名。利用者の言葉で書く。 */
+const KIND_ICON: Record<string, string> = {
+  dashboard: "dashboard",
+  sheet: "table",
+  file: "folder",
+  record: "report",
+};
+const KIND_LABEL: Record<string, string> = {
+  dashboard: "ダッシュボード",
+  sheet: "スプレッドシート",
+  file: "ファイル",
+  record: "レコード",
 };
 
 /** 強調行を `aria-activedescendant` で指すための id。 */
@@ -148,7 +186,14 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
-export function GlobalSearch({ className }: { className?: string }) {
+export function GlobalSearch({
+  workspaceId,
+  className,
+}: {
+  /** 履歴をワークスペースごとに分ける鍵。別の会社の足あとが混ざらないように。 */
+  workspaceId: string;
+  className?: string;
+}) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -161,6 +206,10 @@ export function GlobalSearch({ className }: { className?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<SearchData>(EMPTY);
   const [highlight, setHighlight] = useState(-1);
+  /** 端末に残っている足あと。開くたびに読み直す。 */
+  const [recent, setRecent] = useState<RecentItem[]>([]);
+  /** サーバ側の「最近更新されたもの」。一度取ったら開いている間は使い回す。 */
+  const [starters, setStarters] = useState<Starters | null>(null);
 
   const trimmed = query.trim();
 
@@ -199,6 +248,48 @@ export function GlobalSearch({ className }: { className?: string }) {
     return () => clearTimeout(t);
   }, [trimmed]);
 
+  /* --------------------- 打つ前に出すもの（履歴・入口） -------------------- */
+
+  /*
+   * 履歴は開くたびに読み直す。別のタブで開いたものも拾いたいし、
+   * 開きっぱなしのタブで古い履歴を出し続けたくない。
+   */
+  useEffect(() => {
+    if (!open) return;
+    const load = () => setRecent(readRecent(workspaceId, 6));
+    load();
+    window.addEventListener("dashdrop:recent", load);
+    // 別タブでの更新も拾う（storage は自分のタブには飛ばないので上と両方いる）。
+    window.addEventListener("storage", load);
+    return () => {
+      window.removeEventListener("dashdrop:recent", load);
+      window.removeEventListener("storage", load);
+    };
+  }, [open, workspaceId]);
+
+  /*
+   * 「最近更新されたもの」は開いたときに一度だけ取る。
+   * 打鍵ごとに取る必要はなく、開いている間に増えるものでもない。
+   */
+  useEffect(() => {
+    if (!open || starters !== null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/search/recent");
+        const body = await res.json().catch(() => null);
+        if (cancelled) return;
+        setStarters(res.ok && body?.ok ? (body.data as Starters) : EMPTY_STARTERS);
+      } catch {
+        // 取れなくても履歴と操作は出る。ここで画面に断り書きは出さない。
+        if (!cancelled) setStarters(EMPTY_STARTERS);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, starters]);
+
   /* --------------------------- flattened render model --------------------- */
 
   const model = useMemo(() => {
@@ -207,6 +298,52 @@ export function GlobalSearch({ className }: { className?: string }) {
       flat.push(href);
       return flat.length - 1;
     };
+
+    /*
+     * 打つ前の並び。上下キーの順番はここで決まるので、
+     * **画面に出る順とまったく同じ**に組み立てる。ずれると、
+     * 見えている2つ目を選んだつもりで別の場所へ飛ぶ。
+     */
+    const idle = trimmed.length === 0;
+    const recentRows = idle
+      ? recent.map((r) => ({ ...r, index: add(r.href) }))
+      : [];
+
+    /*
+     * 入口は、履歴で埋まらなかったぶんだけ出す。
+     *
+     * これは補助であって主役ではない。履歴が6件そろっている人に
+     * 「最近更新されたもの」を9件足すと、開いた瞬間に15行のパネルが降りてきて、
+     * 自分がさっき見たものを目で探すことになる。履歴が無い人の空パネルを
+     * 埋めるのが役目なので、埋まったら引っ込む。
+     */
+    const seen = new Set(recentRows.map((r) => r.href));
+    const starterRoom = Math.max(0, IDLE_ROWS - recentRows.length);
+    const starterRows = idle && starterRoom > 0
+      ? [
+          ...(starters?.dashboards ?? []).map((d) => ({
+            kind: "dashboard" as const, name: d.name, href: `/d/${d.id}`, icon: "dashboard",
+          })),
+          ...(starters?.sheets ?? []).map((c) => ({
+            kind: "sheet" as const, name: c.name, href: `/c/${c.id}`, icon: c.icon,
+          })),
+          ...(starters?.files ?? []).map((f) => ({
+            kind: "file" as const, name: f.name, href: `/f/${f.id}`, icon: "folder",
+          })),
+        ]
+          .filter((r) => !seen.has(r.href))
+          .slice(0, starterRoom)
+          .map((r) => ({ ...r, index: add(r.href) }))
+      : [];
+
+    /*
+     * 操作は、打っていないときは主なものだけ、打っているときは当たったものだけ。
+     * 全部を常に出すと、履歴より操作のほうが長くなって主客が逆転する。
+     */
+    const actionList: SearchAction[] = idle
+      ? SEARCH_ACTIONS.slice(0, 3)
+      : matchActions(trimmed, 4);
+    const actions = actionList.map((a) => ({ ...a, index: add(a.href) }));
 
     const groups = data.groups.map((g) => ({
       ...g,
@@ -228,8 +365,18 @@ export function GlobalSearch({ className }: { className?: string }) {
       return { ...d, href, index: add(href) };
     });
 
-    return { groups, objects, files, dashboards, flat };
-  }, [data]);
+    return {
+      idle,
+      recentRows,
+      starterRows,
+      actions,
+      groups,
+      objects,
+      files,
+      dashboards,
+      flat,
+    };
+  }, [data, trimmed, recent, starters]);
 
   // Any new result set invalidates the previous highlight.
   useEffect(() => {
@@ -245,12 +392,28 @@ export function GlobalSearch({ className }: { className?: string }) {
 
   /* -------------------------------- shortcuts ----------------------------- */
 
-  // "/" anywhere on the page focuses the box (unless already typing).
+  /*
+   * 検索窓を開く鍵は2つ。
+   *
+   * `/` は文字入力中でないときだけ（Gmail や GitHub と同じ）。
+   * `⌘K` / `Ctrl+K` は**入力中でも効く**。表のセルを編集している途中で
+   * 「あの資料どこだっけ」と思うのは普通に起きることで、そのたびに
+   * 一度セルから抜けろというのは操作として厳しい。
+   */
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      const cmdK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
+      if (cmdK) {
+        e.preventDefault();
+        setOpen(true);
+        inputRef.current?.focus();
+        inputRef.current?.select();
+        return;
+      }
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
       if (isTypingTarget(e.target)) return;
       e.preventDefault();
+      setOpen(true);
       inputRef.current?.focus();
       inputRef.current?.select();
     }
@@ -259,8 +422,15 @@ export function GlobalSearch({ className }: { className?: string }) {
   }, []);
 
   const isEmpty = model.flat.length === 0;
-  const panelOpen = open && trimmed.length > 0;
-  const hasScopeNote = data.scope.rowsPerCollection > 0 && !isEmpty;
+  /*
+   * 打つ前でも開く。以前は `trimmed.length > 0` を条件にしていたので、
+   * 押しても何も起きない検索窓に見えていた。
+   */
+  const panelOpen = open;
+  // 走査範囲の断り書きは、実際に検索したときだけ。履歴を見ているときに
+  // 「各シート400行を対象に…」と出ても、何の話か分からない。
+  const hasScopeNote =
+    trimmed.length > 0 && data.scope.rowsPerCollection > 0 && !isEmpty;
 
   function close() {
     setOpen(false);
@@ -339,11 +509,20 @@ export function GlobalSearch({ className }: { className?: string }) {
           className="w-full rounded border border-ink-line bg-paper py-1.5 pl-8 pr-9 text-sm text-ink placeholder:text-ink-faint transition-colors focus:border-khaki-400 focus:outline-none focus:ring-2 focus:ring-khaki-500/25"
         />
         {query.length === 0 && !focused && (
+          /*
+           * 押す前から鍵を見せる。ここに何も出ていないと、
+           * ショートカットがあること自体が伝わらない。
+           */
           <span
-            className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded-sm border border-ink-line bg-paper-sunken px-1.5 py-0.5 text-2xs text-ink-faint"
+            className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1"
             aria-hidden="true"
           >
-            /
+            <kbd className="rounded-sm border border-ink-line bg-paper-sunken px-1.5 py-0.5 text-2xs font-normal text-ink-faint">
+              /
+            </kbd>
+            <kbd className="rounded-sm border border-ink-line bg-paper-sunken px-1.5 py-0.5 text-2xs font-normal text-ink-faint">
+              ⌘K
+            </kbd>
           </span>
         )}
       </div>
@@ -358,7 +537,7 @@ export function GlobalSearch({ className }: { className?: string }) {
           <div
             id="global-search-panel"
             ref={panelRef}
-            className="absolute left-0 z-30 mt-2 max-h-[70vh] w-[28rem] max-w-[calc(100vw-2rem)] animate-fade-in overflow-y-auto rounded-md border border-ink-line bg-paper-raised p-1.5 shadow-raised"
+            className="absolute left-0 z-30 mt-2 max-h-[70vh] w-[32rem] max-w-[calc(100vw-2rem)] animate-fade-in overflow-y-auto rounded-md border border-ink-line bg-paper-raised p-1.5 shadow-raised"
           >
             {loading && (
               <p className="px-2 py-3 text-xs text-ink-faint" role="status">
@@ -377,6 +556,116 @@ export function GlobalSearch({ className }: { className?: string }) {
             <div id="global-search-listbox" role="listbox" aria-label="検索結果">
               {!loading && !error && (
                 <>
+                  {/* 最近見たもの — その端末の足あと（localStorage）。 */}
+                  {model.recentRows.length > 0 && (
+                    <>
+                      <SectionTitle>最近見たもの</SectionTitle>
+                      <div role="group" aria-label="最近見たもの">
+                        {model.recentRows.map((r) => (
+                          <Link
+                            key={r.href}
+                            id={optionId(r.index)}
+                            href={r.href}
+                            data-idx={r.index}
+                            role="option"
+                            aria-selected={highlight === r.index}
+                            onClick={close}
+                            onMouseEnter={() => setHighlight(r.index)}
+                            className={rowClass(r.index)}
+                          >
+                            <NavIcon
+                              name={KIND_ICON[r.kind]}
+                              className="h-4 w-4 shrink-0 text-khaki-500"
+                            />
+                            <span className="min-w-0 flex-1 truncate">
+                              {r.name}
+                            </span>
+                            <span className="shrink-0 text-2xs text-ink-faint">
+                              {r.sub ?? KIND_LABEL[r.kind]}
+                            </span>
+                          </Link>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {/*
+                    最近更新されたもの — サーバ側。履歴とは別の見出しで出す。
+                    「自分が見たもの」と「誰かが更新したもの」を混ぜると、
+                    開いた覚えのないものが履歴に並ぶことになる。
+                  */}
+                  {model.starterRows.length > 0 && (
+                    <>
+                      <SectionTitle>最近更新されたもの</SectionTitle>
+                      <div role="group" aria-label="最近更新されたもの">
+                        {model.starterRows.map((r) => (
+                          <Link
+                            key={r.href}
+                            id={optionId(r.index)}
+                            href={r.href}
+                            data-idx={r.index}
+                            role="option"
+                            aria-selected={highlight === r.index}
+                            onClick={close}
+                            onMouseEnter={() => setHighlight(r.index)}
+                            className={rowClass(r.index)}
+                          >
+                            {r.kind === "sheet" ? (
+                              <CollectionIcon
+                                name={r.icon}
+                                className="h-4 w-4 shrink-0 text-khaki-500"
+                              />
+                            ) : (
+                              <NavIcon
+                                name={KIND_ICON[r.kind]}
+                                className="h-4 w-4 shrink-0 text-khaki-500"
+                              />
+                            )}
+                            <span className="min-w-0 flex-1 truncate">
+                              {r.name}
+                            </span>
+                            <span className="shrink-0 text-2xs text-ink-faint">
+                              {KIND_LABEL[r.kind]}
+                            </span>
+                          </Link>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {/* 操作 — 名前ではなく「やりたいこと」から辿る道。 */}
+                  {model.actions.length > 0 && (
+                    <>
+                      <SectionTitle>操作</SectionTitle>
+                      <div role="group" aria-label="操作">
+                        {model.actions.map((a) => (
+                          <Link
+                            key={a.id}
+                            id={optionId(a.index)}
+                            href={a.href}
+                            data-idx={a.index}
+                            role="option"
+                            aria-selected={highlight === a.index}
+                            onClick={close}
+                            onMouseEnter={() => setHighlight(a.index)}
+                            className={rowClass(a.index)}
+                          >
+                            <NavIcon
+                              name={a.icon}
+                              className="h-4 w-4 shrink-0 text-khaki-500"
+                            />
+                            <span className="min-w-0 flex-1 truncate">
+                              {a.label}
+                            </span>
+                            <span className="hidden shrink-0 text-2xs text-ink-faint sm:inline">
+                              {a.hint}
+                            </span>
+                          </Link>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
                   {/* レコード — collection groups, 顧客データベース first */}
                   {model.groups.length > 0 && (
                     <>
@@ -539,8 +828,15 @@ export function GlobalSearch({ className }: { className?: string }) {
             </div>
 
             {!loading && !error && isEmpty && (
+              /*
+               * 打つ前と打った後で言うことが違う。
+               * 打つ前に「一致するものがありません」と出すと、
+               * 何も打っていないのに空振りしたように見える。
+               */
               <p className="px-2 py-4 text-xs text-ink-faint">
-                「{trimmed}」に一致するものがありません
+                {trimmed.length === 0
+                  ? "顧客名・案件名・シート名・ダッシュボード名で探せます。"
+                  : `「${trimmed}」に一致するものがありません`}
               </p>
             )}
 

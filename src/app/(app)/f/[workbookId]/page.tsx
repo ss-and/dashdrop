@@ -14,6 +14,7 @@ import { HelpTip } from "@/components/ui/HelpTip";
 import { AutoDashboardButton } from "@/components/dashboard/AutoDashboardButton";
 import { DeleteDataButton } from "@/components/data/DeleteDataButton";
 import { collectDeleteImpact } from "@/lib/data-delete";
+import { RememberVisit } from "@/components/app/RememberVisit";
 
 const SOURCE_LABEL: Record<string, string> = {
   excel: "Excel",
@@ -61,6 +62,12 @@ export default async function WorkbookPage({
   return (
     <>
       <Topbar user={user} title={workbook.name} />
+      <RememberVisit
+        workspaceId={user.workspace.id}
+        kind="file"
+        href={`/f/${workbook.id}`}
+        name={workbook.name}
+      />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-5xl space-y-5">
           {/* File header */}
