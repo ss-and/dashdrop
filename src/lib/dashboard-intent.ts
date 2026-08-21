@@ -187,6 +187,12 @@ export type WidgetRole =
   | "target"
   /** 増減の内訳（ウォーターフォール）。合計の動きを要因に分解する。 */
   | "delta"
+  /** 流れ（サンキー）。どこから来て、どこへ行ったか。 */
+  | "flow"
+  /** 地理（日本地図）。都道府県別の量。 */
+  | "geo"
+  /** 形の比較（レーダー）。同じ物差しでの多軸比較。 */
+  | "shape"
   | "trend"
   | "trend-split"
   | "ranking"
@@ -206,22 +212,27 @@ const WEIGHTS: Record<Exclude<Lens, "auto">, Record<WidgetRole, number>> = {
   performance: {
     kpi: 10, target: 10, delta: 8, trend: 9, "trend-split": 8, ranking: 7,
     composition: 4, stage: 3, distribution: 2, relation: 2, cross: 4, detail: 5,
+    flow: 4, geo: 7, shape: 4,
   },
   pipeline: {
     kpi: 8, target: 7, delta: 5, trend: 5, "trend-split": 7, ranking: 4,
     composition: 5, stage: 10, distribution: 2, relation: 2, cross: 9, detail: 6,
+    flow: 9, geo: 4, shape: 5,
   },
   composition: {
     kpi: 7, target: 4, delta: 9, trend: 4, "trend-split": 6, ranking: 9,
     composition: 10, stage: 5, distribution: 3, relation: 2, cross: 8, detail: 4,
+    flow: 8, geo: 7, shape: 7,
   },
   distribution: {
     kpi: 6, target: 3, delta: 3, trend: 4, "trend-split": 3, ranking: 5,
     composition: 3, stage: 2, distribution: 10, relation: 9, cross: 6, detail: 7,
+    flow: 3, geo: 4, shape: 5,
   },
   monitor: {
     kpi: 9, target: 8, delta: 4, trend: 6, "trend-split": 4, ranking: 6,
     composition: 4, stage: 4, distribution: 3, relation: 3, cross: 5, detail: 10,
+    flow: 5, geo: 6, shape: 3,
   },
 };
 

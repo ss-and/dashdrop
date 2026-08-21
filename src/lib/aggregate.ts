@@ -21,11 +21,21 @@ import type {
   WaterfallWidget,
   WaterfallData,
   WaterfallStep,
+  BoxplotWidget,
+  BoxplotBox,
+  BoxplotData,
+  RadarWidget,
+  RadarData,
+  SankeyWidget,
+  SankeyData,
+  JapanMapWidget,
+  JapanMapData,
   SeriesData,
   Unit,
 } from "./widgets";
 import { foldWidthVariants } from "./formula";
 import { formatCompact } from "./utils";
+import { findPrefecture } from "./japan";
 
 export interface AggRecord {
   id: string;
@@ -595,6 +605,397 @@ function computeWaterfall(w: WaterfallWidget, col: AggCollection): WaterfallData
     total,
     unit: w.unit ?? "number",
     groupBy: w.groupBy,
+    collectionId: col.id,
+  };
+}
+
+/* ------------------------------- 箱ひげ --------------------------------- */
+
+/**
+ * 分位点。並べ替え済みの配列から、線形補間で取り出す。
+ *
+ * 「7件の中央値」のように割り切れない位置は、前後の値の間を取る。
+ * 添字を切り捨てて済ませると、件数が偶数か奇数かで中央値の意味が変わる。
+ */
+function quantile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0;
+  if (sorted.length === 1) return sorted[0];
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+/**
+ * 1グループぶんの箱を作る。
+ *
+ * ひげは Tukey の流儀（四分位範囲の1.5倍以内にある**実データ**の端）。
+ * 単純な最小・最大にすると、外れ値1件でひげが伸びきって箱が線に潰れ、
+ * 比べたかった中央の差がまったく見えなくなる。
+ */
+function boxOf(label: string, values: number[], key?: string): BoxplotBox {
+  const sorted = [...values].sort((a, b) => a - b);
+  const q1 = quantile(sorted, 0.25);
+  const median = quantile(sorted, 0.5);
+  const q3 = quantile(sorted, 0.75);
+  const iqr = q3 - q1;
+  const loFence = q1 - 1.5 * iqr;
+  const hiFence = q3 + 1.5 * iqr;
+
+  const inside = sorted.filter((v) => v >= loFence && v <= hiFence);
+  const outliers = sorted.filter((v) => v < loFence || v > hiFence);
+
+  return {
+    label,
+    // 全部が外れ値になることは無い（q1〜q3 は必ず柵の内側）が、
+    // 念のため実データが1つも無いときは箱の端で代用する。
+    low: round2(inside.length > 0 ? inside[0] : q1),
+    q1: round2(q1),
+    median: round2(median),
+    q3: round2(q3),
+    high: round2(inside.length > 0 ? inside[inside.length - 1] : q3),
+    outliers: outliers.map(round2),
+    count: sorted.length,
+    key,
+  };
+}
+
+function computeBoxplot(w: BoxplotWidget, col: AggCollection): BoxplotData {
+  const filtered = applyFilters(col.records, w.filters);
+  const nameOf = (key: string) =>
+    col.fields.find((f) => f.key === key)?.name ?? key;
+  const groupField = w.groupBy
+    ? col.fields.find((f) => f.key === w.groupBy)
+    : undefined;
+  const optionMeta = new Map((groupField?.options ?? []).map((o) => [o.value, o]));
+
+  const buckets = new Map<string, number[]>();
+  for (const r of filtered) {
+    const v = toNumber(r.data[w.field]);
+    if (v === null) continue;
+    if (!w.groupBy) {
+      const all = buckets.get("") ?? [];
+      all.push(v);
+      buckets.set("", all);
+      continue;
+    }
+    for (const k of bucketKeys(r.data[w.groupBy])) {
+      const arr = buckets.get(k) ?? [];
+      arr.push(v);
+      buckets.set(k, arr);
+    }
+  }
+
+  /*
+   * 件数の多い順に残す。分布の図なので、**数の少ないグループを上位に置いても
+   * 形が読めない**（3件の箱ひげは箱ではなく点の並び）。
+   */
+  const entries = Array.from(buckets.entries()).sort(
+    (a, b) => b[1].length - a[1].length,
+  );
+  const overflow = entries.length > w.limit;
+  const head = overflow ? entries.slice(0, w.limit) : entries;
+
+  const boxes = head.map(([key, values]) =>
+    boxOf(
+      w.groupBy ? (optionMeta.get(key)?.label ?? key) : nameOf(w.field),
+      values,
+      w.groupBy ? key : undefined,
+    ),
+  );
+
+  /*
+   * 畳んだ分は箱にしない。
+   *
+   * 内訳（ドーナツ）なら残りを足して「その他」に出来るが、分布は足せない
+   * ——複数グループの値を混ぜた箱は、どのグループの分布でもない別物になる。
+   * 出さないほうが正しいので出さないが、落としたことは黙らない。
+   */
+  if (overflow) {
+    boxes.push({
+      label: `ほか${entries.length - w.limit}区分`,
+      low: 0,
+      q1: 0,
+      median: 0,
+      q3: 0,
+      high: 0,
+      outliers: [],
+      count: 0,
+      synthetic: true,
+    });
+  }
+
+  return {
+    type: "boxplot",
+    boxes,
+    unit: w.unit ?? "number",
+    fieldLabel: nameOf(w.field),
+    groupBy: w.groupBy,
+    collectionId: col.id,
+  };
+}
+
+/* ------------------------------- レーダー -------------------------------- */
+
+function computeRadar(w: RadarWidget, col: AggCollection): RadarData {
+  const filtered = applyFilters(col.records, w.filters);
+  const axisField = col.fields.find((f) => f.key === w.groupBy);
+  const axisMeta = new Map((axisField?.options ?? []).map((o) => [o.value, o]));
+  const splitField = w.splitBy
+    ? col.fields.find((f) => f.key === w.splitBy)
+    : undefined;
+  const splitMeta = new Map((splitField?.options ?? []).map((o) => [o.value, o]));
+
+  /** 「軸のキー → 系列のキー → 集計の器」。 */
+  const cells = new Map<string, Map<string, MeasureBucket>>();
+  const axisTotals = new Map<string, number>();
+  const splitCounts = new Map<string, number>();
+  const SOLE = "";
+
+  for (const r of filtered) {
+    const v = contributionOf(r, w.measure);
+    if (v === null) continue;
+    const splits = w.splitBy ? bucketKeys(r.data[w.splitBy]) : [SOLE];
+    for (const a of bucketKeys(r.data[w.groupBy])) {
+      axisTotals.set(a, (axisTotals.get(a) ?? 0) + 1);
+      let row = cells.get(a);
+      if (!row) {
+        row = new Map();
+        cells.set(a, row);
+      }
+      for (const sp of splits) {
+        splitCounts.set(sp, (splitCounts.get(sp) ?? 0) + 1);
+        let b = row.get(sp);
+        if (!b) {
+          b = emptyBucket();
+          row.set(sp, b);
+        }
+        addValue(b, v);
+      }
+    }
+  }
+
+  /*
+   * 軸は件数の多い順に採ってから、**ラベル順に並べ直す**。
+   *
+   * レーダーは軸の並びが形を決めるので、集計のたびに順番が変わると
+   * 「先月と形が違う」が中身の変化なのか並びの変化なのか分からなくなる。
+   * 選択肢型なら定義順、そうでなければラベル順で固定する。
+   */
+  const axisOrder = new Map(
+    (axisField?.options ?? []).map((o, i) => [o.value, i] as const),
+  );
+  const axisKeys = Array.from(axisTotals.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, w.limit)
+    .map(([k]) => k)
+    .sort((a, b) => {
+      const ai = axisOrder.get(a);
+      const bi = axisOrder.get(b);
+      if (ai !== undefined && bi !== undefined) return ai - bi;
+      if (ai !== undefined) return -1;
+      if (bi !== undefined) return 1;
+      return a.localeCompare(b, "ja");
+    });
+
+  const splitKeys = w.splitBy
+    ? Array.from(splitCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, w.splitLimit)
+        .map(([k]) => k)
+    : [SOLE];
+
+  const series = splitKeys.map((sp) => ({
+    label: w.splitBy ? (splitMeta.get(sp)?.label ?? sp) : "全体",
+    color: w.splitBy ? splitMeta.get(sp)?.color : undefined,
+    values: axisKeys.map((a) => {
+      const b = cells.get(a)?.get(sp);
+      // 該当が無い軸は 0。null にすると多角形が途切れて閉じない。
+      return b ? round2(bucketValue(b, w.measure.kind) ?? 0) : 0;
+    }),
+  }));
+
+  const max = series.reduce(
+    (m, s) => Math.max(m, ...s.values),
+    0,
+  );
+
+  return {
+    type: "radar",
+    axes: axisKeys.map((a) => axisMeta.get(a)?.label ?? a),
+    series,
+    unit: w.unit ?? "number",
+    max,
+  };
+}
+
+/* ------------------------------- サンキー -------------------------------- */
+
+function computeSankey(w: SankeyWidget, col: AggCollection): SankeyData {
+  const filtered = applyFilters(col.records, w.filters);
+  const nameOf = (key: string) =>
+    col.fields.find((f) => f.key === key)?.name ?? key;
+  const metaOf = (key: string) =>
+    new Map(
+      (col.fields.find((f) => f.key === key)?.options ?? []).map((o) => [
+        o.value,
+        o,
+      ]),
+    );
+  const fromMeta = metaOf(w.fromField);
+  const toMeta = metaOf(w.toField);
+
+  const flows = new Map<string, MeasureBucket>();
+  const fromTotals = new Map<string, number>();
+  const toTotals = new Map<string, number>();
+  const SEP = "\u0000";
+
+  for (const r of filtered) {
+    const v = contributionOf(r, w.measure);
+    if (v === null) continue;
+    for (const f of bucketKeys(r.data[w.fromField])) {
+      for (const t of bucketKeys(r.data[w.toField])) {
+        fromTotals.set(f, (fromTotals.get(f) ?? 0) + 1);
+        toTotals.set(t, (toTotals.get(t) ?? 0) + 1);
+        const k = `${f}${SEP}${t}`;
+        let b = flows.get(k);
+        if (!b) {
+          b = emptyBucket();
+          flows.set(k, b);
+        }
+        addValue(b, v);
+      }
+    }
+  }
+
+  const topOf = (m: Map<string, number>) =>
+    new Set(
+      Array.from(m.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, w.limit)
+        .map(([k]) => k),
+    );
+  const keptFrom = topOf(fromTotals);
+  const keptTo = topOf(toTotals);
+  const OTHER = "その他";
+
+  /*
+   * 左右の節点は別々に持つ。
+   *
+   * 同じ値が出発側と到着側の両方に現れる（部門→部門の異動など）ことがあり、
+   * 節点を共有すると自分自身へ戻る輪が出来る。サンキーは輪を描けないので、
+   * 描画が黙って崩れる。左右で必ず別の節点にする。
+   */
+  const fromLabels: string[] = [];
+  const toLabels: string[] = [];
+  const fromIndex = new Map<string, number>();
+  const toIndex = new Map<string, number>();
+  const idxFrom = (label: string) => {
+    let i = fromIndex.get(label);
+    if (i === undefined) {
+      i = fromLabels.length;
+      fromLabels.push(label);
+      fromIndex.set(label, i);
+    }
+    return i;
+  };
+  const idxTo = (label: string) => {
+    let i = toIndex.get(label);
+    if (i === undefined) {
+      i = toLabels.length;
+      toLabels.push(label);
+      toIndex.set(label, i);
+    }
+    return i;
+  };
+
+  const merged = new Map<string, number>();
+  for (const [k, bucket] of flows) {
+    const [fRaw, tRaw] = k.split(SEP);
+    const f = keptFrom.has(fRaw) ? (fromMeta.get(fRaw)?.label ?? fRaw) : OTHER;
+    const t = keptTo.has(tRaw) ? (toMeta.get(tRaw)?.label ?? tRaw) : OTHER;
+    const value = round2(bucketValue(bucket, w.measure.kind) ?? 0);
+    const mk = `${f}${SEP}${t}`;
+    merged.set(mk, round2((merged.get(mk) ?? 0) + value));
+  }
+
+  const links = Array.from(merged.entries())
+    // 太さ0の帯は描かれないうえ、Recharts の配置計算を狂わせる。
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, value]) => {
+      const [f, t] = k.split(SEP);
+      return { source: idxFrom(f), target: idxTo(t), value };
+    });
+
+  // 左の節点を先に並べ、右の節点の添字はその分ずらす。
+  const nodes = [
+    ...fromLabels.map((label) => ({ label, side: "from" as const })),
+    ...toLabels.map((label) => ({ label, side: "to" as const })),
+  ];
+  const offset = fromLabels.length;
+
+  return {
+    type: "sankey",
+    nodes,
+    links: links.map((l) => ({ ...l, target: l.target + offset })),
+    unit: w.unit ?? "number",
+    fromLabel: nameOf(w.fromField),
+    toLabel: nameOf(w.toField),
+  };
+}
+
+/* ------------------------------- 日本地図 -------------------------------- */
+
+/** 読めなかった値の実例を、いくつまで見せるか。 */
+const UNMATCHED_SAMPLES = 3;
+
+function computeJapanMap(w: JapanMapWidget, col: AggCollection): JapanMapData {
+  const filtered = applyFilters(col.records, w.filters);
+  const buckets = new Map<string, { name: string; bucket: MeasureBucket }>();
+  const unmatched = new Set<string>();
+  let unmatchedCount = 0;
+
+  for (const r of filtered) {
+    const v = contributionOf(r, w.measure);
+    if (v === null) continue;
+    const raw = r.data[w.field];
+    const pref = findPrefecture(raw);
+    if (!pref) {
+      // 空欄は「読めなかった」ではなく「入っていない」。分けて数える。
+      if (raw !== null && raw !== undefined && String(raw).trim() !== "") {
+        unmatchedCount += 1;
+        if (unmatched.size < UNMATCHED_SAMPLES) unmatched.add(String(raw));
+      }
+      continue;
+    }
+    let e = buckets.get(pref.code);
+    if (!e) {
+      e = { name: pref.name, bucket: emptyBucket() };
+      buckets.set(pref.code, e);
+    }
+    addValue(e.bucket, v);
+  }
+
+  const values = Array.from(buckets.entries())
+    .map(([code, e]) => ({
+      code,
+      name: e.name,
+      value: round2(bucketValue(e.bucket, w.measure.kind) ?? 0),
+    }))
+    .sort((a, b) => a.code.localeCompare(b.code));
+
+  const nums = values.map((v) => v.value);
+
+  return {
+    type: "japanmap",
+    values,
+    max: nums.length > 0 ? Math.max(...nums) : 0,
+    min: nums.length > 0 ? Math.min(...nums) : 0,
+    unit: w.unit ?? "number",
+    unmatched: { count: unmatchedCount, samples: Array.from(unmatched) },
+    groupBy: w.field,
     collectionId: col.id,
   };
 }
@@ -1366,6 +1767,39 @@ export function computeWidget(
           total: 0,
           unit: widget.unit ?? "number",
         };
+      case "boxplot":
+        return {
+          type: "boxplot",
+          boxes: [],
+          unit: widget.unit ?? "number",
+          fieldLabel: "",
+        };
+      case "radar":
+        return {
+          type: "radar",
+          axes: [],
+          series: [],
+          unit: widget.unit ?? "number",
+          max: 0,
+        };
+      case "sankey":
+        return {
+          type: "sankey",
+          nodes: [],
+          links: [],
+          unit: widget.unit ?? "number",
+          fromLabel: "",
+          toLabel: "",
+        };
+      case "japanmap":
+        return {
+          type: "japanmap",
+          values: [],
+          max: 0,
+          min: 0,
+          unit: widget.unit ?? "number",
+          unmatched: { count: 0, samples: [] },
+        };
       case "scatter":
         return {
           type: "scatter",
@@ -1421,6 +1855,14 @@ export function computeWidget(
       return computeGauge(widget, col);
     case "waterfall":
       return computeWaterfall(widget, col);
+    case "boxplot":
+      return computeBoxplot(widget, col);
+    case "radar":
+      return computeRadar(widget, col);
+    case "sankey":
+      return computeSankey(widget, col);
+    case "japanmap":
+      return computeJapanMap(widget, col);
   }
 }
 

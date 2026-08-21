@@ -277,6 +277,82 @@ export const waterfallWidgetSchema = baseWidget.extend({
 });
 export type WaterfallWidget = z.infer<typeof waterfallWidgetSchema>;
 
+/**
+ * 箱ひげ図（分布の比較）。
+ *
+ * ヒストグラムは「1本の列の分布」だが、こちらは**グループ間の分布の比較**。
+ * 「担当者別のリードタイム」を平均で並べると、平均10日の2人が
+ * 「毎回10日」と「3日と30日が半々」でも同じ高さになる。仕事の質はまるで違う。
+ */
+export const boxplotWidgetSchema = baseWidget.extend({
+  type: z.literal("boxplot"),
+  /** 分布を見る数値の列。 */
+  field: z.string().min(1),
+  /** 並べる区分。省略すると全体で1本。 */
+  groupBy: z.string().optional(),
+  /** 箱の数の上限。 */
+  limit: z.number().int().min(2).max(12).default(8),
+  unit: unitSchema.optional(),
+});
+export type BoxplotWidget = z.infer<typeof boxplotWidgetSchema>;
+
+/**
+ * レーダー（多角形）。
+ *
+ * 軸は `groupBy` の値、重ねる多角形は `splitBy` の値。指標は**1つだけ**に
+ * 絞ってある——件数と金額を1枚のレーダーに重ねると、半径の意味が2つになって
+ * 図として嘘になる（1万円と1件がどちらも「外側」に描かれる）。
+ * 比べたいのは「同じ物差しで測った、形の違い」。
+ */
+export const radarWidgetSchema = baseWidget.extend({
+  type: z.literal("radar"),
+  /** 軸になる区分。 */
+  groupBy: z.string().min(1),
+  measure: measureSchema.default({ kind: "count" }),
+  /** 重ねる多角形を分ける区分。省略すると1枚。 */
+  splitBy: z.string().optional(),
+  splitLimit: z.number().int().min(2).max(6).default(3),
+  /** 軸の本数。3本未満では多角形にならない。 */
+  limit: z.number().int().min(3).max(12).default(6),
+  unit: unitSchema.optional(),
+});
+export type RadarWidget = z.infer<typeof radarWidgetSchema>;
+
+/**
+ * サンキー（流れ）。
+ *
+ * 「どこから来て、どこへ行ったか」を帯の太さで見せる。チャネル→フェーズ、
+ * 流入元→結果、部門→費目。クロス集計でも同じ数字は出せるが、
+ * **どこが太いか**は数字の表からは掴めない。
+ */
+export const sankeyWidgetSchema = baseWidget.extend({
+  type: z.literal("sankey"),
+  /** 流れの始まり。 */
+  fromField: z.string().min(1),
+  /** 流れの終わり。 */
+  toField: z.string().min(1),
+  measure: measureSchema.default({ kind: "count" }),
+  /** 左右それぞれの節点の上限。超えた分は「その他」に畳む。 */
+  limit: z.number().int().min(2).max(10).default(6),
+  unit: unitSchema.optional(),
+});
+export type SankeyWidget = z.infer<typeof sankeyWidgetSchema>;
+
+/**
+ * 日本地図（都道府県別）。
+ *
+ * 中身はタイル（1県 = 1マス）。理由は src/lib/japan.ts に書いてある——
+ * 面積で描くと、東京の数字が北海道の面積に負ける。
+ */
+export const japanMapWidgetSchema = baseWidget.extend({
+  type: z.literal("japanmap"),
+  /** 都道府県名（または住所）が入っている列。 */
+  field: z.string().min(1),
+  measure: measureSchema.default({ kind: "count" }),
+  unit: unitSchema.optional(),
+});
+export type JapanMapWidget = z.infer<typeof japanMapWidgetSchema>;
+
 export const widgetSchema = z.discriminatedUnion("type", [
   kpiWidgetSchema,
   seriesWidgetSchema.extend({ type: z.literal("line") }),
@@ -294,6 +370,10 @@ export const widgetSchema = z.discriminatedUnion("type", [
   histogramWidgetSchema,
   gaugeWidgetSchema,
   waterfallWidgetSchema,
+  boxplotWidgetSchema,
+  radarWidgetSchema,
+  sankeyWidgetSchema,
+  japanMapWidgetSchema,
 ]);
 export type WidgetSpec = z.infer<typeof widgetSchema>;
 
@@ -507,8 +587,92 @@ export interface WaterfallData {
   collectionId?: string;
 }
 
+/**
+ * 箱ひげの1本。
+ *
+ * ひげの端は Tukey の流儀で、**四分位範囲の1.5倍以内にある実データの
+ * 最小・最大**。単純な最小値・最大値にすると、外れ値1件でひげが伸びきって
+ * 箱が潰れ、比べたかった中央の差が見えなくなる。
+ */
+export interface BoxplotBox {
+  label: string;
+  /** ひげの下端（q1 - 1.5×IQR 以内の最小の実データ）。 */
+  low: number;
+  q1: number;
+  median: number;
+  q3: number;
+  /** ひげの上端（q3 + 1.5×IQR 以内の最大の実データ）。 */
+  high: number;
+  /** ひげの外に出た点。「たまたま」ではなく「例外」として別に描く。 */
+  outliers: number[];
+  /** 数えた行数。1〜2件の箱は形に意味が無いので、画面で断るのに使う。 */
+  count: number;
+  key?: string;
+  synthetic?: boolean;
+}
+export interface BoxplotData {
+  type: "boxplot";
+  boxes: BoxplotBox[];
+  unit: Unit;
+  /** 分布を見た列の名前。 */
+  fieldLabel: string;
+  groupBy?: string;
+  collectionId?: string;
+}
+
+/** レーダー。軸の並びと、多角形ごとの値（軸と同じ並び）。 */
+export interface RadarData {
+  type: "radar";
+  axes: string[];
+  series: Array<{
+    label: string;
+    color?: string;
+    /** axes と同じ長さ・同じ並び。該当が無い軸は 0。 */
+    values: number[];
+  }>;
+  unit: Unit;
+  max: number;
+}
+
+/** サンキー。節点と、節点間の流れ。 */
+export interface SankeyData {
+  type: "sankey";
+  nodes: Array<{
+    /** 画面に出す名前。 */
+    label: string;
+    /** 左（出発）か右（到着）か。 */
+    side: "from" | "to";
+  }>;
+  /** nodes の添字で結ぶ。 */
+  links: Array<{ source: number; target: number; value: number }>;
+  unit: Unit;
+  fromLabel: string;
+  toLabel: string;
+}
+
+/** 日本地図（都道府県タイル）。 */
+export interface JapanMapData {
+  type: "japanmap";
+  /** 値のあった県だけ。無い県は塗らない（0 と「データ無し」は違う）。 */
+  values: Array<{ code: string; name: string; value: number }>;
+  max: number;
+  min: number;
+  unit: Unit;
+  /**
+   * 都道府県として読めなかった値。数だけでなく実例も返す——
+   * 「12件が読めませんでした」だけでは、何を直せばいいのか分からない。
+   */
+  unmatched: { count: number; samples: string[] };
+  groupBy?: string;
+  collectionId?: string;
+}
+
 export type WidgetData =
   | KpiData
+  | BoxplotData
+  | RadarData
+  | SankeyData
+  | JapanMapData
   | GaugeData
   | WaterfallData
   | PivotData

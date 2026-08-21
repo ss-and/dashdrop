@@ -274,7 +274,8 @@ function runOne(seed: number) {
     expect(sheet, `seed=${seed}: 存在しないシートを参照`).toBeDefined();
     const keys = new Set(sheet!.fields.map((f) => f.key));
     const refs: string[] = [];
-    if ("groupBy" in w) refs.push(w.groupBy);
+    // 箱ひげの groupBy は省略できる（全体で1本）ので、あるときだけ見る。
+    if ("groupBy" in w && w.groupBy) refs.push(w.groupBy);
     if ("rowField" in w) refs.push(w.rowField, w.colField);
     if ("dateField" in w && w.dateField) refs.push(w.dateField);
     if ("splitBy" in w && w.splitBy) refs.push(w.splitBy);

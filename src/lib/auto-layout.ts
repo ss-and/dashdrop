@@ -26,6 +26,7 @@ import {
   type ProfiledField,
 } from "./data-profile";
 import type { WidgetSpec, Unit } from "./widgets";
+import { findPrefecture } from "./japan";
 import {
   DEFAULT_INTENT,
   audienceMeta,
@@ -68,6 +69,25 @@ const MIN_WIDGETS_PER_SHEET = 8;
  * これ未満なら横棒（ランキング）の方が読みやすい。
  */
 const TREEMAP_MIN_DISTINCT = 10;
+
+/**
+ * 都道府県の列かどうかを、**中身で**判定する。
+ *
+ * 列名では当たらない。「都道府県」と書いてある表もあれば、「拠点」「営業所」
+ * 「エリア」のこともあり、逆に「地域」という列に「関東・関西」しか入って
+ * いないこともある。実際の値を都道府県名として読めるかどうかで決める。
+ *
+ * 過半数（6割）としているのは、県名と海外拠点が混ざる表を落とさないため。
+ * 当たらなかった値は地図の下に実例つきで出るので、多少混ざっていても
+ * 見た人が気づける。
+ */
+const PREF_MATCH_RATIO = 0.6;
+function looksLikePrefecture(f: ProfiledField): boolean {
+  const top = f.stats.topValues;
+  if (top.length < 3) return false;
+  const hit = top.filter((t) => findPrefecture(t.value) !== null).length;
+  return hit / top.length >= PREF_MATCH_RATIO;
+}
 
 const unitOf = (f?: ProfiledField): Unit =>
   f && (f.type === "currency" || MONEY_NAME.test(f.name)) ? "currency" : "number";
@@ -347,6 +367,29 @@ function layoutForSheet(
       span: 2,
       field: money.key,
       bins: 10,
+      unit: unitOf(money),
+    });
+  }
+
+  /*
+   * 日本地図。都道府県が入っている列があるときだけ。
+   *
+   * 列名では判定せず中身で見る（「拠点」「営業所」という名前でも中身が
+   * 県名のことがある）。当たらなければ出さないので、無関係な表に
+   * 地図が出ることはない。
+   */
+  const prefField = [...cats, ...ranks].find(looksLikePrefecture);
+  if (prefField) {
+    out.push({
+      id: genWidgetId(),
+      type: "japanmap",
+      title: money
+        ? `都道府県別の${money.name}`
+        : `都道府県別の件数`,
+      collection: S,
+      span: 2,
+      field: prefField.key,
+      measure: money ? { kind: "sum", field: money.key } : { kind: "count" },
       unit: unitOf(money),
     });
   }
@@ -714,7 +757,14 @@ function roleOf(w: WidgetSpec): WidgetRole {
     case "scatter":
       return "relation";
     case "histogram":
+    case "boxplot":
       return "distribution";
+    case "radar":
+      return "shape";
+    case "sankey":
+      return "flow";
+    case "japanmap":
+      return "geo";
     case "table":
       return "detail";
   }
@@ -805,6 +855,10 @@ function restyle(w: WidgetSpec, lens: Lens): WidgetSpec {
 function lensExtras(sheet: ProfiledSheet, lens: Lens): WidgetSpec[] {
   const S = sheet.slug;
   const measures = orderedMeasures(sheet.fields);
+  const cats = categoryFields(sheet.fields);
+  const ranks = rankableFields(sheet.fields).filter(
+    (f) => !cats.some((c) => c.key === f.key),
+  );
   const out: WidgetSpec[] = [];
 
   /*
@@ -815,7 +869,6 @@ function lensExtras(sheet: ProfiledSheet, lens: Lens): WidgetSpec[] {
    * 円では読み取れない**積み上がりの順序と、合計との差**が見える。
    */
   if (lens === "composition") {
-    const cats = categoryFields(sheet.fields);
     /*
      * 上下する列があるときは、中核が既に増減の図を置いている。
      * ここで足すと同じ軸のウォーターフォールが2枚並ぶ——数字は正しいが、
@@ -840,7 +893,74 @@ function lensExtras(sheet: ProfiledSheet, lens: Lens): WidgetSpec[] {
     }
   }
 
+  /*
+   * 流れ（サンキー）と形（レーダー）。
+   *
+   * どちらも「区分 × 区分」を別の読み方で見せる図。クロス集計と同じ数字が
+   * 出るが、クロス集計は数字を1つずつ読む表なので「どこが太いか」
+   * 「どんな形か」は掴めない。区分が2本そろっているときだけ。
+   */
+  if (lens === "pipeline" || lens === "composition") {
+    if (cats[0] && cats[1]) {
+      out.push({
+        id: genWidgetId(),
+        type: "sankey",
+        title: `${cats[0].name} → ${cats[1].name}`,
+        collection: S,
+        span: 2,
+        fromField: cats[0].key,
+        toField: cats[1].key,
+        measure: { kind: "count" },
+        limit: 6,
+        unit: "number",
+      });
+    }
+    // レーダーは軸が3本以上ないと多角形にならない。
+    const axis = cats.find((c) => c.stats.distinct >= 3);
+    if (axis) {
+      out.push({
+        id: genWidgetId(),
+        type: "radar",
+        title: `${axis.name}別の${measures[0]?.name ?? "件数"}`,
+        collection: S,
+        span: 2,
+        groupBy: axis.key,
+        measure: measures[0]
+          ? { kind: "sum", field: measures[0].key }
+          : { kind: "count" },
+        splitBy: cats.find((c) => c.key !== axis.key)?.key,
+        splitLimit: 3,
+        limit: 6,
+        unit: measures[0] ? unitOf(measures[0]) : "number",
+      });
+    }
+  }
+
   if (lens !== "distribution") return out;
+
+  /*
+   * 箱ひげ（ばらつきの比較）。
+   *
+   * ヒストグラムは1本の列の分布だが、こちらは**グループ間の比較**。
+   * 平均10日の2人が「毎回10日」と「3日と30日が半々」でも、平均の棒では
+   * 同じ高さになる。ばらつきを見たい人が本当に欲しいのはこちら。
+   */
+  const spread = cats[0] ?? ranks[0];
+  if (measures[0]) {
+    out.push({
+      id: genWidgetId(),
+      type: "boxplot",
+      title: spread
+        ? `${spread.name}別の${measures[0].name}のばらつき`
+        : `${measures[0].name}のばらつき`,
+      collection: S,
+      span: 2,
+      field: measures[0].key,
+      groupBy: spread?.key,
+      limit: 8,
+      unit: unitOf(measures[0]),
+    });
+  }
 
   for (const m of measures.slice(1, 3)) {
     out.push({

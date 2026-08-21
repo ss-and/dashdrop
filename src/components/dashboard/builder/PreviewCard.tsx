@@ -9,6 +9,10 @@ import { PivotTable } from "@/components/dashboard/widgets/PivotTable";
 import { ScatterPlot } from "@/components/dashboard/widgets/ScatterPlot";
 import { GaugeTile } from "@/components/dashboard/widgets/GaugeTile";
 import { WaterfallChart } from "@/components/dashboard/widgets/WaterfallChart";
+import { BoxPlot } from "@/components/dashboard/widgets/BoxPlot";
+import { RadarChartWidget } from "@/components/dashboard/widgets/RadarChartWidget";
+import { SankeyFlow } from "@/components/dashboard/widgets/SankeyFlow";
+import { JapanMap } from "@/components/dashboard/widgets/JapanMap";
 
 /**
  * Live preview area for one builder widget. Mirrors DashboardGrid's dispatch
@@ -51,6 +55,14 @@ function Body({ data }: { data: WidgetData }) {
       return <GaugeTile data={data} />;
     case "waterfall":
       return <WaterfallChart data={data} />;
+    case "boxplot":
+      return <BoxPlot data={data} />;
+    case "radar":
+      return <RadarChartWidget data={data} />;
+    case "sankey":
+      return <SankeyFlow data={data} />;
+    case "japanmap":
+      return <JapanMap data={data} />;
     default:
       return <Note>データなし</Note>;
   }

@@ -20,12 +20,16 @@ export type BuilderWidgetType =
   | "stacked100"
   | "waterfall"
   | "histogram"
+  | "boxplot"
   | "donut"
   | "hbar"
   | "treemap"
   | "funnel"
   | "scatter"
   | "bubble"
+  | "radar"
+  | "sankey"
+  | "japanmap"
   | "pivot"
   | "heatmap"
   | "table";
@@ -58,12 +62,16 @@ export const WIDGET_TYPES: BuilderWidgetType[] = [
   "stacked100",
   "waterfall",
   "histogram",
+  "boxplot",
   "donut",
   "hbar",
   "treemap",
   "funnel",
   "scatter",
   "bubble",
+  "radar",
+  "sankey",
+  "japanmap",
   "pivot",
   "heatmap",
   "table",
@@ -147,6 +155,13 @@ export const WIDGET_META: Record<BuilderWidgetType, WidgetMeta> = {
     defaultSpan: 2,
     group: "グラフ",
   },
+  boxplot: {
+    label: "箱ひげ図",
+    icon: "report",
+    hint: "グループごとの分布とばらつき（平均では見えない差）",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
   treemap: {
     label: "ツリーマップ",
     icon: "report",
@@ -172,6 +187,27 @@ export const WIDGET_META: Record<BuilderWidgetType, WidgetMeta> = {
     label: "バブル",
     icon: "report",
     hint: "散布図に3つ目の量を大きさで載せる",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
+  radar: {
+    label: "レーダー",
+    icon: "report",
+    hint: "区分ごとの形を重ねて比べる",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
+  sankey: {
+    label: "サンキー（流れ）",
+    icon: "report",
+    hint: "どこから来て、どこへ行ったか",
+    defaultSpan: 2,
+    group: "グラフ",
+  },
+  japanmap: {
+    label: "日本地図",
+    icon: "report",
+    hint: "都道府県別の塗り分け",
     defaultSpan: 2,
     group: "グラフ",
   },
@@ -258,6 +294,22 @@ export function canAddWidget(
       return groupableFields(fields).length >= 1;
     case "stacked100":
       // 割合を出す以上、割る先の区分が要る。
+      return groupableFields(fields).length >= 1;
+    case "boxplot":
+      // 分布を見る数値が1本。区分は無くても「全体で1本」の箱として成立する。
+      return numericFields(fields).length >= 1;
+    case "radar":
+      // 軸になる区分が1本。軸が3本未満のときは描画側が断る。
+      return groupableFields(fields).length >= 1;
+    case "sankey":
+      // 出発と到着で、別々の区分が2本要る。
+      return groupableFields(fields).length >= 2;
+    case "japanmap":
+      /*
+       * 都道府県名らしい列があるときだけ。列名では判断できない（「拠点」
+       * 「営業所」でも中身が県名のことがある）ので、文字列の列があれば
+       * 押せることにして、当たらなかった値は描画側が実例つきで報告する。
+       */
       return groupableFields(fields).length >= 1;
     case "histogram":
       // 分布を数える対象の数値が1本。
@@ -425,6 +477,70 @@ export function newWidget(
         xUnit: xF?.type === "currency" ? "currency" : "number",
         yUnit: yF?.type === "currency" ? "currency" : "number",
         sizeUnit: zF?.type === "currency" ? "currency" : "number",
+      };
+    }
+    case "boxplot": {
+      const m = nums[0];
+      const g = groups[0];
+      return {
+        ...base,
+        type: "boxplot",
+        title: m
+          ? g
+            ? `${g.name}別の${m.name}のばらつき`
+            : `${m.name}のばらつき`
+          : "ばらつき",
+        field: m?.key ?? fields[0]?.key ?? "",
+        groupBy: g?.key,
+        limit: 8,
+        unit: m?.type === "currency" ? "currency" : "number",
+      };
+    }
+    case "radar": {
+      const g = groups[0];
+      const m = nums[0];
+      return {
+        ...base,
+        type: "radar",
+        title: g ? `${g.name}別の${m ? m.name : "件数"}` : "レーダー",
+        groupBy: g?.key ?? fields[0]?.key ?? "",
+        measure: m ? { kind: "sum", field: m.key } : { kind: "count" },
+        splitBy: groups[1]?.key,
+        splitLimit: 3,
+        limit: 6,
+        unit: m?.type === "currency" ? "currency" : "number",
+      };
+    }
+    case "sankey": {
+      const [f, t] = groups;
+      return {
+        ...base,
+        type: "sankey",
+        title: f && t ? `${f.name} → ${t.name}` : "流れ",
+        fromField: f?.key ?? fields[0]?.key ?? "",
+        toField: t?.key ?? f?.key ?? fields[0]?.key ?? "",
+        measure: { kind: "count" },
+        limit: 6,
+        unit: "number",
+      };
+    }
+    case "japanmap": {
+      /*
+       * 都道府県が入っていそうな列を名前で当てにいく。外しても
+       * 描画側が「読めませんでした」と実例つきで出すので、黙って
+       * 間違った地図が出ることはない。
+       */
+      const pref =
+        groups.find((f) => /都道府県|県|地域|エリア|拠点|所在地|住所/.test(f.name)) ??
+        groups[0];
+      const m = nums[0];
+      return {
+        ...base,
+        type: "japanmap",
+        title: m ? `都道府県別の${m.name}` : "都道府県別の件数",
+        field: pref?.key ?? fields[0]?.key ?? "",
+        measure: m ? { kind: "sum", field: m.key } : { kind: "count" },
+        unit: m?.type === "currency" ? "currency" : "number",
       };
     }
     case "histogram":

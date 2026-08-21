@@ -391,6 +391,265 @@ export function WidgetConfig({ widget, sheets, onChange }: Props) {
         </>
       )}
 
+      {widget.type === "boxplot" && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor={`${idp}-bfield`}>ばらつきを見る数値</Label>
+            <Select
+              id={`${idp}-bfield`}
+              className="h-9"
+              value={widget.field}
+              onChange={(e) => onChange({ ...widget, field: e.target.value })}
+            >
+              {nums.length === 0 && <option value="">数値項目なし</option>}
+              {nums.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor={`${idp}-bgroup`}>並べる区分</Label>
+            <Select
+              id={`${idp}-bgroup`}
+              className="h-9"
+              value={widget.groupBy ?? ""}
+              onChange={(e) =>
+                onChange({ ...widget, groupBy: e.target.value || undefined })
+              }
+            >
+              <option value="">分けない（全体で1本）</option>
+              {groups.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </div>
+      )}
+
+      {widget.type === "radar" && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor={`${idp}-raxis`}>軸にする区分</Label>
+            <Select
+              id={`${idp}-raxis`}
+              className="h-9"
+              value={widget.groupBy}
+              onChange={(e) => onChange({ ...widget, groupBy: e.target.value })}
+            >
+              {groups.length === 0 && <option value="">項目なし</option>}
+              {groups.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.name}
+                </option>
+              ))}
+            </Select>
+            <p className="mt-1 text-2xs text-ink-muted">
+              値の種類が3つ以上ないと多角形になりません
+            </p>
+          </div>
+          <div>
+            <Label htmlFor={`${idp}-rsplit`}>重ねる区分</Label>
+            <Select
+              id={`${idp}-rsplit`}
+              className="h-9"
+              value={widget.splitBy ?? ""}
+              onChange={(e) =>
+                onChange({ ...widget, splitBy: e.target.value || undefined })
+              }
+            >
+              <option value="">重ねない（1枚）</option>
+              {groups
+                .filter((f) => f.key !== widget.groupBy)
+                .map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor={`${idp}-ragg`}>集計</Label>
+            <Select
+              id={`${idp}-ragg`}
+              className="h-9"
+              value={widget.measure.kind}
+              onChange={(e) =>
+                onChange({
+                  ...widget,
+                  measure: buildMeasure(
+                    e.target.value as Measure["kind"],
+                    fieldOf(widget.measure) ?? nums[0]?.key,
+                  ),
+                })
+              }
+            >
+              {MEASURE_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>
+                  {k.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          {widget.measure.kind !== "count" && (
+            <div>
+              <Label htmlFor={`${idp}-rfield`}>対象項目</Label>
+              <Select
+                id={`${idp}-rfield`}
+                className="h-9"
+                value={fieldOf(widget.measure) ?? ""}
+                onChange={(e) =>
+                  onChange({
+                    ...widget,
+                    measure: buildMeasure(widget.measure.kind, e.target.value),
+                  })
+                }
+              >
+                {nums.length === 0 && <option value="">数値項目なし</option>}
+                {nums.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          )}
+        </div>
+      )}
+
+      {widget.type === "sankey" && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor={`${idp}-sfrom`}>出発（左）</Label>
+            <Select
+              id={`${idp}-sfrom`}
+              className="h-9"
+              value={widget.fromField}
+              onChange={(e) => onChange({ ...widget, fromField: e.target.value })}
+            >
+              {groups.length === 0 && <option value="">項目なし</option>}
+              {groups.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor={`${idp}-sto`}>到着（右）</Label>
+            <Select
+              id={`${idp}-sto`}
+              className="h-9"
+              value={widget.toField}
+              onChange={(e) => onChange({ ...widget, toField: e.target.value })}
+            >
+              {groups.length === 0 && <option value="">項目なし</option>}
+              {groups.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="col-span-2">
+            <Label htmlFor={`${idp}-sagg`}>帯の太さ</Label>
+            <Select
+              id={`${idp}-sagg`}
+              className="h-9"
+              value={widget.measure.kind}
+              onChange={(e) =>
+                onChange({
+                  ...widget,
+                  measure: buildMeasure(
+                    e.target.value as Measure["kind"],
+                    fieldOf(widget.measure) ?? nums[0]?.key,
+                  ),
+                })
+              }
+            >
+              {MEASURE_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>
+                  {k.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </div>
+      )}
+
+      {widget.type === "japanmap" && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor={`${idp}-jfield`}>都道府県の項目</Label>
+            <Select
+              id={`${idp}-jfield`}
+              className="h-9"
+              value={widget.field}
+              onChange={(e) => onChange({ ...widget, field: e.target.value })}
+            >
+              {fields.length === 0 && <option value="">項目なし</option>}
+              {fields.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.name}
+                </option>
+              ))}
+            </Select>
+            <p className="mt-1 text-2xs text-ink-muted">
+              「東京都」「東京」のほか、住所の先頭からも読み取ります
+            </p>
+          </div>
+          <div>
+            <Label htmlFor={`${idp}-jagg`}>集計</Label>
+            <Select
+              id={`${idp}-jagg`}
+              className="h-9"
+              value={widget.measure.kind}
+              onChange={(e) =>
+                onChange({
+                  ...widget,
+                  measure: buildMeasure(
+                    e.target.value as Measure["kind"],
+                    fieldOf(widget.measure) ?? nums[0]?.key,
+                  ),
+                })
+              }
+            >
+              {MEASURE_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>
+                  {k.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          {widget.measure.kind !== "count" && (
+            <div>
+              <Label htmlFor={`${idp}-jmfield`}>対象項目</Label>
+              <Select
+                id={`${idp}-jmfield`}
+                className="h-9"
+                value={fieldOf(widget.measure) ?? ""}
+                onChange={(e) =>
+                  onChange({
+                    ...widget,
+                    measure: buildMeasure(widget.measure.kind, e.target.value),
+                  })
+                }
+              >
+                {nums.length === 0 && <option value="">数値項目なし</option>}
+                {nums.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          )}
+        </div>
+      )}
+
       {widget.type === "gauge" && (
         <div className="grid grid-cols-2 gap-3">
           <div>

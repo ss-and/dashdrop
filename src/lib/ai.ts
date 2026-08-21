@@ -98,6 +98,14 @@ const SPEC_PROMPT = `あなたはBIダッシュボード設計アシスタント
          ※ 件数(棒・左軸)と金額(線・右軸)のように、単位の違う2つを1枚に重ねるときに使う。
 - donut/hbar/treemap/funnel: { "type":"donut"|"hbar"|"treemap"|"funnel", "groupBy": <フィールドkey>, "measure"?: Measure, "limit": 2〜12, "order"?:"value"|"label" }
          ※ treemap は項目が多い構成比向け。funnel は「フェーズ」「ステータス」のような段階の列に使い、order は "label"（段階の順）にする。
+- boxplot: { "type":"boxplot", "field": <数値key>, "groupBy"?:<分類key>, "limit": 2〜12, "unit"?:"number"|"currency" }
+         ※ グループ間の**ばらつきの比較**。平均で並べると「毎回10日」と「3日と30日が半々」が同じ高さになる。
+- radar: { "type":"radar", "groupBy": <分類key>, "measure"?: Measure, "splitBy"?:<分類key>, "splitLimit": 2〜6, "limit": 3〜12, "unit"?:"number"|"currency" }
+         ※ 軸は groupBy の値、重ねる多角形は splitBy の値。指標は1つだけ（件数と金額を重ねると半径の意味が2つになり図として嘘になる）。groupBy の値が3種類以上あるときだけ使う。
+- sankey: { "type":"sankey", "fromField": <分類key>, "toField": <分類key>, "measure"?: Measure, "limit": 2〜10, "unit"?:"number"|"currency" }
+         ※ 流れ。チャネル→フェーズ、流入元→結果など。fromField と toField は必ず別の列にする。
+- japanmap: { "type":"japanmap", "field": <都道府県名が入っている列のkey>, "measure"?: Measure, "unit"?:"number"|"currency" }
+         ※ **中身が都道府県名（または都道府県から始まる住所）の列があるときだけ。** 列名が「地域」「エリア」でも中身が「関東」「西日本」なら使わない。
 - histogram: { "type":"histogram", "field": <number/currency型フィールドkey>, "bins": 3〜30, "unit"?:"number"|"currency" }
          ※ 数値の分布。合計や平均では分からない「偏り」を見るためのもの。
 - scatter: { "type":"scatter", "xField": <数値key>, "yField": <数値key>, "sizeField"?:<数値key>, "colorBy"?:<分類key>, "labelField"?:<フィールドkey>, "limit": 10〜2000 }

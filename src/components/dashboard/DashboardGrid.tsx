@@ -8,6 +8,10 @@ import { PivotTable } from "./widgets/PivotTable";
 import { ScatterPlot } from "./widgets/ScatterPlot";
 import { GaugeTile } from "./widgets/GaugeTile";
 import { WaterfallChart } from "./widgets/WaterfallChart";
+import { BoxPlot } from "./widgets/BoxPlot";
+import { RadarChartWidget } from "./widgets/RadarChartWidget";
+import { SankeyFlow } from "./widgets/SankeyFlow";
+import { JapanMap } from "./widgets/JapanMap";
 import { PaletteProvider } from "./PaletteContext";
 
 /**
@@ -54,6 +58,14 @@ function WidgetBody({ data }: { data: WidgetData }) {
       return <GaugeTile data={data} />;
     case "waterfall":
       return <WaterfallChart data={data} />;
+    case "boxplot":
+      return <BoxPlot data={data} />;
+    case "radar":
+      return <RadarChartWidget data={data} />;
+    case "sankey":
+      return <SankeyFlow data={data} />;
+    case "japanmap":
+      return <JapanMap data={data} />;
     default:
       return (
         <div className="flex h-24 items-center justify-center text-sm text-ink-faint">
