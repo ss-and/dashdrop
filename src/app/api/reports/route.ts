@@ -11,6 +11,7 @@ import { z } from "zod";
 import { withAuth, ok, readJson, ApiError } from "@/lib/api";
 import { db } from "@/lib/db";
 import { REPORT_FREQUENCIES, scheduledNextRun } from "./schedule";
+import { assertCapability } from "@/lib/workspace";
 
 const createReportSchema = z.object({
   dashboardId: z.string().trim().min(1, "ダッシュボードを選択してください"),
@@ -51,6 +52,8 @@ export const GET = withAuth(async (_req, { user }) => {
 });
 
 export const POST = withAuth(async (req, { user }) => {
+  // reports は有料プランの機能。判定は assertCapability に一本化する。
+  assertCapability(user, "reports");
   const workspaceId = user.workspace.id;
   const input = await readJson(req, createReportSchema);
 

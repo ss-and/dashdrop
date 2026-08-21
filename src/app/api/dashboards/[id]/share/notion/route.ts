@@ -18,12 +18,14 @@ import {
 } from "@/lib/notion";
 import { breakdownLines, isEmptyDigest } from "@/lib/dashboard-digest";
 import { loadShareSubject, stampedAt } from "../digest";
+import { assertCapability } from "@/lib/workspace";
 
 const bodySchema = z.object({
   parentPageId: z.string().min(1, "作成先のNotionページを選択してください。"),
 });
 
 export const POST = withAuth(async (req, { user, params }) => {
+  assertCapability(user, "integrations");
   const workspaceId = user.workspace.id;
 
   const integration = await getIntegration(workspaceId, "notion");

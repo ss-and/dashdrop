@@ -10,6 +10,7 @@
  */
 import { withAuth, ok, readJson } from "@/lib/api";
 import { z } from "zod";
+import { assertCapability } from "@/lib/workspace";
 import {
   saveIntegration,
   deleteIntegration,
@@ -38,6 +39,8 @@ export const GET = withAuth(async (_req, { user }) => {
 });
 
 export const POST = withAuth(async (req, { user }) => {
+  // integrations は有料プランの機能。判定は assertCapability に一本化する。
+  assertCapability(user, "integrations");
   const { token } = await readJson(req, bodySchema);
   // validateSecret (inside saveIntegration) rejects anything that is not an
   // internal integration token before it is stored.

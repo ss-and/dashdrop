@@ -35,6 +35,7 @@ import {
 } from "@/lib/field-types";
 import { readSheet, inferFields, sheetWarnings } from "@/lib/excel";
 import { toCsvExportUrl, fetchSheetCsv } from "@/lib/gsheets";
+import { assertCapability } from "@/lib/workspace";
 
 const BATCH_SIZE = 500;
 
@@ -121,7 +122,14 @@ function parseFieldsArray(
       // 「絞り込んだ後の位置」ではなく「元の配列での位置」で対応させる。
       sourceHeader = index < headers.length ? headers[index] : null;
     }
-    fields.push({ name, key, type, required: rec.required === true, options, sourceHeader });
+    fields.push({
+      name,
+      key,
+      type,
+      required: rec.required === true,
+      options,
+      sourceHeader,
+    });
   });
   return fields.length ? fields : null;
 }
@@ -155,6 +163,8 @@ interface PreparedJob {
 }
 
 export const POST = withAuth(async (req, { user }) => {
+  // integrations は有料プランの機能。判定は assertCapability に一本化する。
+  assertCapability(user, "integrations");
   const body = await readJson(req, bodySchema);
 
   const exportUrl = toCsvExportUrl(body.url);
@@ -209,7 +219,9 @@ export const POST = withAuth(async (req, { user }) => {
         sourceHeader: f.name,
       }));
     const collectionName =
-      (sel.collectionName && sel.collectionName.trim()) || sheetName || "インポート";
+      (sel.collectionName && sel.collectionName.trim()) ||
+      sheetName ||
+      "インポート";
     const slug = uniqueName(slugify(collectionName), takenSlugs);
     takenSlugs.add(slug);
     jobs.push({
@@ -244,7 +256,12 @@ export const POST = withAuth(async (req, { user }) => {
   });
 
   // --- Create each collection + its records; roll back all on any failure ---
-  const created: Array<{ id: string; name: string; imported: number; skipped: number }> = [];
+  const created: Array<{
+    id: string;
+    name: string;
+    imported: number;
+    skipped: number;
+  }> = [];
   const createdIds: string[] = [];
   let position = existing.length;
 
@@ -282,7 +299,7 @@ export const POST = withAuth(async (req, { user }) => {
           // 読むのは固定された元の列だけ。表示名やキーでの代替探索は行わない
           // （空欄のセルが同名の別列の値を継承してしまうため）。
           const raw =
-            f.sourceHeader !== null ? row[f.sourceHeader] ?? null : null;
+            f.sourceHeader !== null ? (row[f.sourceHeader] ?? null) : null;
           const result = coerceValue(f.type, raw, f.options);
           if (result.ok) data[f.key] = result.value;
           else {
@@ -358,12 +375,17 @@ export const POST = withAuth(async (req, { user }) => {
       // 「スプレッドシート一覧を確認」と案内すると、存在しないシートを
       // 探させることになる。
       const base =
-        err instanceof ApiError ? err.message : "インポート中にエラーが発生しました";
+        err instanceof ApiError
+          ? err.message
+          : "インポート中にエラーが発生しました";
       const hint =
         leftover === "sheet"
           ? "取り込み途中のスプレッドシートを削除できませんでした。スプレッドシート一覧をご確認のうえ削除してください"
           : "中身のない空のファイルが残りました。行は取り込まれていません。ファイル一覧から削除してください";
-      console.error("Google Sheets import failed and rollback was incomplete:", err);
+      console.error(
+        "Google Sheets import failed and rollback was incomplete:",
+        err,
+      );
       throw new ApiError(
         `${base}（${hint}）`,
         err instanceof ApiError ? err.status : 500,

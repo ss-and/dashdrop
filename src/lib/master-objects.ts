@@ -25,7 +25,7 @@
  * Definitions only — no DB access — so this module is safe to import anywhere.
  */
 import { ApiError } from "./errors";
-import type { Plan } from "./plans";
+import { limitOf, type Plan } from "./plans";
 import { CRM_SLUGS } from "./crm-objects";
 import { HR_SLUGS } from "./hr-objects";
 
@@ -58,10 +58,11 @@ export function assertWithinCollectionLimit(
   adding: number,
 ): void {
   const billable = countBillableCollections(existing);
-  if (billable + adding <= plan.limits.collections) return;
+  const limit = limitOf(plan.id, "collections");
+  if (billable + adding <= limit) return;
   throw new ApiError(
-    `プラン「${plan.name}」のスプレッドシート上限（${plan.limits.collections}）を超えます。` +
-      `現在 ${billable} 件で、あと ${Math.max(plan.limits.collections - billable, 0)} 件まで追加できます。` +
+    `プラン「${plan.name}」のスプレッドシート上限（${limit}）を超えます。` +
+      `現在 ${billable} 件で、あと ${Math.max(limit - billable, 0)} 件まで追加できます。` +
       `不要なスプレッドシートを削除するか、プランを変更してください。` +
       `（顧客データベース・人事データベースは上限に含みません）`,
     403,

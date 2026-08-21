@@ -55,6 +55,9 @@ vi.mock("@/lib/db", () => ({ db: mocks.db, toJson: (v: unknown) => v }));
 vi.mock("@/lib/workspace", () => ({
   logActivity: mocks.logActivity,
   assertCanCreateCollection: mocks.assertCanCreateCollection,
+  // プランの判定は本物を通さない。ここで確かめたいのは取り込みの中身。
+  assertCanCreateWorkbook: vi.fn(),
+  assertCapability: vi.fn(),
 }));
 vi.mock("@/lib/integrations", () => ({
   getSecret: mocks.getSecret,

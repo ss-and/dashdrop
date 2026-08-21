@@ -8,10 +8,20 @@ import { toFieldKey, uniqueName } from "@/lib/utils";
 import { fieldInputSchema } from "@/lib/validation";
 import { getCollectionForUser } from "@/lib/workspace";
 import { validateFieldConfig, type EngineField } from "@/lib/relations";
+import { assertCapability } from "@/lib/workspace";
+import { isComputedField } from "@/lib/field-types";
 
 export const POST = withAuth(async (req, { user, params }) => {
   const collection = await getCollectionForUser(user, params.id);
   const input = await readJson(req, fieldInputSchema);
+
+  /*
+   * 計算する項目（数式・VLOOKUP・ルックアップ・ロールアップ）は有料。
+   * 普通の項目は Free でも作れるので、種類で切り分ける。
+   */
+  if (isComputedField(input.type)) {
+    assertCapability(user, "computedFields");
+  }
 
   // Unique key within the collection.
   const takenKeys = new Set(collection.fields.map((f) => f.key));

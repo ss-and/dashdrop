@@ -23,6 +23,7 @@ import {
 } from "@/lib/master-objects";
 import { coerceValue } from "@/lib/field-types";
 import { getSecret, recordResult } from "@/lib/integrations";
+import { assertCapability } from "@/lib/workspace";
 import {
   fetchDatabase,
   queryDatabase,
@@ -49,6 +50,8 @@ const bodySchema = z.object({
 });
 
 export const POST = withAuth(async (req, { user }) => {
+  // integrations は有料プランの機能。判定は assertCapability に一本化する。
+  assertCapability(user, "integrations");
   const body = await readJson(req, bodySchema);
 
   const token = await getSecret(user.workspace.id, "notion");
@@ -77,7 +80,9 @@ export const POST = withAuth(async (req, { user }) => {
     await recordResult(user.workspace.id, "notion", true);
   } catch (err) {
     const message =
-      err instanceof ApiError ? err.message : "Notionの読み込みに失敗しました。";
+      err instanceof ApiError
+        ? err.message
+        : "Notionの読み込みに失敗しました。";
     await recordResult(user.workspace.id, "notion", false, message);
     throw err instanceof ApiError ? err : new ApiError(message, 502);
   }
@@ -90,10 +95,7 @@ export const POST = withAuth(async (req, { user }) => {
 
   const fields = notionFields(database);
   if (fields.length === 0) {
-    throw new ApiError(
-      "このデータベースには取り込める列がありません。",
-      422,
-    );
+    throw new ApiError("このデータベースには取り込める列がありません。", 422);
   }
   if (pages.length > plan.limits.recordsPerCollection) {
     throw new ApiError(
@@ -240,7 +242,9 @@ export const POST = withAuth(async (req, { user }) => {
       // 探す場所が違うものを一律に「スプレッドシート一覧を確認」と案内すると、
       // 存在しないシートを探させることになる。
       const base =
-        err instanceof ApiError ? err.message : "インポート中にエラーが発生しました";
+        err instanceof ApiError
+          ? err.message
+          : "インポート中にエラーが発生しました";
       const hint =
         leftover === "sheet"
           ? "取り込み途中のスプレッドシートを削除できませんでした。スプレッドシート一覧をご確認のうえ削除してください"
@@ -282,7 +286,12 @@ export const POST = withAuth(async (req, { user }) => {
     // UIはこの文言をそのまま表示する。null なら全行取り込めている。
     warning: truncatedMessage,
     collections: [
-      { id: collectionId, name: collectionName, imported: pages.length, skipped },
+      {
+        id: collectionId,
+        name: collectionName,
+        imported: pages.length,
+        skipped,
+      },
     ],
   });
 });

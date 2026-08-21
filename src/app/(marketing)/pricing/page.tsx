@@ -1,6 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { PLANS, PLAN_ORDER, formatPrice, getPlan } from "@/lib/plans";
+import {
+  PLANS,
+  PLAN_ORDER,
+  formatPrice,
+  getPlan,
+  plansEnforced,
+} from "@/lib/plans";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -79,7 +85,18 @@ const FAQ = [
   },
   {
     q: "Free プランの上限はどれくらいですか？",
-    a: "スプレッドシートは 10個まで、1シートあたり 500行までです（顧客データベース・人事データベースは上限の対象外です）。上限を超える取り込みは、その場で理由を表示してお断りします。",
+    /*
+     * 数はプランから引く。ここに直接書くと、値付けを変えたときに
+     * 「カードには12と書いてあるのに、下のQ&Aには10と書いてある」
+     * という状態が普通に起きる（実際に起きた）。
+     */
+    a:
+      `Excel は ${PLANS.free.limits.workbooks} ファイルまで、` +
+      `1ファイルにつき ${PLANS.free.limits.collections} シートまで、` +
+      `1シートあたり ${PLANS.free.limits.recordsPerCollection.toLocaleString("ja-JP")} 行までです。` +
+      `連携・数式・通知ルール・定期レポート・顧客/人事データベースは Pro 以上の機能です。` +
+      `上限を超える取り込みは、その場で理由を表示してお断りします。` +
+      `なお、この上限は Pro の提供開始に合わせて適用します。それまでは上限なくお使いいただけます。`,
   },
   {
     q: "複数人で使えますか？",
@@ -103,6 +120,22 @@ export default function PricingPage() {
           今ご利用いただけるのは、無料の Free プランです。Pro・Business
           は準備中で、お申し込みの受付はまだ行っていません。
         </p>
+        {/*
+          Free の線引きは決まっているが、まだ効かせていない。
+          「Pro が必要です」と出したところで申し込む先が無い以上、
+          隠すのは行き止まりを作るだけなので、開始日まで開けてある。
+          隠すことと、いくらで何ができるかを先に決めて見せることは別。
+        */}
+        {!plansEnforced && (
+          <p className="mx-auto mt-4 max-w-xl rounded-md border border-ink-line bg-paper-raised px-4 py-3 text-sm leading-relaxed text-ink-soft">
+            <strong className="font-semibold text-ink">
+              下の Free の上限は、Pro の提供開始に合わせて適用します。
+            </strong>
+            <br />
+            それまでは、Free のまますべての機能を上限なくお試しいただけます。
+            適用の前には必ずご連絡します。
+          </p>
+        )}
       </section>
 
       {/* Plan grid */}

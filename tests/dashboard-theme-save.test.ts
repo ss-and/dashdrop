@@ -26,6 +26,9 @@ vi.mock("@/lib/db", () => ({ db: mocks.db, toJson: (v: unknown) => v }));
 vi.mock("@/lib/workspace", () => ({
   logActivity: mocks.logActivity,
   assertCanCreateCollection: vi.fn(),
+  // プランの判定は本物を通さない。ここで確かめたいのは取り込みの中身。
+  assertCanCreateWorkbook: vi.fn(),
+  assertCapability: vi.fn(),
 }));
 
 const user = {

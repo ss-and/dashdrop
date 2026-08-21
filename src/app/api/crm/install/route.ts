@@ -8,10 +8,13 @@
 import { z } from "zod";
 import { withAuth, ok, readJson } from "@/lib/api";
 import { installCrm } from "@/lib/install-crm";
+import { assertCapability } from "@/lib/workspace";
 
 const bodySchema = z.object({ withSampleData: z.boolean().optional() });
 
 export const POST = withAuth(async (req, { user }) => {
+  // databases は有料プランの機能。判定は assertCapability に一本化する。
+  assertCapability(user, "databases");
   const { withSampleData } = await readJson(req, bodySchema);
   const result = await installCrm(user, { withSampleData });
   return ok(result);

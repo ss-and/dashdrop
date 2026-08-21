@@ -24,12 +24,12 @@
 import { withAuth, ok, ApiError } from "@/lib/api";
 import { db, toJson } from "@/lib/db";
 import { slugify, uniqueName, toFieldKey } from "@/lib/utils";
-import { getPlan } from "@/lib/plans";
+import { getPlan, limitOf, plansEnforced } from "@/lib/plans";
 import {
   assertWithinCollectionLimit,
   takenSlugsWithReserved,
 } from "@/lib/master-objects";
-import { logActivity } from "@/lib/workspace";
+import { assertCanCreateWorkbook, logActivity } from "@/lib/workspace";
 import { createNotification } from "@/lib/notify";
 import {
   isFieldType,
@@ -125,7 +125,14 @@ function parseFieldsArray(
       // 「絞り込んだ後の位置」ではなく「元の配列での位置」で対応させる。
       sourceHeader = index < headers.length ? headers[index] : null;
     }
-    fields.push({ name, key, type, required: rec.required === true, options, sourceHeader });
+    fields.push({
+      name,
+      key,
+      type,
+      required: rec.required === true,
+      options,
+      sourceHeader,
+    });
   });
   return fields.length ? fields : null;
 }
@@ -169,7 +176,10 @@ export const POST = withAuth(async (req, { user }) => {
   try {
     form = await req.formData();
   } catch {
-    throw new ApiError("ファイルを読み取れませんでした。もう一度アップロードしてください。", 400);
+    throw new ApiError(
+      "ファイルを読み取れませんでした。もう一度アップロードしてください。",
+      400,
+    );
   }
 
   const file = form.get("file");
@@ -182,7 +192,10 @@ export const POST = withAuth(async (req, { user }) => {
     throw new ApiError("対応形式は .xlsx / .xls / .csv です", 415);
   }
   if (file.size > MAX_IMPORT_BYTES) {
-    throw new ApiError(`ファイルサイズが上限（${MAX_LABEL}）を超えています`, 413);
+    throw new ApiError(
+      `ファイルサイズが上限（${MAX_LABEL}）を超えています`,
+      413,
+    );
   }
 
   // Resolve which sheets to import.
@@ -193,16 +206,24 @@ export const POST = withAuth(async (req, { user }) => {
       const parsed = JSON.parse(sheetsRaw);
       if (Array.isArray(parsed)) {
         selections = parsed
-          .filter((s) => s && typeof s === "object" && typeof s.sheetName === "string")
+          .filter(
+            (s) =>
+              s && typeof s === "object" && typeof s.sheetName === "string",
+          )
           .map((s) => ({
             sheetName: s.sheetName,
             collectionName:
-              typeof s.collectionName === "string" ? s.collectionName : undefined,
+              typeof s.collectionName === "string"
+                ? s.collectionName
+                : undefined,
             fields: s.fields,
           }));
       }
     } catch {
-      throw new ApiError("取り込むシートの指定が正しくありません。画面をもう一度読み込んでお試しください。", 400);
+      throw new ApiError(
+        "取り込むシートの指定が正しくありません。画面をもう一度読み込んでお試しください。",
+        400,
+      );
     }
   }
 
@@ -296,6 +317,16 @@ export const POST = withAuth(async (req, { user }) => {
         })
       : null;
 
+  /*
+   * ファイル数の上限。
+   *
+   * 上書き（replace）は新しいブックを作らないので数えない——毎月同じ台帳を
+   * 入れ直す使い方が、上限に当たって止まってしまう。「増える」ときだけ止める。
+   */
+  if (!target) {
+    await assertCanCreateWorkbook(user);
+  }
+
   // 同じ既存シートを2つの取り込みシートが取り合わないようにする。
   const claimed = new Set<string>();
 
@@ -304,9 +335,9 @@ export const POST = withAuth(async (req, { user }) => {
     const parsed = readSheet(buffer, sel.sheetName || undefined);
     const { sheetName, headers, rows, sampleByHeader } = parsed;
     if (headers.length === 0) continue; // skip empty tabs silently
-    if (rows.length > plan.limits.recordsPerCollection) {
+    if (plansEnforced && rows.length > limitOf(plan.id, "recordsPerCollection")) {
       throw new ApiError(
-        `シート「${sheetName}」の行数がプラン「${plan.name}」の上限（${plan.limits.recordsPerCollection.toLocaleString()}）を超えます。`,
+        `シート「${sheetName}」の行数がプラン「${plan.name}」の上限（${limitOf(plan.id, "recordsPerCollection").toLocaleString()}）を超えます。`,
         403,
       );
     }
@@ -450,7 +481,7 @@ export const POST = withAuth(async (req, { user }) => {
           // 読むのは固定された元の列だけ。表示名やキーでの代替探索は行わない
           // （空欄のセルが同名の別列の値を継承してしまうため）。
           const raw =
-            f.sourceHeader !== null ? row[f.sourceHeader] ?? null : null;
+            f.sourceHeader !== null ? (row[f.sourceHeader] ?? null) : null;
           const result = coerceValue(f.type, raw, f.options);
           if (result.ok) data[f.key] = result.value;
           else {
@@ -484,7 +515,6 @@ export const POST = withAuth(async (req, { user }) => {
         replaced: job.replaces !== null,
       });
     }
-
   } catch (err) {
     // All-or-nothing: drop the collections (fields/records cascade) first — the
     // workbook relation is SetNull, so deleting the workbook alone would leave
@@ -530,7 +560,9 @@ export const POST = withAuth(async (req, { user }) => {
       // 「スプレッドシート一覧を確認」と案内すると、存在しないシートを
       // 探させることになる。
       const base =
-        err instanceof ApiError ? err.message : "インポート中にエラーが発生しました";
+        err instanceof ApiError
+          ? err.message
+          : "インポート中にエラーが発生しました";
       const hint =
         leftover === "sheet"
           ? "取り込み途中のスプレッドシートを削除できませんでした。スプレッドシート一覧をご確認のうえ削除してください"

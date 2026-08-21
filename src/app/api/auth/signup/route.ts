@@ -9,9 +9,15 @@ import { logActivity } from "@/lib/workspace";
 import { env } from "@/lib/env";
 import { issueToken, EMAIL_VERIFY_TTL_HOURS } from "@/lib/auth-tokens";
 import { sendMail, emailVerifyMail, emailConfigured } from "@/lib/email";
-import { consumeOptional, ipKey, retryMessage, SIGNUP_RULE } from "@/lib/rate-limit";
+import {
+  consumeOptional,
+  ipKey,
+  retryMessage,
+  SIGNUP_RULE,
+} from "@/lib/rate-limit";
 import { installCrm } from "@/lib/install-crm";
 import type { Prisma } from "@prisma/client";
+import { can } from "@/lib/plans";
 
 /**
  * Pre-auth signup endpoint. Creates the User, their first Workspace + owner
@@ -96,7 +102,8 @@ export async function POST(req: Request) {
     }
 
     const passwordHash = await hashPassword(input.password);
-    const workspaceName = input.workspaceName?.trim() || `${input.name}のワークスペース`;
+    const workspaceName =
+      input.workspaceName?.trim() || `${input.name}のワークスペース`;
     const slug = await uniqueWorkspaceSlug(workspaceName);
 
     const { user, workspaceId } = await db.$transaction(async (tx) => {
@@ -136,33 +143,42 @@ export async function POST(req: Request) {
     });
 
     // Activity logging is best-effort and lives outside the transaction.
-    await logActivity(workspaceId, "collection.created", { template: "inquiry" });
+    await logActivity(workspaceId, "collection.created", {
+      template: "inquiry",
+    });
     await logActivity(workspaceId, "collection.created", { template: "task" });
 
-    // Every workspace starts with the customer database — DashDrop is meant to
-    // be the master record, not just a viewer over imported files. Best-effort:
-    // a failure here must never block the signup itself (the sidebar offers a
-    // 「顧客データベースを作成」 button as the fallback).
-    try {
-      await installCrm(
-        {
-          id: user.id,
-          email,
-          name: input.name,
-          emailVerified: true,
-          workspace: {
-            id: workspaceId,
-            name: workspaceName,
-            slug,
-            plan: "free",
-            role: "owner",
-            aiEnabled: true,
+    /*
+     * 顧客データベースは有料プランの機能なので、登録直後には入れない。
+     *
+     * 以前は必ず入れていた。Free の約束を「Excelを1つ置いたらダッシュボードが
+     * 出る」に絞った以上、登録した瞬間に顧客・担当者・商談・請求書・活動の
+     * 5つが並ぶのは、その約束と食い違う——しかも全部0件で並ぶ。
+     * （制限を効かせていない間は今までどおり入る。src/lib/plans.ts）
+     */
+    if (can("free", "databases")) {
+      try {
+        await installCrm(
+          {
+            id: user.id,
+            email,
+            name: input.name,
+            emailVerified: true,
+            workspace: {
+              id: workspaceId,
+              name: workspaceName,
+              slug,
+              plan: "free",
+              role: "owner",
+              aiEnabled: true,
+            },
           },
-        },
-        { withSampleData: false },
-      );
-    } catch (err) {
-      console.error("CRM bootstrap failed for new workspace:", err);
+          { withSampleData: false },
+        );
+      } catch (err) {
+        // 失敗しても登録自体は止めない（サイドバーの「追加」から作れる）。
+        console.error("CRM bootstrap failed for new workspace:", err);
+      }
     }
 
     /*
@@ -191,6 +207,9 @@ export async function POST(req: Request) {
       return fail(first, 422, { issues: err.flatten().fieldErrors });
     }
     console.error("Signup failed:", err);
-    return fail("アカウントの作成に失敗しました。しばらくして再度お試しください。", 500);
+    return fail(
+      "アカウントの作成に失敗しました。しばらくして再度お試しください。",
+      500,
+    );
   }
 }

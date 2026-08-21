@@ -20,6 +20,7 @@ import {
 } from "@/lib/field-types";
 import { parseFormula } from "@/lib/formula";
 import { Prisma } from "@prisma/client";
+import { assertCapability } from "@/lib/workspace";
 
 // Partial variant — any subset of field attributes may be updated.
 const updateFieldSchema = fieldInputSchema.partial();
@@ -92,9 +93,12 @@ async function findDependents(
   const relationTargets = new Map<string, Map<string, string>>();
   for (const f of rows) {
     if (f.type !== "relation") continue;
-    const target = str((f.config as { targetCollectionId?: unknown } | null)?.targetCollectionId);
+    const target = str(
+      (f.config as { targetCollectionId?: unknown } | null)?.targetCollectionId,
+    );
     if (!target) continue;
-    const perCollection = relationTargets.get(f.collectionId) ?? new Map<string, string>();
+    const perCollection =
+      relationTargets.get(f.collectionId) ?? new Map<string, string>();
     perCollection.set(f.key, target);
     relationTargets.set(f.collectionId, perCollection);
   }
@@ -143,7 +147,10 @@ async function applyRecordWrites(
     const chunk = writes.slice(i, i + WRITE_CHUNK);
     await Promise.all(
       chunk.map((w) =>
-        tx.record.update({ where: { id: w.id }, data: { data: toJson(w.data) } }),
+        tx.record.update({
+          where: { id: w.id },
+          data: { data: toJson(w.data) },
+        }),
       ),
     );
   }
@@ -157,7 +164,7 @@ async function loadRows(collectionId: string): Promise<RecordWrite[]> {
   });
   return rows.map((r) => ({
     id: r.id,
-    data: ((r.data as Record<string, unknown>) ?? {}),
+    data: (r.data as Record<string, unknown>) ?? {},
   }));
 }
 
@@ -184,6 +191,17 @@ export const PATCH = withAuth(async (req, { user, params }) => {
   const nextType: FieldType = input.type ?? currentType;
   const typeChanged = input.type !== undefined && input.type !== field.type;
 
+  /*
+   * 計算する項目へ**変えるとき**だけ止める。
+   *
+   * 既にある数式項目の名前を直したり、普通の項目へ戻したりするのは
+   * 塞がない——プランの線を引いたせいで、既に入っているものを
+   * 片付けることまでできなくなるのは筋が悪い。
+   */
+  if (isComputedField(nextType) && !isComputedField(currentType)) {
+    assertCapability(user, "computedFields");
+  }
+
   const data: Prisma.FieldUpdateInput = {};
   if (input.name !== undefined) data.name = input.name;
   if (input.type !== undefined) data.type = input.type;
@@ -191,7 +209,11 @@ export const PATCH = withAuth(async (req, { user, params }) => {
   if (input.options !== undefined) data.options = toJson(input.options);
   // 【不具合の再発防止】種類を変えたのに選択肢が残ると、数値列に select の
   // 選択肢がぶら下がったままになる。選択肢を持たない種類へ変えたら消す。
-  if (input.options === undefined && typeChanged && !FIELD_TYPE_META[nextType].optioned) {
+  if (
+    input.options === undefined &&
+    typeChanged &&
+    !FIELD_TYPE_META[nextType].optioned
+  ) {
     data.options = Prisma.DbNull;
   }
 
@@ -205,7 +227,9 @@ export const PATCH = withAuth(async (req, { user, params }) => {
     // 素通りし、テキスト列にリンク設定が残っていた。種類が変わった場合は
     // 「今回送られてきた config」だけを正とする（必要な設定が無ければ、
     // validateFieldConfig が日本語で不足を知らせる）。
-    const baseConfig = typeChanged ? input.config : (input.config ?? field.config);
+    const baseConfig = typeChanged
+      ? input.config
+      : (input.config ?? field.config);
     effectiveConfig = await validateFieldConfig(
       user.workspace.id,
       nextType,
@@ -254,7 +278,8 @@ export const PATCH = withAuth(async (req, { user, params }) => {
       // 「どの列の、どんな値が引っかかったか」を知らせる。
       const options =
         (input.options as SelectOption[] | undefined) ??
-        ((field.options as SelectOption[] | null) ?? undefined);
+        (field.options as SelectOption[] | null) ??
+        undefined;
       const rejected: unknown[] = [];
       const converted: RecordWrite[] = [];
       const coerced: unknown[] = [];
@@ -268,7 +293,10 @@ export const PATCH = withAuth(async (req, { user, params }) => {
         }
         coerced.push(result.value);
         if (JSON.stringify(result.value) === JSON.stringify(raw)) continue;
-        converted.push({ id: row.id, data: { ...row.data, [field.key]: result.value } });
+        converted.push({
+          id: row.id,
+          data: { ...row.data, [field.key]: result.value },
+        });
       }
       if (rejected.length > 0) {
         throw new ApiError(
@@ -291,7 +319,10 @@ export const PATCH = withAuth(async (req, { user, params }) => {
             : await db.record.count({
                 where: {
                   id: { in: [...ids] },
-                  collection: { id: targetCollectionId, workspaceId: user.workspace.id },
+                  collection: {
+                    id: targetCollectionId,
+                    workspaceId: user.workspace.id,
+                  },
                 },
               });
         if (found !== ids.size) {
@@ -328,7 +359,11 @@ export const PATCH = withAuth(async (req, { user, params }) => {
 export const DELETE = withAuth(async (_req, { user, params }) => {
   const collection = await getCollectionForUser(user, params.id);
   const field = collection.fields.find((f) => f.id === params.fieldId);
-  if (!field) throw new ApiError("項目が見つかりません（削除された可能性があります）。", 404);
+  if (!field)
+    throw new ApiError(
+      "項目が見つかりません（削除された可能性があります）。",
+      404,
+    );
 
   const deps = await findDependents(
     user.workspace.id,

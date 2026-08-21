@@ -71,30 +71,41 @@ describe("assertWithinCollectionLimit", () => {
       { slug: "inquiries" },
       { slug: "tasks" },
     ];
+    /*
+     * 上限の数そのものは値付けの都合で動く（10 → 12 のように）。
+     * ここで確かめたいのは数ではなく **関係**——マスターDBが何個あっても
+     * ユーザーのシートの枠は減らない、ということ。だから残り枠は
+     * プランから引いて組み立てる。
+     */
+    const limit = free.limits.collections;
+    const room = limit - 2; // ユーザーのシートは inquiries / tasks の2件
     expect(() => assertWithinCollectionLimit(free, workspace, 1)).not.toThrow();
-    // ユーザーのシートは2件なので、上限10まであと8件入る。
     expect(() =>
-      assertWithinCollectionLimit(free, workspace, 8),
+      assertWithinCollectionLimit(free, workspace, room),
     ).not.toThrow();
-    expect(() => assertWithinCollectionLimit(free, workspace, 9)).toThrow();
+    expect(() =>
+      assertWithinCollectionLimit(free, workspace, room + 1),
+    ).toThrow();
   });
 
   it("超過時のメッセージに残り枠と、マスターは含まない旨が入る", () => {
-    const full = Array.from({ length: 10 }, (_, i) => ({ slug: `sheet-${i}` }));
+    const limit = free.limits.collections;
+    const full = Array.from({ length: limit }, (_, i) => ({ slug: `sheet-${i}` }));
     try {
       assertWithinCollectionLimit(free, full, 1);
       throw new Error("should have thrown");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      expect(message).toContain("現在 10 件");
+      expect(message).toContain(`現在 ${limit} 件`);
       expect(message).toContain("あと 0 件");
       expect(message).toContain("上限に含みません");
     }
   });
 
-  it("空のワークスペースは上限ぶん作れる", () => {
-    expect(() => assertWithinCollectionLimit(free, [], 10)).not.toThrow();
-    expect(() => assertWithinCollectionLimit(free, [], 11)).toThrow();
+  it("空のワークスペースは上限ぶん作れて、1つ超えると止まる", () => {
+    const limit = free.limits.collections;
+    expect(() => assertWithinCollectionLimit(free, [], limit)).not.toThrow();
+    expect(() => assertWithinCollectionLimit(free, [], limit + 1)).toThrow();
   });
 });
 

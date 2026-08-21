@@ -18,6 +18,44 @@
 
 export type PlanId = "free" | "pro" | "business";
 
+/* ------------------------------ できること ------------------------------ */
+
+/**
+ * プランで開け閉めする機能のまとまり。
+ *
+ * 「Free はどこまで」を1か所で決めるためのもの。判定を各APIに散らすと、
+ * 塞いだつもりの入口が1つ残る——しかも塞ぎ忘れた側は誰も報告しないので、
+ * 気づくのは「なぜか使えている」と言われたときになる。
+ */
+export type Capability =
+  /** Slack / Notion / Google スプレッドシート との連携。 */
+  | "integrations"
+  /** 数式・VLOOKUP・ルックアップ・ロールアップ（計算する項目）。 */
+  | "computedFields"
+  /** 通知ルール（条件に当てはまったら知らせる）。 */
+  | "alerts"
+  /** 定期レポート（決まった時刻に送る）。 */
+  | "reports"
+  /** 顧客データベース・人事データベース。 */
+  | "databases";
+
+export const CAPABILITY_LABEL: Record<Capability, string> = {
+  integrations: "連携（Slack・Notion・Google スプレッドシート）",
+  computedFields: "数式・VLOOKUP",
+  alerts: "通知ルール",
+  reports: "定期レポート",
+  databases: "顧客データベース・人事データベース",
+};
+
+/** 有料プランで開くもの一式。Pro と Business の差は上限だけ。 */
+const PAID_CAPABILITIES: Capability[] = [
+  "integrations",
+  "computedFields",
+  "alerts",
+  "reports",
+  "databases",
+];
+
 export interface Plan {
   id: PlanId;
   name: string;
@@ -42,12 +80,23 @@ export interface Plan {
    * 「提供時の想定値」。画面には planned 経由でしか出さないこと。
    */
   limits: {
+    /**
+     * 上限: 取り込んだ Excel ファイル（ブック）の数。
+     *
+     * Free を「1つ」にしているのは、この製品の約束——**Excelを置いたら
+     * ダッシュボードが出る**——をまるごと1回体験できて、2つ目から先が
+     * 継続利用になる、という線だから。行数やシート数で切ると、
+     * 1つ目のファイルの途中で止まって約束が果たせない。
+     */
+    workbooks: number;
     collections: number; // 上限: スプレッドシート数（有効）
     recordsPerCollection: number; // 上限: 1シートの行数（有効）
     members: number; // 招待機能ができたときの想定値（未実装）
     monthlyImports: number; // 取り込み計測ができたときの想定値（未実装）
     apiAccess: boolean; // 公開APIができたときの想定値（未実装）
   };
+  /** このプランで開いている機能。 */
+  capabilities: Capability[];
   /** 今この製品で実際に使える機能。 */
   features: string[];
   /** 提供予定（未実装）。画面では「予定」と分けて表示する。 */
@@ -65,24 +114,28 @@ export const PLANS: Record<PlanId, Plan> = {
     highlighted: true,
     // Roomy enough for the CRM core (顧客/担当者/商談/活動) plus a few imports —
     // the customer database is the product's backbone, not a paid add-on.
+    /*
+     * シート数を12にしてあるのは、「1つのファイルに入っているタブ」を
+     * 収めるため。実際の業務Excelは3〜8タブが普通で、月ごとにタブを
+     * 分けているものだと12枚になる。ここで切ると、Free の唯一のファイルが
+     * 途中までしか入らない——約束を果たせないまま上限に当たる形になる。
+     */
     limits: {
-      collections: 10,
+      workbooks: 1,
+      collections: 12,
       recordsPerCollection: 500,
       members: 2,
       monthlyImports: 10,
       apiAccess: false,
     },
+    capabilities: [],
     features: [
-      "顧客データベース（顧客・担当者・商談・請求書・活動）",
-      "人事データベース（部署・社員・勤怠・休暇申請・評価）",
-      "スプレッドシート 10個まで",
-      "1シート 500行まで",
-      "Excel / CSV / Google スプレッドシート / Notion の取り込み",
+      "Excel / CSV を1ファイル取り込み",
+      "1シート 500行まで（1ファイル 12シートまで）",
+      "取り込んだ表の編集・並べ替え・絞り込み",
+      "ダッシュボードの自動作成（22種類のグラフ・8つの配色）",
+      "ダッシュボードの共有リンク",
       "Excel（.xlsx）への書き出し",
-      "ダッシュボード（テンプレート・自動生成・共有リンク）",
-      "数式・VLOOKUP・シート間リレーション",
-      "アラート（アプリ内通知・Slack 通知）",
-      "定期レポート（アプリ内通知＋印刷 / PDF）",
     ],
     planned: [],
   },
@@ -93,18 +146,24 @@ export const PLANS: Record<PlanId, Plan> = {
     priceMonthly: 3800,
     available: false,
     limits: {
+      workbooks: 20,
       collections: 50,
       recordsPerCollection: 50000,
       members: 15,
       monthlyImports: 500,
       apiAccess: true,
     },
+    capabilities: PAID_CAPABILITIES,
     features: [],
     planned: [
-      "スプレッドシート 50個まで",
+      "Excel 20ファイルまで・スプレッドシート 50個まで",
       "1シート 50,000行まで",
+      "連携（Slack・Notion・Google スプレッドシート）",
+      "数式・VLOOKUP・シート間リレーション",
+      "通知ルール（条件に当てはまったら知らせる）",
+      "定期レポート（決まった時刻に送る）",
+      "顧客データベース・人事データベース",
       "メンバーの招待（15名まで）",
-      "API アクセス",
       "優先サポート",
     ],
   },
@@ -115,15 +174,18 @@ export const PLANS: Record<PlanId, Plan> = {
     priceMonthly: 12000,
     available: false,
     limits: {
+      workbooks: 1000,
       collections: 1000,
       recordsPerCollection: 1000000,
       members: 100,
       monthlyImports: 100000,
       apiAccess: true,
     },
+    capabilities: PAID_CAPABILITIES,
     features: [],
     planned: [
-      "スプレッドシート 実質無制限",
+      "Pro のすべて",
+      "Excel・スプレッドシート 実質無制限",
       "1シート 100万行まで",
       "メンバーの招待（100名まで）",
       "API アクセス + Webhook",
@@ -158,3 +220,77 @@ export const anyPlanPurchasable = PLAN_ORDER.some((id) => {
   const plan = PLANS[id];
   return plan.available && plan.priceMonthly !== 0;
 });
+
+/* ------------------------- 制限をいつ効かせるか ------------------------- */
+
+/**
+ * 上限と機能の制限を、実際に効かせてよいか。
+ *
+ * ## なぜ「常に効かせる」ではないのか
+ *
+ * 買えないプランの後ろに機能を隠すと、**誰も使えない機能になる**。
+ * 「この機能には Pro が必要です」と出したところで申し込む先が無いので、
+ * 利用者にとっては単に壊れたのと同じ。制限が無い状態より確実に悪い。
+ *
+ * なので、線引きそのものはここに全部書いて動くようにしておき、
+ * **効かせ始めるのは Pro が実際に買えるようになった瞬間**にする。
+ * `anyPlanPurchasable` は決済ができたときに `available: true` を立てれば
+ * 自動で真になるので、そのとき追加の作業は要らない。
+ *
+ * 価格表には今から新しい線を載せる。「いくらで何ができるか」を先に
+ * 決めて見せるのは、隠すこととは別のことなので。
+ */
+export const plansEnforced = anyPlanPurchasable;
+
+/**
+ * そのプランに、この機能が**含まれているか**。値付けそのもの。
+ * 効かせているかどうかは見ない——価格表を組み立てるのはこちら。
+ */
+export function planIncludes(
+  planId: string | null | undefined,
+  cap: Capability,
+): boolean {
+  return getPlan(planId).capabilities.includes(cap);
+}
+
+/**
+ * いま実際に使えるか。値付け（planIncludes）に、効かせるかどうかを掛けたもの。
+ * 止める側はこちらを見る。
+ */
+export function can(
+  planId: string | null | undefined,
+  cap: Capability,
+): boolean {
+  if (!plansEnforced) return true;
+  return planIncludes(planId, cap);
+}
+
+/**
+ * そのプランの上限。**そのままの数**を返す。
+ *
+ * ここで「効かせていない間は大きな数」を返すようにはしない。上限の値は
+ * 価格表にも案内の文面にも出るもので、判定の都合で書き換えると
+ * 「Free は10個まで」と書いてある画面が11個目を受け入れることになる。
+ * 効かせるかどうかは、止める側（src/lib/workspace.ts）で判断する。
+ */
+export function limitOf(
+  planId: string | null | undefined,
+  key: keyof Plan["limits"],
+): number {
+  const value = getPlan(planId).limits[key];
+  return typeof value === "number" ? value : 0;
+}
+
+/**
+ * 断るときの文面。
+ *
+ * 何ができないかだけでなく、**いま何ができるのか**を必ず添える。
+ * 「Proが必要です」で終わる案内は、申し込めない今は行き止まりになる。
+ */
+export function upgradeMessage(cap: Capability): string {
+  return `${CAPABILITY_LABEL[cap]}は Pro 以上の機能です。Pro は準備中で、開始までは Free のままお使いいただけます。`;
+}
+
+export function limitMessage(what: string, limit: number): string {
+  return `${what}は Free プランでは ${limit.toLocaleString("ja-JP")} までです。Pro は準備中です。`;
+}

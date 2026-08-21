@@ -20,6 +20,7 @@ import {
   type IntegrationSummary,
 } from "@/lib/integrations";
 import { buildMessage, postToSlack } from "@/lib/slack";
+import { assertCapability } from "@/lib/workspace";
 
 const connectSchema = z.object({
   webhookUrl: z.string().min(1, "Webhook URL を入力してください。"),
@@ -54,6 +55,8 @@ export const GET = withAuth(async (_req, { user }) => {
 });
 
 export const POST = withAuth(async (req, { user }) => {
+  // integrations は有料プランの機能。判定は assertCapability に一本化する。
+  assertCapability(user, "integrations");
   const body = await readJson(req, connectSchema);
 
   // 形の検査を先に済ませる。https://hooks.slack.com 以外を弾くのはここで、

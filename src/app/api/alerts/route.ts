@@ -7,6 +7,7 @@ import { z } from "zod";
 import { withAuth, ok, readJson, ApiError } from "@/lib/api";
 import { db, toJson } from "@/lib/db";
 import { measureSchema, filterSchema } from "@/lib/widgets";
+import { assertCapability } from "@/lib/workspace";
 
 const metricSchema = z.object({
   measure: measureSchema,
@@ -44,6 +45,8 @@ export const GET = withAuth(async (_req, { user }) => {
 });
 
 export const POST = withAuth(async (req, { user }) => {
+  // alerts は有料プランの機能。判定は assertCapability に一本化する。
+  assertCapability(user, "alerts");
   const input = await readJson(req, createAlertSchema);
 
   // Scope the target collection to this workspace before writing.

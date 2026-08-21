@@ -10,8 +10,10 @@ import { getIntegration } from "@/lib/integrations";
 import { notifyWorkspaceSlack } from "@/lib/slack";
 import { breakdownLines, isEmptyDigest } from "@/lib/dashboard-digest";
 import { loadShareSubject, stampedAt } from "../digest";
+import { assertCapability } from "@/lib/workspace";
 
 export const POST = withAuth(async (_req, { user, params }) => {
+  assertCapability(user, "integrations");
   const workspaceId = user.workspace.id;
 
   // 未接続のまま送ろうとしたときは、何をすればいいかまで返す。
@@ -44,7 +46,10 @@ export const POST = withAuth(async (_req, { user, params }) => {
     body: bodyParts.join("\n\n"),
     url: subject.url,
     linkLabel: "ダッシュボードを開く",
-    fields: subject.digest.kpis.map((k) => ({ label: k.label, value: k.value })),
+    fields: subject.digest.kpis.map((k) => ({
+      label: k.label,
+      value: k.value,
+    })),
   });
 
   if (!delivered) {

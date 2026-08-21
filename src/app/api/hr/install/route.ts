@@ -9,10 +9,13 @@
 import { z } from "zod";
 import { withAuth, ok, readJson } from "@/lib/api";
 import { installHr } from "@/lib/install-hr";
+import { assertCapability } from "@/lib/workspace";
 
 const bodySchema = z.object({ withSampleData: z.boolean().optional() });
 
 export const POST = withAuth(async (req, { user }) => {
+  // databases は有料プランの機能。判定は assertCapability に一本化する。
+  assertCapability(user, "databases");
   const { withSampleData } = await readJson(req, bodySchema);
   const result = await installHr(user, { withSampleData });
   return ok(result);
