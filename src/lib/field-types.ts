@@ -6,6 +6,7 @@
  * coerced from raw input, and inferred from spreadsheet samples. Both the
  * database engine and the Excel importer depend on it.
  */
+import { parseJapaneseDate } from "./excel-ja";
 
 export const FIELD_TYPES = [
   "text",
@@ -314,6 +315,18 @@ export function coerceValue(
       }
       const s = String(raw).trim();
       if (DATE_RE.test(s)) return { ok: true, value: s };
+      // 日本語で書かれた日付（2026年4月1日 / 令和6年4月1日 / R6.4.1 / 2026年度）。
+      //
+      // parseJapaneseNumber を足したときとまったく同じ不具合が、日付でも
+      // 起きていた——列の型を「日付」に直すと `2026年4月1日` が全部弾かれて
+      // 空欄になる。利用者から見れば「正しい型を選んだのに中身が消えた」で、
+      // 文字列のまま諦めるしか無い。官公庁向けの資料は和暦がほぼ全部なので、
+      // ここが読めないと日付列がまるごと使えなかった。
+      //
+      // 明示的に日付型を選んだ場合は、年だけ・年度だけの粒度も受ける
+      // （1月1日／期初に寄せる）。推定では受けない——理由は inferFieldType 側。
+      const jp = parseJapaneseDate(s);
+      if (jp) return { ok: true, value: jp.date };
       // "2024-04-01 09:00:00" のような日付＋時刻は、日付部分がそのまま答え。
       // 文字列のまま切り出せば、パースのタイムゾーン解釈をまたがずに済む。
       const iso = s.match(/^(\d{4}-\d{2}-\d{2})[T ]/);
@@ -483,8 +496,40 @@ export function inferFieldType(samples: unknown[]): FieldType {
       ? "currency"
       : "number";
   }
-  if (test((v) => v instanceof Date || DATE_RE.test(String(v).trim()) || !Number.isNaN(Date.parse(String(v)))) &&
-      values.some((v) => v instanceof Date || DATE_RE.test(String(v).trim())))
+  /*
+   * 日付の推定。
+   *
+   * 「全部が日付として読める」だけでは足りない。Date.parse は "1" も "May" も
+   * 通してしまうので、**1件以上が確実に日付と分かる形**であることを併せて
+   * 求める（元の実装からある条件）。
+   *
+   * そこに日本語の書き方を足す。`2026年4月1日` も `令和6年4月1日` も
+   * Date.parse では NaN になるため、日本の帳票の日付列はここを一度も通らず、
+   * まるごと text になっていた。列が text だと時系列のグラフが作れないので、
+   * 利用者には「なぜか月ごとの推移が出ない」という形でしか見えない。
+   *
+   * ただし**年だけ（2026年）と年度（2026年度）は推定では日付にしない**。
+   * 「2024年 / 2025年 / 2026年」という列は、日付ではなく年という数量のことも
+   * あり、勝手に 2024-01-01 に寄せると意味が変わる。％ を推定では数値に
+   * しないのと同じ判断で、明示的に日付型を選んだときだけ受ける（coerceValue）。
+   */
+  const definitelyDate = (v: unknown) => {
+    if (v instanceof Date) return true;
+    const s = String(v).trim();
+    if (DATE_RE.test(s)) return true;
+    const jp = parseJapaneseDate(s);
+    return jp !== null && (jp.precision === "day" || jp.precision === "month");
+  };
+  if (
+    test(
+      (v) =>
+        v instanceof Date ||
+        DATE_RE.test(String(v).trim()) ||
+        parseJapaneseDate(String(v).trim()) !== null ||
+        !Number.isNaN(Date.parse(String(v))),
+    ) &&
+    values.some(definitelyDate)
+  )
     return "date";
   if (test((v) => EMAIL_RE.test(String(v).trim()))) return "email";
   if (test((v) => URL_RE.test(String(v).trim()))) return "url";
