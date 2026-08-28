@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession, clearSessionCookie } from "@/lib/auth";
-import { getPlan, formatPrice, anyPlanPurchasable } from "@/lib/plans";
+import {
+  getPlan,
+  formatPrice,
+  anyPlanPurchasable,
+  plansEnforced,
+} from "@/lib/plans";
 import { Topbar } from "@/components/app/Topbar";
 import { Button } from "@/components/ui/Button";
 import { Card, CardHeader, CardTitle, CardBody } from "@/components/ui/Card";
@@ -132,9 +137,31 @@ export default async function SettingsPage() {
                 label="権限"
                 value={ROLE_LABEL[user.workspace.role] ?? user.workspace.role}
               />
+              {/*
+                上限の数字だけを出すと「もう効いている」と読める。実際には
+                plansEnforced（= 買える有料プランがあるか）が false の間、
+                assertCapability も行数チェックも素通りするので、
+                **上限は1つも効いていない**。ここで数字だけ断言していたころ、
+                料金ページには「Pro の提供開始に合わせて適用します」と
+                書いてあり、同じ製品の2画面が逆のことを言っていた。
+                文面は料金ページ（src/app/(marketing)/pricing/page.tsx）に揃える。
+              */}
               <InfoRow
-                label="上限"
-                value={`スプレッドシート ${plan.limits.collections} 個 ・ 1シート ${plan.limits.recordsPerCollection.toLocaleString()} 行`}
+                label={plansEnforced ? "上限" : "上限（適用前）"}
+                value={
+                  <span className="flex flex-col items-start gap-1 sm:items-end">
+                    <span>
+                      スプレッドシート {plan.limits.collections} 個 ・ 1シート{" "}
+                      {plan.limits.recordsPerCollection.toLocaleString()} 行
+                    </span>
+                    {!plansEnforced && (
+                      <span className="text-xs font-normal text-ink-muted sm:text-right">
+                        現在は上限を適用していません（Pro の提供開始に合わせて
+                        適用します）。適用の前には必ずご連絡します。
+                      </span>
+                    )}
+                  </span>
+                }
               />
             </CardBody>
             <CardBody className="border-t border-ink-line">

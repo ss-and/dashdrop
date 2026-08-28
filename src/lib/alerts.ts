@@ -3,8 +3,17 @@
  *
  * A rule computes a metric (measure + filters) over one spreadsheet and fires
  * when the value crosses a bound. Firing is EDGE-triggered (only when the
- * condition newly becomes true) so repeated evaluations don't spam. Delivery is
- * in-app by default; Slack/email additionally when configured.
+ * condition newly becomes true) so repeated evaluations don't spam.
+ *
+ * 届け先はアプリ内通知（ベル）と Slack だけ。**メールは送らない。**
+ * 以前はここに「Slack/email additionally when configured」と書き、発火時に
+ * `void emailConfigured;` を置いていたが、メールを送る処理はこの製品に存在
+ * しない（notify.ts の emailConfigured は「送れる設定か」を返すだけ）。
+ * つまり SMTP を設定した利用者ほど「メールでも通知される」と読める記述が
+ * 残っていて、実際にはベルにしか出なかった。レポート側は同じ問題を見つけて
+ * 文言・API・DTO ごと撤去済み（src/app/api/reports/[id]/send/route.ts）なので、
+ * アラート側も同じ方針で残骸を消してある。メールを実装するまで、
+ * channel に "email" を足さないこと（作成APIの zod も inapp|slack のまま）。
  *
  * 1ルールの失敗が他のルールを巻き添えにしないよう、評価は `runEachIsolated` で
  * 1件ずつ隔離する（F3 の回帰）。
@@ -17,7 +26,7 @@ import {
   resolveCollectionRecords,
   type EngineCollection,
 } from "./relations";
-import { createNotification, sendWorkspaceSlack, emailConfigured } from "./notify";
+import { createNotification, sendWorkspaceSlack } from "./notify";
 import { displayValue, type FieldType } from "./field-types";
 import type { Measure, Filter, WidgetSpec, KpiData } from "./widgets";
 
@@ -349,6 +358,7 @@ interface AlertRuleRow {
   metric: unknown;
   operator: string;
   threshold: number;
+  /** 届け先。配信の実体があるのは "inapp" と "slack" だけ（"email" は撤去済み）。 */
   channel: string;
   lastValue: number | null;
 }
@@ -412,8 +422,11 @@ async function evaluateRule(
         linkLabel: message.linkLabel,
       });
     }
-    // email channel: delivered in-app for now; real SMTP send when configured.
-    void emailConfigured;
+    // ここに「email チャンネルは当面アプリ内で配信」という分岐（実体は
+    // `void emailConfigured;` だけ）があったが、送信処理が無いので何も
+    // していなかった。残しておくと、シードや直接INSERT、選択肢の復活で
+    // channel が "email" になった瞬間に「メールで通知します」が嘘になる。
+    // 実装が追いつくまで、分岐そのものを置かない。
 
     // どこにも届かなかったのに「発火した」ことにすると、二重に損をする。
     // 報告が緑になるうえ、lastValue を書いてしまうと次のエッジまで二度と

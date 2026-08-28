@@ -2,6 +2,14 @@
  * Threshold alerts. Create rules that watch one spreadsheet's metric and notify
  * (in-app bell / Slack) when it crosses a bound. Rules are evaluated on demand
  * with "今すぐ評価する"; firing is edge-triggered so it won't spam.
+ *
+ * 自動評価は外部のスケジューラが `/api/cron/alerts` を叩いたときにだけ動く。
+ * `CRON_SECRET` が未設定ならそのエンドポイントは必ず 503 を返すので、自動評価は
+ * 確実に動かない＝「今すぐ評価する」を押さない限り通知は一度も飛ばない。
+ * この画面は以前それを黙っていて、「しきい値を超えたら通知します」とだけ
+ * 書いていた。同じ仕組みのレポート画面は最初から警告していたので、
+ * 片方だけが黙るという非対称になっていた。判定も文言も
+ * src/lib/cron-status.ts に集めて、両方の画面で必ず同じことを言う。
  */
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
@@ -17,6 +25,11 @@ import { conditionText, type FieldLite } from "@/lib/alert-format";
 import type { AlertMetric } from "@/lib/alerts";
 import { getIntegration } from "@/lib/integrations";
 import { isSingleTenantOptIn, resolveFallbackWebhook } from "@/lib/notify";
+import {
+  scheduledRunPossible,
+  scheduledRunNote,
+  ALERT_SWEEP_COPY,
+} from "@/lib/cron-status";
 import { env } from "@/lib/env";
 
 /**
@@ -79,16 +92,32 @@ export default async function AlertsPage() {
   // という状態をなくす（Slack未接続なら sendWorkspaceSlack は黙って false を返す）。
   const slackDeliverable = await canDeliverSlack(user.workspace.id);
 
+  // 自動評価の受け口が有効かどうか。無効なら「今すぐ評価する」を押した
+  // ときにしか評価されない＝黙っていると通知がゼロのまま気づけない。
+  // レポート画面（src/app/(app)/reports/page.tsx）と同じ判定を使う。
+  const autoEvaluationPossible = scheduledRunPossible();
+
   return (
     <>
       <Topbar user={user} title="アラート" />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-3xl space-y-6">
-          <p className="text-sm leading-relaxed text-ink-muted">
-            スプレッドシートの数値がしきい値を超えたら、アプリ内のベルに通知します
-            （Slack を選ぶと、ベルに加えて Slack にも送信します）。条件を作って
-            「今すぐ評価する」で試せます。
-          </p>
+          <div className="space-y-1">
+            <p className="text-sm leading-relaxed text-ink-muted">
+              スプレッドシートの数値がしきい値を超えたら、アプリ内のベルに通知します
+              （Slack を選ぶと、ベルに加えて Slack にも送信します）。条件を作って
+              「今すぐ評価する」で試せます。
+            </p>
+            {/*
+              「通知します」だけで終えると、自動評価が動かない環境では
+              いつまで待っても何も起きない理由が利用者に見えない。
+              動く場合の説明と動かない場合の警告を対で出す
+              （文面は scheduledRunNote に集約。レポート画面と同じもの）。
+            */}
+            <p className="text-xs leading-relaxed text-ink-muted">
+              {scheduledRunNote(ALERT_SWEEP_COPY, autoEvaluationPossible)}
+            </p>
+          </div>
 
           {/* Rules list */}
           <Card>
@@ -126,7 +155,19 @@ export default async function AlertsPage() {
                             <p className="truncate font-medium text-ink">
                               {r.name}
                             </p>
-                            {!r.enabled && <Badge tone="neutral">停止中</Badge>}
+                            {/*
+                              有効なのに自動評価が動かない環境では、押さない
+                              限り一度も鳴らない。「有効」とだけ見えていると
+                              動いていると思わせるので、レポート一覧の
+                              「自動配信 / 手動のみ」と同じ形で状態を出す。
+                            */}
+                            {!r.enabled ? (
+                              <Badge tone="neutral">停止中</Badge>
+                            ) : autoEvaluationPossible ? (
+                              <Badge tone="success">自動評価</Badge>
+                            ) : (
+                              <Badge tone="neutral">手動のみ</Badge>
+                            )}
                             {/*
                               既に保存済みのルールも、Slackが未接続なら発火時に
                               何も届かない。作成時だけ警告しても、接続前に作った

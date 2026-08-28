@@ -121,7 +121,7 @@ const FEATURES = [
   {
     icon: "upload",
     title: "Excel / CSV 連携",
-    body: "手元のファイルをアップロードするだけで即テーブル化。整えたデータはいつでもエクスポートできます。",
+    body: "手元のファイルをアップロードするだけで即テーブル化。整えたデータはいつでも Excel（.xlsx）に書き出せます。",
   },
   {
     icon: "table",
@@ -175,7 +175,15 @@ const TRUST = [
   {
     icon: "download",
     title: "いつでもエクスポート",
-    body: "ワンクリックで Excel / CSV に書き出し。持ち出しは自由。",
+    /*
+     * 「Excel / CSV に書き出し」と書いていたが、CSV で書き出す経路は
+     * この製品に無い（src/app/api/export/[collectionId]/route.ts は
+     * .xlsx 固定で、text/csv を返すコードはどこにも存在しない）。
+     * 取り込みは CSV も受けるので、**入口と出口を混ぜない**書き方にする。
+     * 料金ページ（src/lib/plans.ts の features）は元々
+     *「Excel（.xlsx）への書き出し」と正しく書いてあり、LP だけが古かった。
+     */
+    body: "取り込みは Excel / CSV、書き出しは Excel（.xlsx）。持ち出しは自由。",
   },
 ];
 

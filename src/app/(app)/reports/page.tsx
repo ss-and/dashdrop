@@ -13,7 +13,11 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { cronSecret } from "@/lib/cron";
+import {
+  scheduledRunPossible,
+  scheduledRunNote,
+  REPORT_DISPATCH_COPY,
+} from "@/lib/cron-status";
 import { scheduledNextRun } from "@/app/api/reports/schedule";
 import { Topbar } from "@/components/app/Topbar";
 import { Card, CardHeader, CardTitle, CardBody } from "@/components/ui/Card";
@@ -42,7 +46,9 @@ export default async function ReportsPage() {
 
   // 自動配信の受け口が有効かどうか。共有シークレットが無ければ
   // `/api/reports/dispatch` は 503 を返すので、自動では一度も配信されない。
-  const autoDeliveryPossible = (cronSecret() ?? "").trim().length > 0;
+  // 判定と文面は src/lib/cron-status.ts に集めてある（アラート画面が同じ
+  // 仕組みなのに黙っていた——同じ非対称を二度作らないため）。
+  const autoDeliveryPossible = scheduledRunPossible();
 
   const reports: ReportRow[] = schedules.map((s) => ({
     id: s.id,
@@ -79,9 +85,7 @@ export default async function ReportsPage() {
               <ReportForm dashboards={dashboards} />
               <div className="space-y-1 text-xs leading-relaxed text-ink-muted">
                 <p>
-                  {autoDeliveryPossible
-                    ? "自動配信は、定期実行（cron）が /api/reports/dispatch を呼び出したときに動きます。呼び出しが設定されていない環境では「今すぐ受け取る」だけが動きます。"
-                    : "この環境では自動配信は動きません（CRON_SECRET が未設定のため、定期実行の受け口が無効です）。「今すぐ受け取る」でいつでも受け取れます。"}
+                  {scheduledRunNote(REPORT_DISPATCH_COPY, autoDeliveryPossible)}
                 </p>
                 <p>
                   メールでの配信には対応していません。受け取り方はアプリ内通知と、

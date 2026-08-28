@@ -27,6 +27,7 @@ import { RecordHeader } from "@/components/record/RecordHeader";
 import { RecordFields } from "@/components/record/RecordFields";
 import {
   RelatedList,
+  isScanLimited,
   type RelatedListData,
 } from "@/components/record/RelatedList";
 import {
@@ -214,6 +215,13 @@ export default async function RecordPage({
         recordId,
       ),
     );
+    // 上限まで読めたなら、その先にまだ一致があるかもしれない。matches.length は
+    // 「見た範囲での一致数」でしかないので、総数として出させないために
+    // 打ち切りの事実をそのまま画面へ渡す（RelatedList が表現を決める）。
+    const scanLimited = isScanLimited(childRecords.length, MAX_RELATED_SCAN);
+    // 一致ゼロでも、打ち切っているなら「無い」とは言い切れない。ただし
+    // このカードは一致した行を並べるものなので、ここでは出さずに畳む。
+    // 「一致が無い」ことを断言する文言はどこにも出していない。
     if (matches.length === 0) continue;
 
     const shown = matches.slice(0, MAX_RELATED_ROWS);
@@ -245,6 +253,8 @@ export default async function RecordPage({
           ? `${relField.name} でリンク`
           : undefined,
       total: matches.length,
+      scanLimited,
+      scanLimit: MAX_RELATED_SCAN,
       columns,
       // 関連リストの行も同じ規則で、ルックアップはラベル表示にそろえる。
       rows: childResolved.records.map((r) => ({

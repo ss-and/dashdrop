@@ -20,6 +20,12 @@ const createAlertSchema = z.object({
   metric: metricSchema,
   operator: z.enum(["gt", "gte", "lt", "lte"]),
   threshold: z.number().finite("しきい値を入力してください"),
+  /*
+   * 届け先は "inapp" か "slack" だけ。"email" を足さないこと——
+   * メールを送る処理はこの製品に存在せず（src/lib/alerts.ts の発火処理は
+   * ベルと Slack にしか出さない）、受け付けた瞬間に「メールで通知します」が
+   * 嘘になる。実際に送れるようになってから選択肢を増やす。
+   */
   channel: z.enum(["inapp", "slack"]).optional(),
 });
 
