@@ -44,9 +44,31 @@ type Phase =
 
 const ACCEPT = ".xlsx,.xls,.csv";
 
+/**
+ * アップロードの上限。**サーバ側の MAX_IMPORT_BYTES（src/lib/excel.ts）と
+ * 同じ値にすること。**
+ *
+ * ここに写しを持つのは、@/lib/excel を client component から import すると
+ * xlsx（数百KB）ごとブラウザのバンドルに入ってしまうため。GenerateWizard も
+ * 同じ理由で定数を写している。
+ *
+ * そして、この画面側の判定はサーバ側の重複ではなく**唯一効く判定**でもある。
+ * Vercel はリクエストボディを 4.5MB で打ち切り、その 413 はハンドラが起動する
+ * 前に返るので、大きいファイルではサーバ側の日本語メッセージは出ない。
+ * 送る前にここで止めて、理由と次の一手をこちらから伝える。
+ */
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // 4MB
+const MAX_UPLOAD_LABEL = "4MB";
+
 /** 拡張子だけ先に見て、明らかに違うものは通信する前に断る。 */
 function looksSupported(file: File): boolean {
   return /\.(xlsx|xls|csv)$/i.test(file.name);
+}
+
+/** 大きすぎるファイルの断り文句。何MBだったかと、減らし方まで書く。 */
+function tooLargeMessage(file: File): string {
+  const mb = (file.size / (1024 * 1024)).toFixed(1);
+  return `このファイルは大きすぎます（約${mb}MB / 上限${MAX_UPLOAD_LABEL}）。シートを分けて取り込むか、不要な列や行を削ってから、もう一度お試しください。`;
 }
 
 export function ExcelDropZone() {
@@ -68,6 +90,12 @@ export function ExcelDropZone() {
         kind: "error",
         message: "Excel（.xlsx / .xls）か CSV のファイルを置いてください。",
       });
+      return;
+    }
+    // 送ってから断られるのでは遅い（4.5MB を超えるとサーバ側の文面は
+    // そもそも出ない）。読み込みの表示を出す前にここで止める。
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setPhase({ kind: "error", message: tooLargeMessage(file) });
       return;
     }
 
@@ -264,7 +292,8 @@ export function ExcelDropZone() {
               ファイルを選ぶ
             </button>
             <p className="mt-4 text-xs text-ink-muted">
-              .xlsx / .xls / CSV（Excelで保存したものはそのままで大丈夫です）
+              .xlsx / .xls / CSV、{MAX_UPLOAD_LABEL}まで（Excelで保存したものは
+              そのままで大丈夫です）
             </p>
           </>
         )}

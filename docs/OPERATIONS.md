@@ -11,8 +11,8 @@
 | 変数 | 必須 | 説明 |
 |---|---|---|
 | `APP_URL` | ✅ | 公開URL。メールのリンクと共有リンクの土台になる。`http://localhost` のままだと本番起動時にエラーで止まる |
-| `DATABASE_URL` | ✅ | `postgresql://…` |
-| `DATABASE_PROVIDER` | ✅ | 本番では `postgresql` |
+| `DATABASE_URL` | ✅ | `postgresql://…`。`file:`（SQLite）のままだと本番起動時にエラーで止まる——サーバーレスの一時FSに作られて、書けたように見えたまま消えるため |
+| `DATABASE_PROVIDER` | ✅ | 本番では `postgresql`。`DATABASE_URL` と必ず対で変えること |
 | `AUTH_SECRET` | ✅ | セッションJWTの署名鍵。**32文字以上のランダム文字列**。`openssl rand -base64 48` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `EMAIL_FROM` | ✅ | パスワード再設定とメール確認に必要。未設定だと、忘れた人が二度と入れない |
 | `ANTHROPIC_API_KEY` |  | 取り込み時のAI提案。未設定でも決定的なルールで動く |
@@ -54,19 +54,76 @@ DATABASE_PROVIDER=postgresql DATABASE_URL="postgresql://…" npm run db:deploy
 
 ## 3. マイグレーション
 
-このリポジトリはこれまで `prisma db push`（マイグレーション履歴なし）で来ている。
-本番に出すなら履歴を作る。
+履歴は `prisma/migrations/` にある。**PostgreSQL 方言**で書かれていて、本番
+（Postgres）専用。手元の SQLite はこれまでどおり `npm run db:push` で回す
+（`prisma/migrations/migration_lock.toml` に `provider = "postgresql"` と書いてある）。
+
+### 3-1. 新しい本番DBに初めて流す
 
 ```bash
-# 初回だけ: 現在のスキーマを最初のマイグレーションにする
-DATABASE_PROVIDER=postgresql npm run db:migrate -- --name init
-
-# 以降: スキーマを変えたら
-DATABASE_PROVIDER=postgresql npm run db:migrate -- --name add_something
+DATABASE_PROVIDER=postgresql DATABASE_URL="postgresql://…" npm run db:deploy
 ```
 
-本番への適用は `npm run db:deploy`（`migrate deploy` は履歴を進めるだけで、
-データを消す変更を勝手に行わない）。
+`prisma/migrations/<timestamp>_init/migration.sql` が15テーブル分の
+`CREATE TABLE` とインデックス・外部キーを作る。適用後の確認:
+
+```bash
+psql "$DATABASE_URL" -c '\dt'                     # 15テーブルあること
+psql "$DATABASE_URL" -c 'table _prisma_migrations' # init が applied になっていること
+```
+
+> **なぜ履歴が要るのか**
+> このリポジトリは長く `prisma db push`（履歴なし）で来ていた。一方
+> `npm run db:deploy` は `prisma migrate deploy` を叩く。**履歴が空だと、
+> 新規DBに対して「適用するものが無い」と言って成功で終わり、テーブルが1つも
+> 作られない。** エラーが出ないので、アプリは起動し、最初のリクエストで初めて
+> 壊れていることが分かる——という事故になる。それを塞ぐためのベースライン。
+
+### 3-2. 既に `db push` でテーブルができているDBに、後から履歴を付ける
+
+（先行して手で作った検証環境などが該当。**テーブルがある状態で 3-1 を流すと
+「already exists」で落ちる**。）適用はせず、「適用済み」とだけ記録する。
+
+```bash
+DATABASE_PROVIDER=postgresql node scripts/db-provider.mjs
+DATABASE_URL="postgresql://…" npx prisma migrate resolve \
+  --applied 20260828122104_init \
+  --schema prisma/schema.generated.prisma
+```
+
+そのDBのテーブル定義が本当に現在のスキーマと一致しているかは、先に確かめること
+（`prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel
+prisma/schema.generated.prisma --script` が空なら一致している）。ずれたまま
+resolve すると、以降のマイグレーションが噛み合わなくなる。
+
+### 3-3. 以降、スキーマを変えたとき
+
+```bash
+# 作る（要 Postgres。ローカルに docker で立てても良い）
+DATABASE_PROVIDER=postgresql npm run db:migrate -- --name add_something
+
+# 本番へ適用
+DATABASE_PROVIDER=postgresql npm run db:deploy
+```
+
+**`DATABASE_PROVIDER=postgresql` を付け忘れないこと。** 付け忘れると sqlite 方言の
+SQL が `prisma/migrations/` に入り、本番の `migrate deploy` がそこで落ちる。
+
+Postgres を用意できない場合は、DBに繋がずに差分SQLだけ作れる（初回の
+`_init` もこの方法で作った）。
+
+```bash
+DATABASE_PROVIDER=postgresql node scripts/db-provider.mjs
+npx prisma migrate diff \
+  --from-migrations prisma/migrations \
+  --to-schema-datamodel prisma/schema.generated.prisma \
+  --shadow-database-url "$SHADOW_DATABASE_URL" --script
+# 初回（空のDBから）は --from-empty で、シャドウDBも不要:
+#   npx prisma migrate diff --from-empty \
+#     --to-schema-datamodel prisma/schema.generated.prisma --script
+```
+
+`migrate deploy` は履歴を進めるだけで、データを消す変更を勝手に行わない。
 
 ---
 
@@ -120,6 +177,8 @@ Authorization: Bearer $CRON_SECRET
 ## 7. 公開前チェックリスト
 
 - [ ] `DATABASE_PROVIDER=postgresql` で動いている
+- [ ] `DATABASE_URL` が `postgresql://…`（`file:` のままなら起動時に落ちる）
+- [ ] `npm run db:deploy` を通し、テーブルが15個できていることを確認した（§3-1）
 - [ ] `AUTH_SECRET` が本番用のランダム値
 - [ ] `APP_URL` が公開URL
 - [ ] SMTP が設定され、**実際にパスワード再設定メールが届くことを確認した**
@@ -128,4 +187,6 @@ Authorization: Bearer $CRON_SECRET
 - [ ] バックアップが動いていて、復元を1度通した
 - [ ] `CRON_SECRET` を設定し、定期実行を登録した
 - [ ] デモアカウント（`owner@demo.dashdrop`）が本番DBに**存在しない**
-      （`npm run db:seed` を本番で流さない）
+      （`npm run db:seed` は `NODE_ENV=production` では実行を拒否するが、
+      `NODE_ENV` を渡し忘れた手元から本番の `DATABASE_URL` を向いて叩けば通ってしまう。
+      実際に居ないことを1度は目で確認すること）

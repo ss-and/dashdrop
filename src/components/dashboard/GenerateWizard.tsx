@@ -10,7 +10,15 @@ import { NavIcon } from "@/components/app/icons";
 import { cn } from "@/lib/utils";
 
 const ALLOWED = ".png,.jpg,.jpeg,.webp,.pdf";
-const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8MB
+/*
+ * サーバ側（src/app/api/dashboards/generate/route.ts）と同じ 4MB。
+ *
+ * Vercel のサーバーレス関数はリクエストボディを 4.5MB で打ち切り、その判定は
+ * ハンドラが起動する前にある。ここで先に止めておかないと、送信してから
+ * プラットフォームの 413 が返るだけで、こちらの日本語メッセージは出ない。
+ * サーバ側の値を動かすときは必ずここも一緒に動かすこと。
+ */
+const MAX_FILE_BYTES = 4 * 1024 * 1024; // 4MB
 const IMAGE_EXT = ["png", "jpg", "jpeg", "webp"];
 
 type Via = "anthropic" | "openai" | "heuristic";
@@ -30,7 +38,24 @@ function extOf(name: string): string {
  * navigates to the new dashboard on success. Works with or without an AI key —
  * when `aiConfigured` is false, the server falls back to the closest template.
  */
-export function GenerateWizard({ aiConfigured }: { aiConfigured: boolean }) {
+export function GenerateWizard({
+  aiConfigured,
+  /**
+   * プランで AI 生成が開いているか（`can(plan, "aiAssist")` の結果）。
+   *
+   * 閉じていても入口は塞がない——サーバ側は「入力に最も近いテンプレート」を
+   * 返して最後まで通す。ここで受け取るのは**何が起きるかを先に伝える**ため
+   * だけ。押したあとで「思っていたのと違う」と気づかせるのが一番悪い。
+   *
+   * 既定を true にしてあるのは、この製品が今まさに置かれている状態
+   * （`plansEnforced === false` ＝ 誰も閉じられていない）と同じにするため。
+   * 呼び出し側でプランを渡すようになったら、そこが唯一の情報源になる。
+   */
+  planAllowsAi = true,
+}: {
+  aiConfigured: boolean;
+  planAllowsAi?: boolean;
+}) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -58,7 +83,10 @@ export function GenerateWizard({ aiConfigured }: { aiConfigured: boolean }) {
       return;
     }
     if (picked.size > MAX_FILE_BYTES) {
-      setError("ファイルサイズが大きすぎます（最大8MB）");
+      setError(
+        `ファイルサイズが大きすぎます（${(picked.size / 1024 / 1024).toFixed(1)}MB / 上限 4MB）。` +
+          `画像なら書き出しの品質を下げるか、PDF ならページを絞ってからお試しください。`,
+      );
       return;
     }
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -137,19 +165,36 @@ export function GenerateWizard({ aiConfigured }: { aiConfigured: boolean }) {
         </div>
       )}
 
-      {!aiConfigured && (
+      {/*
+        テンプレートから作られると分かっているなら、押す前に言う。理由は2つ
+        あり得る（キーが無い / プランで開いていない）が、**結果は同じ**なので
+        枠は1つにして、理由の部分だけを差し替える。キーの話は運用者向けなので
+        プランで閉じているときには出さない（利用者にはどうにもできない）。
+      */}
+      {(!aiConfigured || !planAllowsAi) && (
         <div className="flex items-start gap-3 rounded-md border border-info/20 bg-info-soft px-4 py-3">
           <span className="mt-0.5 shrink-0 text-info">
             <NavIcon name="sparkles" className="h-5 w-5" />
           </span>
           <div className="space-y-1">
-            <Badge tone="info" variant="soft">AI連携キー未設定</Badge>
-            <p className="text-sm text-ink-soft">
-              AI連携キーが未設定のため、入力内容に最も近いテンプレートから作成します。
-              <span className="text-ink-muted">
-                （.env に ANTHROPIC_API_KEY を設定すると画像/PDFから自動生成します）
-              </span>
-            </p>
+            <Badge tone="info" variant="soft">
+              {aiConfigured ? "Freeプラン" : "AI連携キー未設定"}
+            </Badge>
+            {aiConfigured ? (
+              <p className="text-sm text-ink-soft">
+                FreeプランではAIによる生成を行わないため、入力内容に最も近いテンプレートから作成します。
+                <span className="text-ink-muted">
+                  （作成したあとは、グラフも項目も自由に編集できます）
+                </span>
+              </p>
+            ) : (
+              <p className="text-sm text-ink-soft">
+                AI連携キーが未設定のため、入力内容に最も近いテンプレートから作成します。
+                <span className="text-ink-muted">
+                  （.env に ANTHROPIC_API_KEY を設定すると画像/PDFから自動生成します）
+                </span>
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -225,7 +270,7 @@ export function GenerateWizard({ aiConfigured }: { aiConfigured: boolean }) {
                 画像・PDFをドラッグ＆ドロップ
               </p>
               <p className="text-xs text-ink-muted">
-                またはクリックして選択（.png / .jpg / .jpeg / .webp / .pdf、8MBまで）
+                またはクリックして選択（.png / .jpg / .jpeg / .webp / .pdf、4MBまで）
               </p>
               <input
                 ref={inputRef}

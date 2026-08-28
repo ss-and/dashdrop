@@ -37,7 +37,18 @@ import { readSheet, inferFields, sheetWarnings } from "@/lib/excel";
 import { toCsvExportUrl, fetchSheetCsv } from "@/lib/gsheets";
 import { assertCapability } from "@/lib/workspace";
 
-const BATCH_SIZE = 500;
+/** 1回の createMany にまとめる行数。値の根拠は /api/import と同じ。 */
+const BATCH_SIZE = 2000;
+
+/**
+ * Google からの CSV 取得（ネットワーク）＋ 行の一括書き込みに与える上限（秒）。
+ * 宣言が無いと Vercel の既定（10〜15秒）で切られ、all-or-nothing の巻き戻しの
+ * せいで「待たされた末に何も起きなかった」になる。
+ *
+ * 60 は Vercel Pro の最大（800秒）ではなく、Hobby でも他のホスティングでも
+ * 通る値。/api/import・Notion 取り込み・cron の2本と同じ値でそろえてある。
+ */
+export const maxDuration = 60;
 
 interface FinalField {
   name: string;
@@ -310,19 +321,25 @@ export const POST = withAuth(async (req, { user }) => {
         return data;
       });
 
+      /*
+       * 行の書き込み。1バッチ＝1文（createMany）。/api/import と同じ理由で、
+       * 500件ぶんの `create` を1トランザクションに詰める形をやめている
+       * （トランザクションが1つでも往復は行数ぶん出る。詳細は
+       * src/app/api/import/route.ts の BATCH_SIZE のコメント）。
+       *
+       * id は渡さない（Record.id は cuid の既定値）。巻き戻しは下の catch が
+       * Collection ごと消す形なので、書き込み側をトランザクションで囲む必要は
+       * ない——Record は cascade で一緒に消える。
+       */
       for (let i = 0; i < recordData.length; i += BATCH_SIZE) {
         const batch = recordData.slice(i, i + BATCH_SIZE);
-        await db.$transaction(
-          batch.map((data) =>
-            db.record.create({
-              data: {
-                collectionId: collection.id,
-                createdById: user.id,
-                data: toJson(data),
-              },
-            }),
-          ),
-        );
+        await db.record.createMany({
+          data: batch.map((data) => ({
+            collectionId: collection.id,
+            createdById: user.id,
+            data: toJson(data),
+          })),
+        });
       }
 
       created.push({

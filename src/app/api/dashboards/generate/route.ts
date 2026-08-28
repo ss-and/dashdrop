@@ -3,7 +3,7 @@
  *
  * POST multipart/form-data:
  *   - description  (string, optional) — free-text of the dashboard the user wants
- *   - file         (optional)         — .png/.jpg/.jpeg/.webp/.pdf, <= 8MB
+ *   - file         (optional)         — .png/.jpg/.jpeg/.webp/.pdf, <= 4MB
  * At least one of `description` / `file` is required.
  *
  * The parsed input is handed to `generateDashboardTemplate` (which degrades to a
@@ -16,10 +16,29 @@ import { applyTemplate } from "@/lib/apply-template";
 import {
   generateDashboardTemplate,
   pickHeuristicTemplate,
+  aiAllowedFor,
+  generationCallsOut,
   type GenerateInput,
 } from "@/lib/ai";
+import {
+  AI_RULE,
+  consumeOptional,
+  retryMessage,
+  workspaceKey,
+} from "@/lib/rate-limit";
 
-const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8MB
+/**
+ * 8MB → 4MB。Vercel のサーバーレス関数はリクエストボディを 4.5MB で打ち切る。
+ * その判定はハンドラが起動する**前**にあるので、8MB を受け付けると宣言しても
+ * 4.5〜8MB の PDF/画像はここに届かず、下の日本語メッセージは一度も出ない
+ * （利用者に残るのは本文の無い 413 だけ）。自分で断れる値まで下げて、理由を
+ * こちらから伝えられるようにする。詳細は src/lib/excel.ts の MAX_IMPORT_BYTES。
+ *
+ * 画面側（GenerateWizard）の定数・文面も同じ 4MB に揃えてある。定数だけ下げて
+ * 文面を残すと「4MB で断りながら 8MB と言う」状態になり、断られた人には
+ * 何が起きたのか分からない。上限を動かすときは必ず両方を一緒に動かすこと。
+ */
+const MAX_FILE_BYTES = 4 * 1024 * 1024; // 4MB
 
 const IMAGE_TYPES: Record<string, string> = {
   png: "image/png",
@@ -62,7 +81,11 @@ export const POST = withAuth(async (req, { user }) => {
 
   if (file && file instanceof File && file.size > 0) {
     if (file.size > MAX_FILE_BYTES) {
-      throw new ApiError("ファイルサイズが大きすぎます（最大8MB）", 413);
+      throw new ApiError(
+        `ファイルサイズが大きすぎます（${(file.size / 1024 / 1024).toFixed(1)}MB / 上限 4MB）。` +
+          `画像なら書き出しの品質を下げるか、PDF ならページを絞ってからお試しください。`,
+        413,
+      );
     }
     const meta = fileKindFor(file.name, file.type);
     if (!meta) {
@@ -86,10 +109,37 @@ export const POST = withAuth(async (req, { user }) => {
     );
   }
 
+  /*
+   * 画像・PDFがまるごと外部へ渡り、1回ごとに実費が出る経路。プランと
+   * ワークスペースの設定の両方を見てから叩く。閉じていても断らない——
+   * ヒューリスティックが「入力に最も近いテンプレート」を必ず返すので、
+   * Free でもダッシュボードは作れる。
+   */
+  const aiAllowed = aiAllowedFor(user.workspace.plan, user.workspace.aiEnabled);
+
+  // 数えるのは外部へ飛ぶときだけ。ヒューリスティックで返す呼び出しまで
+  // 数えると、お金が動いていないのにダッシュボードが作れなくなる。
+  if (generationCallsOut(aiAllowed)) {
+    const now = new Date();
+    const limit = await consumeOptional(
+      workspaceKey(user.workspace.id, "ai"),
+      AI_RULE,
+      now,
+    );
+    if (!limit.allowed) {
+      throw new ApiError(
+        `AIによる生成の回数が上限に達しました。${retryMessage(limit.retryAt, now)}`,
+        429,
+      );
+    }
+  }
+
   let template;
   let via;
   try {
-    const result = await generateDashboardTemplate(input);
+    const result = await generateDashboardTemplate(input, {
+      aiEnabled: aiAllowed,
+    });
     template = result.template;
     via = result.via;
   } catch (err) {

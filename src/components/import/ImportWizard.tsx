@@ -80,6 +80,27 @@ interface FileImportResult {
 
 const ALLOWED = ".xlsx,.xls,.csv";
 
+/**
+ * アップロードの上限。**サーバ側の MAX_IMPORT_BYTES（src/lib/excel.ts）と
+ * 同じ値にすること。**
+ *
+ * ここに写しを持つのは、@/lib/excel を client component から import すると
+ * xlsx（数百KB）ごとブラウザのバンドルに入ってしまうため。
+ *
+ * そして、この画面側の判定はサーバ側の重複ではなく**唯一効く判定**でもある。
+ * Vercel はリクエストボディを 4.5MB で打ち切り、その 413 はハンドラが起動する
+ * 前に返るので、大きいファイルではサーバ側の日本語メッセージは出ない。
+ * 送る前にここで止めて、理由と次の一手をこちらから伝える。
+ */
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // 4MB
+const MAX_UPLOAD_LABEL = "4MB";
+
+/** 大きすぎるファイルの断り文句。何MBだったかと、減らし方まで書く。 */
+function tooLargeMessage(file: File): string {
+  const mb = (file.size / (1024 * 1024)).toFixed(1);
+  return `このファイルは大きすぎます（約${mb}MB / 上限${MAX_UPLOAD_LABEL}）。シートを分けて取り込むか、不要な列や行を削ってから、もう一度お試しください。`;
+}
+
 function renderCell(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "boolean") return value ? "✓" : "—";
@@ -192,6 +213,15 @@ export function ImportWizard() {
 
   async function handleFile(picked: File) {
     setError(null);
+    // 送ってから断られるのでは遅い（4.5MB を超えるとサーバ側の文面は
+    // そもそも出ない）。解析中の表示に入る前にここで止める。file を
+    // 立てないのは、この後の確定ボタンが「選択済みのファイル」を見るため。
+    if (picked.size > MAX_UPLOAD_BYTES) {
+      setError(tooLargeMessage(picked));
+      setFile(null);
+      setSheets(null);
+      return;
+    }
     setLoading(true);
     setFile(picked);
     try {
@@ -464,7 +494,7 @@ export function ImportWizard() {
               ) : (
                 <>
                   <p className="text-sm font-medium text-ink">ファイルをドラッグ＆ドロップ</p>
-                  <p className="text-xs text-ink-muted">またはクリックして選択（.xlsx / .xls / .csv、15MBまで）</p>
+                  <p className="text-xs text-ink-muted">またはクリックして選択（.xlsx / .xls / .csv、{MAX_UPLOAD_LABEL}まで）</p>
                 </>
               )}
               <input ref={inputRef} type="file" accept={ALLOWED} className="hidden" onChange={onPick} disabled={notionBusy} />

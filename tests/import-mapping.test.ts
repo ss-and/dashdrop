@@ -37,8 +37,9 @@ const mocks = vi.hoisted(() => ({
       update: vi.fn(),
     },
     workbook: { create: vi.fn(), delete: vi.fn(), count: vi.fn(), findFirst: vi.fn() },
-    // 上書きの入れ替えで使う。
-    record: { create: vi.fn() },
+    // 行の書き込みは createMany（1バッチ＝1文）。以前の
+    // 「create を $transaction に詰める」形ではないので、ここも合わせる。
+    record: { createMany: vi.fn() },
     alertRule: { updateMany: vi.fn() },
     notification: { create: vi.fn() },
     $transaction: vi.fn(),
@@ -166,10 +167,18 @@ async function gsheetsRoute(): Promise<JsonRoute> {
   return mod.POST as unknown as JsonRoute;
 }
 
-/** 書き込まれたレコードの data だけを取り出す。 */
+/**
+ * 書き込まれたレコードの data だけを、渡された順に取り出す。
+ *
+ * createMany は1回の呼び出しに複数行を積むので、呼び出しをまたいで平らにする。
+ * 行の順序は取り込み順そのもの——ここが崩れると「1行目が消えた」「順番が
+ * 入れ替わった」を検出できなくなるので、call の順・data の順の両方を保つ。
+ */
 function writtenRecords(): Record<string, unknown>[] {
-  return mocks.db.record.create.mock.calls.map(
-    (call) => (call[0] as { data: { data: Record<string, unknown> } }).data.data,
+  return mocks.db.record.createMany.mock.calls.flatMap((call) =>
+    (call[0] as { data: Array<{ data: Record<string, unknown> }> }).data.map(
+      (row) => row.data,
+    ),
   );
 }
 
@@ -195,7 +204,7 @@ beforeEach(() => {
     mocks.db.workbook.delete,
     mocks.db.workbook.count,
     mocks.db.workbook.findFirst,
-    mocks.db.record.create,
+    mocks.db.record.createMany,
     mocks.db.alertRule.updateMany,
     mocks.db.notification.create,
     mocks.db.$transaction,
@@ -219,7 +228,10 @@ beforeEach(() => {
   mocks.db.alertRule.updateMany.mockResolvedValue({ count: 0 });
   mocks.db.notification.create.mockResolvedValue({});
   mocks.db.collection.create.mockResolvedValue({ id: "col-1" });
-  mocks.db.record.create.mockImplementation((args: unknown) => args);
+  // createMany は書き込んだ件数だけを返す（作られた行は返さない）。
+  mocks.db.record.createMany.mockImplementation(
+    async (args: { data: unknown[] }) => ({ count: args.data.length }),
+  );
   mocks.db.$transaction.mockResolvedValue([]);
   mocks.db.collection.deleteMany.mockResolvedValue({ count: 1 });
   mocks.db.collection.delete.mockResolvedValue({});
@@ -251,7 +263,7 @@ describe("列とフィールドの対応 — POST /api/import", () => {
     // 検証は書き込みの前。中途半端なシートも空のファイルも作らない。
     expect(mocks.db.workbook.create).not.toHaveBeenCalled();
     expect(mocks.db.collection.create).not.toHaveBeenCalled();
-    expect(mocks.db.record.create).not.toHaveBeenCalled();
+    expect(mocks.db.record.createMany).not.toHaveBeenCalled();
   });
 
   it("列名を変えても、値は元の列から読む", async () => {
@@ -317,7 +329,7 @@ describe("列とフィールドの対応 — POST /api/import", () => {
     expect(err.status).toBe(409);
     expect(err.message).toContain("部門");
     expect(mocks.db.collection.create).not.toHaveBeenCalled();
-    expect(mocks.db.record.create).not.toHaveBeenCalled();
+    expect(mocks.db.record.createMany).not.toHaveBeenCalled();
   });
 
   it("マッピングを送らなければ、推定した列がそのまま自分の列を読む", async () => {
@@ -357,7 +369,7 @@ describe("Google Sheets の取り込み直前の列変更 — POST /api/import/g
     expect(err.status).toBe(409);
     expect(err.message).toContain("部署");
     expect(mocks.db.collection.create).not.toHaveBeenCalled();
-    expect(mocks.db.record.create).not.toHaveBeenCalled();
+    expect(mocks.db.record.createMany).not.toHaveBeenCalled();
   });
 
   it("列が増えていても、対応済みの列は正しい値を読む", async () => {
@@ -493,7 +505,9 @@ describe("失敗時のロールバック — POST /api/import", () => {
   it("行の書き込みに失敗したら collection.created を記録しない", async () => {
     // 以前は try の中で記録していたため、取り消された取り込みでも /logs に
     // 記録が残り、既に削除されたスプレッドシートへのリンクになっていた。
-    mocks.db.$transaction.mockRejectedValue(new Error("db is gone"));
+    // 行の書き込みを失敗させる。createMany に変えても、巻き戻しの単位は
+    // 「このリクエストが作った Collection 全部」のままであること。
+    mocks.db.record.createMany.mockRejectedValue(new Error("db is gone"));
     const handler = await importRoute();
 
     const err = await handler(
@@ -518,7 +532,9 @@ describe("失敗時のロールバック — POST /api/import", () => {
   it("Collection を消せなかったら Workbook は消さず、残骸を伝える", async () => {
     // Collection.workbookId は SetNull。Collection が残ったまま Workbook を
     // 消すと、中途半端なシートが親のないままシート一覧に現れる。
-    mocks.db.$transaction.mockRejectedValue(new Error("db is gone"));
+    // 行の書き込みを失敗させる。createMany に変えても、巻き戻しの単位は
+    // 「このリクエストが作った Collection 全部」のままであること。
+    mocks.db.record.createMany.mockRejectedValue(new Error("db is gone"));
     mocks.db.collection.deleteMany.mockRejectedValue(new Error("delete failed"));
     const handler = await importRoute();
 
@@ -533,7 +549,9 @@ describe("失敗時のロールバック — POST /api/import", () => {
   });
 
   it("Workbook だけ消せなかったときは「空のファイル」と案内する", async () => {
-    mocks.db.$transaction.mockRejectedValue(new Error("db is gone"));
+    // 行の書き込みを失敗させる。createMany に変えても、巻き戻しの単位は
+    // 「このリクエストが作った Collection 全部」のままであること。
+    mocks.db.record.createMany.mockRejectedValue(new Error("db is gone"));
     mocks.db.workbook.delete.mockRejectedValue(new Error("delete failed"));
     const handler = await importRoute();
 
@@ -1012,16 +1030,18 @@ function xlsxReq(
   return { formData: async () => ({ get: (key: string) => entries[key] ?? null }) };
 }
 
-/** db.record.create に渡されたデータを、コレクション作成順にまとめる。 */
+/** db.record.createMany に渡されたデータを、コレクション作成順にまとめる。 */
 function writtenRecordsByCollection(): Array<Array<Record<string, unknown>>> {
   const perCollection = new Map<string, Array<Record<string, unknown>>>();
-  for (const call of mocks.db.record.create.mock.calls) {
+  for (const call of mocks.db.record.createMany.mock.calls) {
     const arg = call[0] as {
-      data: { collectionId: string; data: Record<string, unknown> };
+      data: Array<{ collectionId: string; data: Record<string, unknown> }>;
     };
-    const list = perCollection.get(arg.data.collectionId) ?? [];
-    list.push(arg.data.data);
-    perCollection.set(arg.data.collectionId, list);
+    for (const row of arg.data) {
+      const list = perCollection.get(row.collectionId) ?? [];
+      list.push(row.data);
+      perCollection.set(row.collectionId, list);
+    }
   }
   return [...perCollection.values()];
 }

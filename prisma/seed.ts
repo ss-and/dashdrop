@@ -3,6 +3,9 @@
  * on first run. Idempotent: re-running upserts the demo user & workspace.
  *
  * Demo login:  owner@demo.dashdrop  /  demo1234
+ *
+ * 本番（NODE_ENV=production）では実行を拒否する。パスワードがこのファイルに
+ * 書いてあるアカウントなので、一度でも本番に入ると取り返しがつかない。
  */
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -13,6 +16,33 @@ const db = new PrismaClient();
 
 const DEMO_EMAIL = "owner@demo.dashdrop";
 const DEMO_PASSWORD = "demo1234";
+
+/*
+ * 本番では絶対に流さない。
+ *
+ * このシードのログイン情報（owner@demo.dashdrop / demo1234）は、このファイルに
+ * そのまま書いてあり、リポジトリを読める人は全員知っている。`npm run db:seed` は
+ * これまでどの環境でも無条件に走ったので、公開後にうっかり1回叩くだけで、
+ * パスワードが公開されているオーナー権限のアカウントが本番に居座ることになる。
+ * しかもシードは冪等（upsert）なので、消しても次に叩けば戻ってくる。
+ *
+ * どうしても本番相当の環境に投入したい場合（デモ用インスタンスの初期化など）は、
+ * 意図を明示してもらう:  ALLOW_PRODUCTION_SEED=1 npm run db:seed
+ */
+if (process.env.NODE_ENV === "production" && process.env.ALLOW_PRODUCTION_SEED !== "1") {
+  console.error(
+    [
+      "❌ 本番環境（NODE_ENV=production）では db:seed を実行しません。",
+      "",
+      `   このシードは固定のデモアカウント（${DEMO_EMAIL} / パスワードはこのファイルに平文で記載）を`,
+      "   作ります。本番に入ると、リポジトリを読める全員がオーナー権限でログインできる状態になります。",
+      "",
+      "   デモ用インスタンスなど、承知のうえで投入する場合のみ:",
+      "     ALLOW_PRODUCTION_SEED=1 npm run db:seed",
+    ].join("\n"),
+  );
+  process.exit(1);
+}
 
 function daysAgo(n: number): Date {
   const d = new Date();

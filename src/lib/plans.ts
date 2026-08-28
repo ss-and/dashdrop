@@ -37,7 +37,22 @@ export type Capability =
   /** 定期レポート（決まった時刻に送る）。 */
   | "reports"
   /** 顧客データベース・人事データベース。 */
-  | "databases";
+  | "databases"
+  /**
+   * AI による下見（取り込み時の列名・型の提案）と、AI ダッシュボード生成。
+   *
+   * これだけは**性質が違う**。他の5つは「うちのサーバで動く機能」だが、これは
+   * 1回叩くたびに外部（Anthropic）へ実費が出ていく。しかも入口は無料アカウントの
+   * ホーム——ファイルを置くたび毎回呼ぶので、上限が無ければ1アカウントで
+   * いくらでも積める。値付けとして閉じるだけでなく、開いている側にも
+   * 回数制限を掛けている（src/lib/rate-limit.ts の AI_RULE）。
+   *
+   * 閉じても**機能そのものは無くならない**のがここの肝。下見も生成も、
+   * 決定的なヒューリスティックに落ちて最後まで通る（403 では止めない）。
+   * 変わるのは「提案の精度」だけなので、Free でも Excel を置けば表とグラフが出る
+   * ——この製品の約束は Free のまま守られる。
+   */
+  | "aiAssist";
 
 export const CAPABILITY_LABEL: Record<Capability, string> = {
   integrations: "連携（Slack・Notion・Google スプレッドシート）",
@@ -45,6 +60,7 @@ export const CAPABILITY_LABEL: Record<Capability, string> = {
   alerts: "通知ルール",
   reports: "定期レポート",
   databases: "顧客データベース・人事データベース",
+  aiAssist: "AIによる下見・AIダッシュボード生成",
 };
 
 /** 有料プランで開くもの一式。Pro と Business の差は上限だけ。 */
@@ -54,6 +70,7 @@ const PAID_CAPABILITIES: Capability[] = [
   "alerts",
   "reports",
   "databases",
+  "aiAssist",
 ];
 
 export interface Plan {
@@ -163,6 +180,7 @@ export const PLANS: Record<PlanId, Plan> = {
       "通知ルール（条件に当てはまったら知らせる）",
       "定期レポート（決まった時刻に送る）",
       "顧客データベース・人事データベース",
+      "AIによる取り込みの下見・AIダッシュボード生成",
       "メンバーの招待（15名まで）",
       "優先サポート",
     ],

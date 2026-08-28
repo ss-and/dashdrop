@@ -126,7 +126,14 @@ export async function fetchSheetCsv(url: string): Promise<ArrayBuffer> {
   const bytes = await res.arrayBuffer();
 
   if (bytes.byteLength > MAX_IMPORT_BYTES) {
-    throw new ApiError("シートのサイズが上限（15MB）を超えています", 413);
+    // 文面は MAX_IMPORT_BYTES と一致させること（15MB のまま置き去りにすると、
+    // 4MB で断りながら「上限は15MB」と言う嘘になる）。Google Sheets の取り込みは
+    // ブラウザからのアップロードではないので 4.5MB のボディ上限には当たらないが、
+    // 解析の上限は共通なので、同じ値・同じ言い方で断る。
+    throw new ApiError(
+      `シートのサイズが上限（4MB）を超えています（このシートは約${(bytes.byteLength / (1024 * 1024)).toFixed(1)}MB）。タブを分けるか、不要な列や行を削ってから、もう一度お試しください。`,
+      413,
+    );
   }
 
   // A public CSV export is text/csv; a private sheet redirects to an HTML

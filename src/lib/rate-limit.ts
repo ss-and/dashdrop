@@ -47,6 +47,27 @@ export const SIGNUP_RULE: RateLimitRule = {
   blockMs: 60 * 60_000,
 };
 
+/**
+ * 外部AIを叩く経路（取り込みの下見・ダッシュボード生成）。
+ *
+ * ここだけは「守りたいもの」が違う。総当たりではなく**実費**——1回叩くたびに
+ * Anthropic へ課金が発生する。しかも入口は無料アカウントのホームで、
+ * ファイルを置くたび毎回呼ばれる。上限が無ければ1アカウントで無限に積めた。
+ *
+ * 数えるのはIPではなく **workspaceId**。ログイン済みの経路なので相手は確実に
+ * 分かるし、IPで数えると同じ会社の全員が1つの枠を取り合い、逆に1人が
+ * 回線を変えれば何度でも増やせる——課金の主体はワークスペースなので、
+ * そこで数えるのが実態に合う。
+ *
+ * 1時間20回。人が手でファイルを置く速さなら当たらない一方、
+ * 自動で回されたときは1時間で頭打ちになる。
+ */
+export const AI_RULE: RateLimitRule = {
+  windowMs: 60 * 60_000,
+  max: 20,
+  blockMs: 60 * 60_000,
+};
+
 export interface RateLimitResult {
   allowed: boolean;
   /** 残り回数（allowed が false のときは 0）。 */
@@ -145,6 +166,22 @@ export function clientIp(req: Request): string | null {
 export function ipKey(req: Request, prefix: string): string | null {
   const ip = clientIp(req);
   return ip ? `${prefix}:ip:${ip}` : null;
+}
+
+/**
+ * ワークスペースごとの鍵。
+ *
+ * `ipKey` と同じく、特定できないときは null（＝数えない）を返す。ただしこちらは
+ * ログイン済みの経路でしか使わないので、実際に null になるのは呼び出し側の
+ * 組み立てを間違えたときだけ。"unknown" のような固定値を置くと、そこに全社の
+ * 呼び出しが集まって全員が同時に止まるので、絶対にやらない。
+ */
+export function workspaceKey(
+  workspaceId: string | null | undefined,
+  prefix: string,
+): string | null {
+  const id = workspaceId?.trim();
+  return id ? `${prefix}:ws:${id}` : null;
 }
 
 /** 鍵が null（相手を特定できない）なら、数えずに通す。 */

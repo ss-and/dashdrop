@@ -32,7 +32,16 @@ import {
   type EngineCollection,
 } from "./relations";
 
-const SAMPLE_BATCH = 200;
+/**
+ * テンプレートの見本データを1回の createMany にまとめる行数。
+ *
+ * 以前は 200件ぶんの `db.record.create` を1トランザクションに詰めていた。
+ * トランザクションは1つでも中身は行数ぶんの INSERT ＝行数ぶんの往復で、
+ * マネージド PostgreSQL では1文あたり数〜十数ミリ秒かかる（詳細は
+ * src/app/api/import/route.ts の BATCH_SIZE のコメント）。createMany なら
+ * 1バッチが1文になるので、往復は 1/SAMPLE_BATCH になる。
+ */
+const SAMPLE_BATCH = 1000;
 
 export interface ApplyResult {
   dashboardId: string;
@@ -108,21 +117,20 @@ export async function applyTemplate(
 
       if (withSampleData && tc.sampleRows > 0) {
         const rows = generateSampleRows(tc);
+        // 1バッチ＝1文（createMany）。id は渡さない（cuid の既定値に任せる）が、
+        // createdAt は渡す——見本データは「過去数か月ぶんの推移」に見えないと
+        // 折れ線が1点に潰れるので、既定の now() では用を成さない。
         for (let i = 0; i < rows.length; i += SAMPLE_BATCH) {
           const batch = rows.slice(i, i + SAMPLE_BATCH);
-          await db.$transaction(
-            batch.map((row) =>
-              db.record.create({
-                data: {
-                  collectionId: collection.id,
-                  createdById: user.id,
-                  isSampleData: true,
-                  createdAt: row.createdAt,
-                  data: toJson(row.data),
-                },
-              }),
-            ),
-          );
+          await db.record.createMany({
+            data: batch.map((row) => ({
+              collectionId: collection.id,
+              createdById: user.id,
+              isSampleData: true,
+              createdAt: row.createdAt,
+              data: toJson(row.data),
+            })),
+          });
         }
         seededRows += rows.length;
       }

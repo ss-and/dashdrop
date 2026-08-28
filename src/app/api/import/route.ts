@@ -46,8 +46,44 @@ import {
 } from "@/lib/excel";
 
 const ALLOWED_EXT = [".xlsx", ".xls", ".csv"];
-const MAX_LABEL = "15MB";
-const BATCH_SIZE = 500;
+/** 利用者に見せる上限の表記。MAX_IMPORT_BYTES と必ず一致させること。 */
+const MAX_LABEL = "4MB";
+
+/**
+ * 1回の書き込みにまとめる行数。
+ *
+ * 【500件ずつの `create` から `createMany` にした理由】
+ * 以前はこのバッチを `$transaction([create, create, ...])` に詰めていた。
+ * トランザクションは1つでも、中身は行数ぶんの INSERT 文＝行数ぶんの往復で、
+ * 手元の SQLite（ファイル直叩き、往復ほぼ0秒）では速く見えていた。本番の
+ * マネージド PostgreSQL は1文あたり数〜十数ミリ秒かかるので、5,000行の台帳で
+ * 5,000往復＝それだけで数十秒。ルートの制限時間を先に使い切って、しかも
+ * all-or-nothing で巻き戻すため、利用者から見ると「長時間待たされた末に
+ * 何も起きずに失敗した」になっていた。
+ *
+ * `createMany` は1バッチが1文になるので、往復は行数ぶんから 1/BATCH_SIZE に減る。
+ * それでも上限を残す理由は往復ではなくクエリの方——PostgreSQL の
+ * バインドパラメータ上限（1文あたり 65,535）と、1文が長くなりすぎたときの
+ * メモリ。Prisma は既定値の列も一緒に送るので1行あたり 6〜7 個ほど使うが、
+ * 2,000行なら 15,000 弱で収まる。ここを1万行などに上げるときは、
+ * 「行 × 列 < 65,535」を必ず先に確かめること。
+ */
+const BATCH_SIZE = 2000;
+
+/**
+ * 解析（全シート）＋ 行の一括書き込み ＋ 上書き時の入れ替えに与える上限（秒）。
+ *
+ * 宣言が無いと Vercel の既定（10〜15秒）で切られる。この取り込みは
+ * all-or-nothing で巻き戻すので、途中で切られると「時間をかけた末に何も
+ * 起きずに失敗した」になり、利用者には何が悪かったのかも残らない。
+ *
+ * 60 なのは、Vercel Pro は最大800秒まで伸ばせるが、Hobby も、他の
+ * ホスティングも通る値がここだからで、cron の2本（/api/cron/alerts,
+ * /api/reports/dispatch）と Notion 取り込みも同じ 60 でそろえてある。
+ * 上限に張り付くようなら、まず createMany のバッチではなく行数上限
+ * （MAX_IMPORT_ROWS）と、そもそも同期で取り込む設計の方を見直すこと。
+ */
+export const maxDuration = 60;
 
 interface FinalField {
   name: string;
@@ -192,8 +228,11 @@ export const POST = withAuth(async (req, { user }) => {
     throw new ApiError("対応形式は .xlsx / .xls / .csv です", 415);
   }
   if (file.size > MAX_IMPORT_BYTES) {
+    // 断るだけでは利用者は次の一手を選べない。何MBだったのかと、手元で
+    // できる減らし方をその場で書く（上限を 4MB に下げたぶん、ここに来る人が
+    // 増える。詳しい理由は MAX_IMPORT_BYTES のコメントを参照）。
     throw new ApiError(
-      `ファイルサイズが上限（${MAX_LABEL}）を超えています`,
+      `ファイルサイズが上限（${MAX_LABEL}）を超えています（このファイルは約${(file.size / (1024 * 1024)).toFixed(1)}MB）。シートを分けて取り込むか、不要な列や行を削ってから、もう一度お試しください。`,
       413,
     );
   }
@@ -492,19 +531,27 @@ export const POST = withAuth(async (req, { user }) => {
         return data;
       });
 
+      /*
+       * 行の書き込み。1バッチ＝1文（createMany）。
+       *
+       * id は渡さない。Record.id は cuid の既定値なので、Prisma 側で採番させる
+       * （こちらで振ると SQLite と PostgreSQL で採番の癖が分かれる）。
+       *
+       * トランザクションで囲まないのは、ここで落ちたときの後始末を下の catch が
+       * 引き受けているため。`createdIds` に積んだ Collection ごと削除すれば、
+       * 何行書けていようと Record は cascade で消える——巻き戻しの単位は
+       * 「バッチ」ではなく「このリクエストが作った Collection 全部」で、
+       * それは createMany に変えても変わらない。
+       */
       for (let i = 0; i < recordData.length; i += BATCH_SIZE) {
         const batch = recordData.slice(i, i + BATCH_SIZE);
-        await db.$transaction(
-          batch.map((data) =>
-            db.record.create({
-              data: {
-                collectionId: collection.id,
-                createdById: user.id,
-                data: toJson(data),
-              },
-            }),
-          ),
-        );
+        await db.record.createMany({
+          data: batch.map((data) => ({
+            collectionId: collection.id,
+            createdById: user.id,
+            data: toJson(data),
+          })),
+        });
       }
 
       created.push({

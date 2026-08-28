@@ -40,7 +40,9 @@ const mocks = vi.hoisted(() => ({
   db: {
     collection: { findMany: vi.fn(), create: vi.fn(), delete: vi.fn() },
     workbook: { create: vi.fn(), delete: vi.fn() },
-    record: { create: vi.fn() },
+    // 行の書き込みは createMany（1バッチ＝1文）。以前の
+    // 「create を $transaction に詰める」形ではないので、ここも合わせる。
+    record: { createMany: vi.fn() },
     $transaction: vi.fn(),
   },
   logActivity: vi.fn(),
@@ -975,7 +977,7 @@ describe("POST /api/import/notion", () => {
       mocks.db.collection.delete,
       mocks.db.workbook.create,
       mocks.db.workbook.delete,
-      mocks.db.record.create,
+      mocks.db.record.createMany,
       mocks.db.$transaction,
       mocks.logActivity,
       mocks.assertCanCreateCollection,
@@ -991,7 +993,7 @@ describe("POST /api/import/notion", () => {
     mocks.db.collection.findMany.mockResolvedValue([]);
     mocks.db.workbook.create.mockResolvedValue({ id: "wb-1" });
     mocks.db.collection.create.mockResolvedValue({ id: "col-1" });
-    mocks.db.record.create.mockReturnValue({});
+    mocks.db.record.createMany.mockResolvedValue({ count: 0 });
     mocks.db.$transaction.mockResolvedValue([]);
     mocks.db.collection.delete.mockResolvedValue({});
     mocks.db.workbook.delete.mockResolvedValue({});
@@ -1055,13 +1057,21 @@ describe("POST /api/import/notion", () => {
 
     const res = await handler(routeReq, routeCtx("business"));
     expect(res.data.imported).toBe(3);
+    // 「3件読んだ」と「3件書いた」は別の話。imported は読み取った件数から
+    // 作っているので、書き込み側で行が落ちても気づけない——実際に
+    // createMany に渡した行数まで見る（1バッチ＝1文なので、呼び出しを
+    // またいで数える）。
+    const written = mocks.db.record.createMany.mock.calls.flatMap(
+      (call) => (call[0] as { data: unknown[] }).data,
+    );
+    expect(written).toHaveLength(3);
     expect(res.data.truncated).toBe(false);
     expect(res.data.warning).toBeNull();
   });
 
   it("F5: keeps the workbook when the collection delete fails, and says cleanup failed", async () => {
     mockFetch(dbSchema(), queryPage(2, false, null));
-    mocks.db.$transaction.mockRejectedValue(new Error("db is gone"));
+    mocks.db.record.createMany.mockRejectedValue(new Error("db is gone"));
     mocks.db.collection.delete.mockRejectedValue(new Error("delete failed"));
     const { handler } = await loadRoute();
 
@@ -1081,7 +1091,7 @@ describe("POST /api/import/notion", () => {
     // 「スプレッドシート一覧をご確認ください」と案内すると、存在しないシートを
     // 探させることになる。
     mockFetch(dbSchema(), queryPage(2, false, null));
-    mocks.db.$transaction.mockRejectedValue(new Error("db is gone"));
+    mocks.db.record.createMany.mockRejectedValue(new Error("db is gone"));
     mocks.db.workbook.delete.mockRejectedValue(new Error("delete failed"));
     const { handler } = await loadRoute();
 
@@ -1108,7 +1118,7 @@ describe("POST /api/import/notion", () => {
 
   it("F5: deletes the workbook only after the collection delete succeeded", async () => {
     mockFetch(dbSchema(), queryPage(2, false, null));
-    mocks.db.$transaction.mockRejectedValue(new Error("db is gone"));
+    mocks.db.record.createMany.mockRejectedValue(new Error("db is gone"));
     const { handler } = await loadRoute();
 
     const err = await handler(routeReq, routeCtx("business")).catch((e) => e);

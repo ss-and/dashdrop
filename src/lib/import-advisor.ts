@@ -410,6 +410,20 @@ export function reconcileAdvice(
 /* -------------------------------------------------------------------------- */
 
 /**
+ * その条件で、実際に外部へ問い合わせが飛ぶか。
+ *
+ * 回数制限（src/lib/rate-limit.ts の AI_RULE）を数えるのは**お金が動くときだけ**に
+ * したいので、呼び出し側が事前に知れるようにしておく。ここが false のときにも
+ * 数えてしまうと、ヒューリスティックしか使っていない人まで21回目で
+ * 取り込みができなくなる——止めたいのは課金であって取り込みではない。
+ *
+ * 下見が使うのは Anthropic だけなので、見るキーもそれ1本。
+ */
+export function advisorCallsOut(aiAllowed: boolean): boolean {
+  return aiAllowed && env.ANTHROPIC_API_KEY.length > 0;
+}
+
+/**
  * 下見の提案を返す。APIキーが無ければ即座に決定的な提案を返し、例外は投げない。
  */
 export async function adviseImport(
@@ -421,6 +435,12 @@ export async function adviseImport(
    * `aiEnabled: false` は、そのワークスペースが「中身を外に出さない」と
    * 決めているということ。列名とサンプル値が Anthropic に渡るので、社内規程で
    * 外に出せない会社が必ずある。切られていたら通信そのものを行わない。
+   *
+   * 呼び出し側（src/app/api/import/analyze/route.ts）は、この設定に加えて
+   * プランの `aiAssist`（src/lib/ai.ts の aiAllowedFor）も掛けて渡してくる。
+   * 理由は別で、こちらは実費——1回叩くたびに課金が出る経路が無料アカウントの
+   * ホームに直結しているため。**どちらの理由でも落ちる先は同じ**で、
+   * heuristicAdvice が最後まで提案を返すので取り込みは止まらない。
    */
   const allowed = opts.aiEnabled !== false;
   if (usable.length === 0 || !allowed || !env.ANTHROPIC_API_KEY) {

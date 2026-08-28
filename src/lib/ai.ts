@@ -14,6 +14,7 @@
  * is never logged.
  */
 import { env } from "./env";
+import { can } from "./plans";
 import {
   dashboardTemplateSchema,
   type DashboardTemplate,
@@ -134,9 +135,59 @@ Filter  = { "field": <フィールドkey>, "op":"eq"|"neq"|"in"|"gt"|"gte"|"lt"|
 /*  Public API                                                          */
 /** ------------------------------------------------------------------ */
 
+/**
+ * このワークスペースで、外部AIを呼んでよいか。
+ *
+ * 掛け合わせるのは2つだけ。
+ *   1. ワークスペースの設定（`Workspace.aiEnabled`）… 中身を外に出さないと
+ *      決めている会社を必ず尊重する。
+ *   2. プラン（`aiAssist`）… 1回叩くたびに実費が出るので、無料アカウントが
+ *      無限に積める状態にはしない。
+ *
+ * 判定がここに1本だけあるのは意図的。`/api/import/analyze` と
+ * `/api/dashboards/generate` の両方が外部を叩くので、各ルートに同じ条件を
+ * 書き写すと、片方だけ直したときに塞ぎ忘れた入口が残る——そして塞ぎ忘れた側は
+ * 誰も報告しない。
+ *
+ * **false は「使えません」ではない。** 呼び出し側はこれを `aiEnabled: false`
+ * として渡すだけで、下見も生成もヒューリスティックで最後まで通る。
+ */
+export function aiAllowedFor(
+  planId: string | null | undefined,
+  workspaceAiEnabled: boolean,
+): boolean {
+  return workspaceAiEnabled !== false && can(planId, "aiAssist");
+}
+
+/**
+ * その条件で、実際に外部へ問い合わせが飛ぶか。
+ *
+ * 回数制限を数えるのは**お金が動くときだけ**にしたいので、呼び出し側が
+ * 事前に知れるようにしておく。ここが false のときにも数えてしまうと、
+ * ヒューリスティックしか使っていない人（Free や、キー未設定の自己ホスト）まで
+ * 21回目でダッシュボードを作れなくなる——止めたいのは課金であって利用ではない。
+ */
+export function generationCallsOut(aiAllowed: boolean): boolean {
+  return (
+    aiAllowed &&
+    (env.ANTHROPIC_API_KEY.length > 0 || env.OPENAI_API_KEY.length > 0)
+  );
+}
+
 export async function generateDashboardTemplate(
   input: GenerateInput,
+  opts: { aiEnabled?: boolean } = {},
 ): Promise<GenerateResult> {
+  /*
+   * `aiEnabled: false` なら、キーが刺さっていても通信そのものを行わない。
+   * 画像やPDFの中身がまるごと外部へ渡る経路なので、「呼んでから捨てる」では
+   * 意味が無い（渡ってしまった後で取り消せない）。テンプレートの当てはめは
+   * 手元のキーワード採点で完結するので、生成物は必ず返る。
+   */
+  if (opts.aiEnabled === false) {
+    return { template: pickHeuristicTemplate(input), via: "heuristic" };
+  }
+
   const instruction = buildInstruction(input);
 
   // Anthropic first (can read images AND PDFs natively).

@@ -1,0 +1,8 @@
+# Prisma が「このマイグレーション履歴はどのDBのものか」を判断するためのファイル。
+#
+# 履歴は **PostgreSQL（本番）専用**。手元の SQLite は今までどおり
+# `npm run db:push` / `npm run db:reset` で回す（履歴は使わない）。
+# 新しいマイグレーションを作るときは必ず provider を合わせること:
+#   DATABASE_PROVIDER=postgresql npm run db:migrate -- --name add_something
+# これを付け忘れると sqlite 方言の SQL がこのフォルダに入り、本番のデプロイが落ちる。
+provider = "postgresql"

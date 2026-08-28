@@ -36,7 +36,8 @@ import {
   type NotionQueryResult,
 } from "@/lib/notion";
 
-const BATCH_SIZE = 500;
+/** 1回の createMany にまとめる行数。値の根拠は /api/import と同じ。 */
+const BATCH_SIZE = 2000;
 
 /**
  * Notionの読み取り予算（40秒）＋行の書き込み分。予算を先に使い切れば日本語の
@@ -179,19 +180,25 @@ export const POST = withAuth(async (req, { user }) => {
     collectionId = collection.id;
     createdCollectionId = collection.id;
 
+    /*
+     * 行の書き込み。1バッチ＝1文（createMany）。500件ぶんの `create` を
+     * 1トランザクションに詰めていた頃は、トランザクションが1つでも往復は
+     * 行数ぶん出ていた（詳細は src/app/api/import/route.ts の BATCH_SIZE）。
+     * Notion は読み取りに 40 秒の予算を使うぶん、書き込みに残された時間が
+     * 特に短いので、ここの往復削減はそのまま完走率になる。
+     *
+     * id は渡さない（Record.id は cuid の既定値）。巻き戻しは下の catch が
+     * Collection ごと消す形で、Record は cascade で一緒に消える。
+     */
     for (let i = 0; i < recordData.length; i += BATCH_SIZE) {
       const batch = recordData.slice(i, i + BATCH_SIZE);
-      await db.$transaction(
-        batch.map((data) =>
-          db.record.create({
-            data: {
-              collectionId: collection.id,
-              createdById: user.id,
-              data: toJson(data),
-            },
-          }),
-        ),
-      );
+      await db.record.createMany({
+        data: batch.map((data) => ({
+          collectionId: collection.id,
+          createdById: user.id,
+          data: toJson(data),
+        })),
+      });
     }
 
     await logActivity(user.workspace.id, "collection.created", {

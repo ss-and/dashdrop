@@ -21,7 +21,13 @@ const schema = z.object({
   STRIPE_PRICE_BUSINESS: z.string().optional().default(""),
 
   ANTHROPIC_API_KEY: z.string().optional().default(""),
-  ANTHROPIC_MODEL: z.string().optional().default("claude-opus-5"),
+  /*
+   * 既定を最高単価のモデルにしない。ここが使われるのは取り込みの列名判定と、
+   * 入力に近いテンプレート選びの2つだけで、どちらも短いJSONを返す仕事——
+   * opus（$5/$25）を既定にすると1回 ¥19〜75 が既定値として全員に掛かる。
+   * 精度を上げたい運用者は ANTHROPIC_MODEL で上書きできる。
+   */
+  ANTHROPIC_MODEL: z.string().optional().default("claude-haiku-4-5"),
   OPENAI_API_KEY: z.string().optional().default(""),
   OPENAI_MODEL: z.string().optional().default("gpt-4o-mini"),
   GOOGLE_SHEETS_CLIENT_ID: z.string().optional().default(""),
@@ -199,6 +205,48 @@ if (env.NODE_ENV === "production" && !isBuildPhase && !isPublicAppUrlConfigured)
     `APP_URL must be the public URL of this deployment in production (got "${env.APP_URL}"). ` +
       `Notification and Slack links are built from it, so a wrong value ships dead links. ` +
       `Set it in the environment, e.g. APP_URL="https://dashdrop.example.com".`,
+  );
+}
+
+/**
+ * Whether `url` points at a database server that outlives the process.
+ * Pure — exported so the rule can be tested without booting the app.
+ *
+ * SQLite は「接続先」ではなくファイルパスで、Prisma では "file:" スキームで表す
+ * （"sqlite:" と書く流儀もあるので両方見る）。それ以外（postgresql:// など）は
+ * どこかのサーバを指しているとみなして通す。ここで接続できるかまでは確かめない
+ * ——起動時に落とすべきなのは「明らかに永続しない指定」だけで、到達性の問題は
+ * 最初のクエリで分かるし、DBが一時的に落ちているだけでアプリが起動不能になる方が困る。
+ */
+export function isServerDatabaseUrl(url: string): boolean {
+  const u = url.trim().toLowerCase();
+  if (!u) return false;
+  if (u.startsWith("file:")) return false;
+  if (u.startsWith("sqlite:")) return false;
+  return true;
+}
+
+/** True when DATABASE_URL points at a real DB server (not a local SQLite file). */
+export const isServerDatabaseConfigured = isServerDatabaseUrl(env.DATABASE_URL);
+
+/*
+ * DATABASE_URL だけが既定値 "file:./dev.db" を持っていて、AUTH_SECRET と APP_URL
+ * と違って本番でも素通りしていた。これが一番たちが悪い：Vercel で環境変数を
+ * 入れ忘れても **アプリは正常に起動する**。SQLite ファイルがサーバーレスの
+ * 一時ファイルシステム上に作られ、サインアップも取り込みも成功したように見えて、
+ * インスタンスが再利用されなくなった瞬間に全部消える。エラーもログも出ないので、
+ * お客さまから「登録したデータが無い」と言われるまで誰も気づけない。
+ *
+ * AUTH_SECRET / APP_URL と同じ形で、実際に本番トラフィックを捌くときだけ強制し、
+ * `next build`（NEXT_PHASE=phase-production-build）は素通しする。
+ */
+if (env.NODE_ENV === "production" && !isBuildPhase && !isServerDatabaseConfigured) {
+  throw new Error(
+    `DATABASE_URL must point at a database server in production (got "${env.DATABASE_URL}"). ` +
+      `SQLite（file:）はサーバーレスの一時ファイルシステムに置かれるため、書き込みは成功したように見えて、` +
+      `インスタンスが破棄された時点で黙って消えます。 ` +
+      `Set it in the environment, e.g. DATABASE_URL="postgresql://user:password@host:5432/dashdrop?schema=public" ` +
+      `(and DATABASE_PROVIDER=postgresql — see docs/OPERATIONS.md).`,
   );
 }
 

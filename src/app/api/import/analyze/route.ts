@@ -15,10 +15,28 @@
 import { withAuth, ok, ApiError } from "@/lib/api";
 import { db } from "@/lib/db";
 import { readAllSheets, MAX_IMPORT_BYTES } from "@/lib/excel";
-import { adviseImport } from "@/lib/import-advisor";
+import { adviseImport, advisorCallsOut } from "@/lib/import-advisor";
+import { aiAllowedFor } from "@/lib/ai";
+import {
+  AI_RULE,
+  consumeOptional,
+  retryMessage,
+  workspaceKey,
+} from "@/lib/rate-limit";
 
 const ALLOWED_EXT = [".xlsx", ".xls", ".csv"];
-const MAX_LABEL = "15MB";
+/** 利用者に見せる上限の表記。MAX_IMPORT_BYTES と必ず一致させること。 */
+const MAX_LABEL = "4MB";
+
+/**
+ * 全シートの解析＋ adviseImport（AI が有効なら外部APIへの往復も入る）。
+ * ホームの「Excelを置く」の1手目がここなので、宣言が無いと Vercel の既定
+ * （10〜15秒）で切られ、製品の入口でいきなり原因不明の失敗になる。
+ *
+ * 60 は Vercel Pro の最大（800秒）ではなく、Hobby でも他のホスティングでも
+ * 通る値。/api/import・/api/import/preview と同じ値でそろえてある。
+ */
+export const maxDuration = 60;
 
 export const POST = withAuth(async (req, { user }) => {
   let form: FormData;
@@ -42,8 +60,10 @@ export const POST = withAuth(async (req, { user }) => {
     throw new ApiError("対応形式は .xlsx / .xls / .csv です", 415);
   }
   if (file.size > MAX_IMPORT_BYTES) {
+    // 断るだけでは次の一手が分からない。何MBだったのかと、手元でできる
+    // 減らし方をその場で書く（上限の根拠は MAX_IMPORT_BYTES のコメント）。
     throw new ApiError(
-      `ファイルサイズが上限（${MAX_LABEL}）を超えています`,
+      `ファイルサイズが上限（${MAX_LABEL}）を超えています（このファイルは約${(file.size / (1024 * 1024)).toFixed(1)}MB）。シートを分けて取り込むか、不要な列や行を削ってから、もう一度お試しください。`,
       413,
     );
   }
@@ -55,8 +75,34 @@ export const POST = withAuth(async (req, { user }) => {
     throw new ApiError("シートから列を検出できませんでした", 422);
   }
 
+  /*
+   * ここは**ファイルを置くたび毎回**通る道で、その先が外部AIへの課金に
+   * 直結している。プランと設定の両方を見てから叩く。
+   * 落ちる先は決定的なヒューリスティックなので、断らずに最後まで通る。
+   */
+  const aiAllowed = aiAllowedFor(user.workspace.plan, user.workspace.aiEnabled);
+
+  /*
+   * 実際に外部へ飛ぶときだけ数える。ヒューリスティックで返す呼び出しまで
+   * 数えると、お金が動いていないのに「21回目から取り込めない」ことになる。
+   */
+  if (advisorCallsOut(aiAllowed)) {
+    const now = new Date();
+    const limit = await consumeOptional(
+      workspaceKey(user.workspace.id, "ai"),
+      AI_RULE,
+      now,
+    );
+    if (!limit.allowed) {
+      throw new ApiError(
+        `AIによる下見の回数が上限に達しました。${retryMessage(limit.retryAt, now)}`,
+        429,
+      );
+    }
+  }
+
   const { advice, via } = await adviseImport(sheets, {
-    aiEnabled: user.workspace.aiEnabled,
+    aiEnabled: aiAllowed,
   });
 
   /*
