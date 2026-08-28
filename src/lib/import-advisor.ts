@@ -20,8 +20,14 @@
 import { z } from "zod";
 import { env } from "./env";
 import { toFieldKey, uniqueName } from "./utils";
-import { FIELD_TYPES, isFieldType, type FieldType } from "./field-types";
+import {
+  FIELD_TYPES,
+  isFieldType,
+  parseJapaneseNumber,
+  type FieldType,
+} from "./field-types";
 import type { SheetParse } from "./excel";
+import { detectWideLayout, parseColumnUnit } from "./excel-ja";
 
 export type AdviceVia = "anthropic" | "heuristic";
 
@@ -91,6 +97,34 @@ const PLACEHOLDER_HEADER = /^列\d+$/;
  * ここは AI の有無に関わらず必ず出す。結合セルや見出し行のずれは「事実」であって
  * 推測ではないので、モデルの機嫌に左右されてはいけない。
  */
+/**
+ * 横持ちの候補として挙がった列の中身が、実際に数値かどうか。
+ *
+ * 見出しの形だけで並べ替えを勧めると、「部門 / 4月 / 5月 / 6月」の中身が
+ * 担当者名だった場合に、意味の無い提案をすることになる。プレビュー行の中で
+ * 値が入っているセルの過半数が数値なら、集計対象の表と見なす。
+ */
+function periodColumnsAreNumeric(
+  periodColumns: string[],
+  previewRows: Record<string, unknown>[],
+): boolean {
+  let filled = 0;
+  let numeric = 0;
+  for (const row of previewRows) {
+    for (const col of periodColumns) {
+      const v = row[col];
+      if (v === null || v === undefined || String(v).trim() === "") continue;
+      filled += 1;
+      if (typeof v === "number" || parseJapaneseNumber(String(v)) !== null) {
+        numeric += 1;
+      }
+    }
+  }
+  // 1件も値が無ければ判断材料が無い。勧めない側に倒す。
+  if (filled === 0) return false;
+  return numeric * 2 > filled;
+}
+
 export function structuralQuestions(sheets: SheetParse[]): ImportQuestion[] {
   const out: ImportQuestion[] = [];
 
@@ -148,6 +182,52 @@ export function structuralQuestions(sheets: SheetParse[]): ImportQuestion[] {
         message: `同じ列名が複数あります（${[...dupes].join("・")}）。`,
         question:
           "どちらが何なのか、区別できる名前に変えますか？ このまま進める場合は自動で連番を付けて区別します。",
+      });
+    }
+
+    /*
+     * 横持ち（月が列に並んだ表）。
+     *
+     * 日本の業務Excelの標準形だが、この形のままでは折れ線グラフが原理的に
+     * 描けない。時間が行ではなく列に入っているので、集計エンジンから見ると
+     * 「4月」と「5月」は同じ指標の推移ではなく、別々の指標になるからだ。
+     * 取り込んだ人には「なぜか月ごとの推移が出ない」としか見えず、しかも
+     * エラーは出ないので、何を直せばいいのか分からないまま終わる。
+     *
+     * 見出しの形だけで決めない。「部門 / 4月 / 5月 / 6月」に見えても、中身が
+     * 文字列（担当者名など）なら並べ替える意味が無いので、期間列の中身が
+     * 数値であることを確かめてから聞く。
+     */
+    const wide = detectWideLayout(s.headers);
+    if (wide && periodColumnsAreNumeric(wide.periodColumns, s.previewRows)) {
+      out.push({
+        sheetName: s.sheetName,
+        message: `${wide.periodLabel}が列として横に並んでいます（${wide.periodColumns.slice(0, 3).join("・")}…の ${wide.periodColumns.length} 列）。この形のままだと、${wide.periodLabel}ごとの推移をグラフにできません——${wide.periodLabel}が行ではなく列にあるため、集計では別々の項目として扱われます。`,
+        question: `「${wide.idColumns.join("・")}」を残したまま、${wide.periodLabel}を縦に並べ替えますか？ 並べ替えると1行が「${wide.idColumns[0]} × ${wide.periodLabel} × 値」になり、推移のグラフが作れるようになります。`,
+      });
+    }
+
+    /*
+     * 列名に埋まった単位。
+     *
+     * 帳票は単位を列名に書く（「売上（千円）」）。中身をそのまま数として
+     * 扱うとグラフの桁が黙って1000倍ずれる。エラーは出ないので、金額の桁を
+     * 見慣れていない人は気づけない。掛け直すかどうかは利用者の判断なので、
+     * ここでは見つけたことだけを伝える。
+     */
+    const scaled = s.headers
+      .map((h) => ({ header: h, unit: parseColumnUnit(h) }))
+      .filter((x) => x.unit !== null && x.unit.scale !== 1);
+    if (scaled.length > 0) {
+      const shown = scaled
+        .slice(0, 3)
+        .map((x) => `${x.header} → 1 = ${x.unit!.scale.toLocaleString("ja-JP")}円`)
+        .join("・");
+      out.push({
+        sheetName: s.sheetName,
+        message: `列名に単位が書かれている列があります（${shown}）。中の数字はその単位のままなので、そのままグラフにすると桁が実額と合いません。`,
+        question:
+          "この列は単位のまま扱いますか？ 実額（円）に直して取り込むこともできます。元の帳票と数字を突き合わせるなら単位のまま、他の金額列と足すなら実額が扱いやすくなります。",
       });
     }
 
