@@ -110,12 +110,20 @@ function toBlocks(computed: ComputedWidget[]): Block[] {
   return blocks;
 }
 
-/** Column count for the KPI strip — a static map, so Tailwind keeps the classes. */
+/**
+ * Column count for the KPI strip — a static map, so Tailwind keeps the classes.
+ *
+ * 狭い画面では必ず1列に落とす。390px で2列にすると1セルが 130〜170px しか
+ * 無く、「¥1,234,567」と前週比のバッジが横に並びきらない。帯には
+ * `overflow-hidden` が掛かっているので、はみ出した数字は折り返らずに
+ * **物理的に切れて消える**——桁が減っただけに見えるのが最悪で、
+ * 「¥1,234」と読めてしまう。
+ */
 const KPI_COLS: Record<number, string> = {
   1: "grid-cols-1",
-  2: "grid-cols-2",
+  2: "grid-cols-1 sm:grid-cols-2",
   3: "grid-cols-1 sm:grid-cols-3",
-  4: "grid-cols-2 lg:grid-cols-4",
+  4: "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4",
 };
 
 /**

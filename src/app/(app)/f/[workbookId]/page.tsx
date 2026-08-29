@@ -71,8 +71,9 @@ export default async function WorkbookPage({
       <main className="flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="mx-auto max-w-5xl space-y-5">
           {/* File header */}
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-start gap-3">
+          {/* 狭い画面では縦に積む。理由はシート画面のヘッダーと同じ。 */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+            <div className="flex min-w-0 items-start gap-3">
               <span className="flex h-10 w-10 items-center justify-center rounded-md border border-ink-line bg-paper-raised">
                 <NavIcon name="folder" className="h-5 w-5 text-khaki-500" />
               </span>
@@ -96,7 +97,7 @@ export default async function WorkbookPage({
               </div>
             </div>
 
-            <div className="flex shrink-0 items-start gap-2">
+            <div className="flex flex-wrap items-start gap-2 sm:shrink-0">
               {sheets.length > 0 && (
                 <>
                   <AutoDashboardButton workbookId={workbook.id} />

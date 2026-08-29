@@ -188,7 +188,11 @@ export function NotificationBell() {
             aria-modal="true"
             aria-label="通知"
             tabIndex={-1}
-            className="absolute right-0 z-30 mt-2 w-80 animate-fade-in rounded-md border border-ink-line bg-paper-raised shadow-raised"
+            /*
+             * 狭い画面では画面幅に合わせる。トリガーは右端から 100px 弱の
+             * 位置で、そこから右端合わせで 320px を伸ばすと**左端が画面の外**へ出る。
+             */
+            className="absolute right-0 z-30 mt-2 w-80 max-sm:fixed max-sm:left-3 max-sm:right-3 max-sm:top-14 max-sm:w-auto animate-fade-in rounded-md border border-ink-line bg-paper-raised shadow-raised"
           >
             <div className="flex items-center justify-between px-4 py-2.5">
               <p className="text-sm font-semibold text-ink">通知</p>

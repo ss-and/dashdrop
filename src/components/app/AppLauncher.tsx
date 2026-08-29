@@ -294,7 +294,13 @@ export function AppLauncher({
             aria-modal="true"
             aria-label="アプリケーションランチャー"
             tabIndex={-1}
-            className="absolute left-0 z-30 mt-2 max-h-[70vh] w-[26rem] max-w-[calc(100vw-2rem)] animate-fade-in overflow-y-auto rounded-md border border-ink-line bg-paper-raised p-3 shadow-raised"
+            /*
+             * 狭い画面では左端に寄せ直す。トリガーはトップバーの左から
+             * 70〜100px の位置にあり、そこから左端合わせで 26rem を伸ばすと
+             * パネルの**右側が画面の外**に出る（幅は収まっているのに中身が
+             * 見えない、という分かりにくい壊れ方）。
+             */
+            className="absolute left-0 z-30 mt-2 max-h-[70vh] w-[26rem] max-w-[calc(100vw-1.5rem)] max-sm:fixed max-sm:left-3 max-sm:right-3 max-sm:top-14 max-sm:w-auto animate-fade-in overflow-y-auto rounded-md border border-ink-line bg-paper-raised p-3 shadow-raised"
           >
             {/* ここで絞り込めるのは、この一覧に並んでいる名前だけ
                 （/api/nav で取得済みのシート・ファイル・ダッシュボード名）。

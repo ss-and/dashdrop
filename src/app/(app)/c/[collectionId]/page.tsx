@@ -239,8 +239,13 @@ export default async function CollectionPage({
       />
       <main className="flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="mx-auto max-w-6xl space-y-5">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-center gap-3">
+          {/*
+            狭い画面では縦に積む。ボタンが4つ（自動作成・自分で作る・書き出し・
+            削除）並ぶうえ shrink-0 で縮まないので、横並びのままだと 390px を
+            大きく超えて右端のボタンが押せなくなる。
+          */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+            <div className="flex min-w-0 items-center gap-3">
               <span className="flex h-10 w-10 items-center justify-center rounded-md border border-ink-line bg-paper-raised">
                 <CollectionIcon
                   name={collection.icon}
@@ -280,7 +285,7 @@ export default async function CollectionPage({
               </div>
             </div>
 
-            <div className="flex shrink-0 items-start gap-2">
+            <div className="flex flex-wrap items-start gap-2 sm:shrink-0">
               {/* Redundant on the 分析 tab — the analysis is already on screen. */}
               {!isAnalyze && (
                 <AutoDashboardButton
