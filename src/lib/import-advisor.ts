@@ -27,7 +27,12 @@ import {
   type FieldType,
 } from "./field-types";
 import type { SheetParse } from "./excel";
-import { detectWideLayout, parseColumnUnit } from "./excel-ja";
+import {
+  detectWideLayout,
+  parseColumnUnit,
+  unpivot,
+  type WideLayout,
+} from "./excel-ja";
 
 export type AdviceVia = "anthropic" | "heuristic";
 
@@ -51,6 +56,52 @@ export interface ColumnAdvice {
   reason: string;
 }
 
+/**
+ * その場で答えられる質問の、選択肢と材料。
+ *
+ * 質問には2種類ある。
+ *
+ *  - **読んで確認してほしいこと**（結合セル・見出し行のずれ・列名の重複）。
+ *    直すのは Excel 側なので、こちらの取り込みの動きは変わらない。
+ *  - **こちらの動きを決められること**（横持ちを縦にするか、単位を実額に直すか）。
+ *    こちらは選ばせないと意味が無い。
+ *
+ * 以前は両方とも箇条書きの文章として並べていた。「月を縦に並べ替えますか？」と
+ * 聞いておきながら、答える手段がどこにも無く、利用者は読んで「取り込む」を
+ * 押すしかなかった。**答えられない質問は、質問ではなく雑音**なので、決められる
+ * ものには必ず選択肢を持たせる。
+ *
+ * 既定は必ず「何もしない」側。勝手に形を変えると、元の帳票と行数が合わなく
+ * なって突き合わせができない。
+ */
+export type ImportChoice =
+  | {
+      id: "unpivot";
+      sheetName: string;
+      defaultValue: "keep";
+      options: ImportChoiceOption[];
+      /** 縦持ちに直すときの構造。取り込み側がそのまま使う。 */
+      layout: WideLayout;
+      /** 直したらこう見える、を先に見せるための数行。 */
+      preview: { headers: string[]; rows: unknown[][] };
+    }
+  | {
+      id: "unitScale";
+      sheetName: string;
+      defaultValue: "keep";
+      options: ImportChoiceOption[];
+      /** 単位が書かれていた列と、その倍率。 */
+      columns: Array<{ header: string; scale: number; unit: string }>;
+    };
+
+export interface ImportChoiceOption {
+  value: string;
+  /** ボタンの文言。何が起きるかを動詞で書く。 */
+  label: string;
+  /** 選んだ結果を1行で。迷ったときに読む。 */
+  hint: string;
+}
+
 export interface ImportQuestion {
   /** 対象シート。ファイル全体の話なら null。 */
   sheetName: string | null;
@@ -58,6 +109,10 @@ export interface ImportQuestion {
   message: string;
   /** 利用者に確認したいこと。 */
   question: string;
+  /**
+   * その場で決められる質問なら、選択肢。無ければ「読んで確認してほしいこと」。
+   */
+  choice?: ImportChoice;
 }
 
 export interface ImportAdvice {
@@ -123,6 +178,26 @@ function periodColumnsAreNumeric(
   // 1件も値が無ければ判断材料が無い。勧めない側に倒す。
   if (filled === 0) return false;
   return numeric * 2 > filled;
+}
+
+/** プレビューに出す行数。多いと画面を占領し、少ないと形が伝わらない。 */
+const UNPIVOT_PREVIEW_ROWS = 4;
+
+/**
+ * 「縦に直すとこう見える」を先に見せるための数行。
+ *
+ * 形の変換は言葉で説明しても伝わらない。「1行が部門 × 月 × 値になります」と
+ * 書くより、実際の3〜4行を見せた方が速い。答える前に結果が見えることが、
+ * この質問に答えられるかどうかを決める。
+ */
+function unpivotPreview(
+  sheet: SheetParse,
+  layout: WideLayout,
+): { headers: string[]; rows: unknown[][] } {
+  // previewRows は列名をキーにした連想配列なので、行列に直してから渡す。
+  const matrix = sheet.previewRows.map((r) => sheet.headers.map((h) => r[h] ?? null));
+  const out = unpivot(sheet.headers, matrix, layout, "値");
+  return { headers: out.headers, rows: out.rows.slice(0, UNPIVOT_PREVIEW_ROWS) };
 }
 
 export function structuralQuestions(sheets: SheetParse[]): ImportQuestion[] {
@@ -203,7 +278,28 @@ export function structuralQuestions(sheets: SheetParse[]): ImportQuestion[] {
       out.push({
         sheetName: s.sheetName,
         message: `${wide.periodLabel}が列として横に並んでいます（${wide.periodColumns.slice(0, 3).join("・")}…の ${wide.periodColumns.length} 列）。この形のままだと、${wide.periodLabel}ごとの推移をグラフにできません——${wide.periodLabel}が行ではなく列にあるため、集計では別々の項目として扱われます。`,
-        question: `「${wide.idColumns.join("・")}」を残したまま、${wide.periodLabel}を縦に並べ替えますか？ 並べ替えると1行が「${wide.idColumns[0]} × ${wide.periodLabel} × 値」になり、推移のグラフが作れるようになります。`,
+        question: `「${wide.idColumns.join("・")}」を残したまま、${wide.periodLabel}を縦に並べ替えますか？`,
+        choice: {
+          id: "unpivot",
+          sheetName: s.sheetName,
+          // 既定は「そのまま」。勝手に形を変えると元の帳票と行数が合わなくなり、
+          // 突き合わせができなくなる。変えるのは利用者が選んだときだけ。
+          defaultValue: "keep",
+          options: [
+            {
+              value: "keep",
+              label: "そのまま取り込む",
+              hint: `元の帳票と同じ形。${wide.periodColumns.length} 列がそれぞれ別の項目になります。`,
+            },
+            {
+              value: "unpivot",
+              label: `${wide.periodLabel}を縦に並べ替える`,
+              hint: `1行が「${wide.idColumns[0]} × ${wide.periodLabel} × 値」になり、推移のグラフが作れます。`,
+            },
+          ],
+          layout: wide,
+          preview: unpivotPreview(s, wide),
+        },
       });
     }
 
@@ -226,8 +322,29 @@ export function structuralQuestions(sheets: SheetParse[]): ImportQuestion[] {
       out.push({
         sheetName: s.sheetName,
         message: `列名に単位が書かれている列があります（${shown}）。中の数字はその単位のままなので、そのままグラフにすると桁が実額と合いません。`,
-        question:
-          "この列は単位のまま扱いますか？ 実額（円）に直して取り込むこともできます。元の帳票と数字を突き合わせるなら単位のまま、他の金額列と足すなら実額が扱いやすくなります。",
+        question: "この列は単位のまま扱いますか？ 実額（円）に直すこともできます。",
+        choice: {
+          id: "unitScale",
+          sheetName: s.sheetName,
+          defaultValue: "keep",
+          options: [
+            {
+              value: "keep",
+              label: "単位のまま取り込む",
+              hint: "元の帳票と数字がそのまま一致します。突き合わせるならこちら。",
+            },
+            {
+              value: "scale",
+              label: "実額（円）に直す",
+              hint: "他の金額列と足したり、実額でグラフにできます。列名から単位の表記は外します。",
+            },
+          ],
+          columns: scaled.map((x) => ({
+            header: x.header,
+            scale: x.unit!.scale,
+            unit: x.unit!.unit,
+          })),
+        },
       });
     }
 

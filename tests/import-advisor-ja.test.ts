@@ -146,6 +146,109 @@ describe("横持ちの指摘", () => {
   });
 });
 
+describe("答えられる質問になっていること", () => {
+  const wideSheet = {
+    name: "部門別売上",
+    rows: [
+      ["部門", "4月", "5月", "6月"],
+      ["営業部", 120, 135, 150],
+      ["開発部", 80, 90, 85],
+    ] as unknown[][],
+  };
+
+  /**
+   * 元の不具合: 「月を縦に並べ替えますか？」と聞いておきながら、答える手段が
+   * どこにも無く、利用者は読んで「取り込む」を押すしかなかった。
+   * **答えられない質問は、質問ではなく雑音**。
+   */
+  it("横持ちの質問は選択肢を持つ", () => {
+    const q = about(scan([wideSheet]), "横に並んで")[0];
+    expect(q.choice).toBeDefined();
+    expect(q.choice!.id).toBe("unpivot");
+    expect(q.choice!.options.map((o) => o.value)).toEqual(["keep", "unpivot"]);
+  });
+
+  /**
+   * 既定は必ず「何もしない」側。勝手に形を変えると元の帳票と行数が合わなくなり、
+   * 突き合わせができなくなる。
+   */
+  it("既定はそのまま取り込む側", () => {
+    const q = about(scan([wideSheet]), "横に並んで")[0];
+    expect(q.choice!.defaultValue).toBe("keep");
+    expect(q.choice!.options[0].value).toBe("keep");
+  });
+
+  it("選択肢には、選んだ結果が1行で付いている", () => {
+    const q = about(scan([wideSheet]), "横に並んで")[0];
+    for (const o of q.choice!.options) {
+      expect(o.label.length).toBeGreaterThan(0);
+      expect(o.hint.length).toBeGreaterThan(0);
+    }
+  });
+
+  /**
+   * 形の変換は言葉では伝わらない。答える前に結果の数行が見えること。
+   */
+  it("横持ちの質問は「直すとこう見える」を持つ", () => {
+    const q = about(scan([wideSheet]), "横に並んで")[0];
+    const choice = q.choice!;
+    if (choice.id !== "unpivot") throw new Error("unpivot のはず");
+    expect(choice.preview.headers).toEqual(["部門", "月", "値"]);
+    /*
+     * 値が文字列なのはパーサの仕様（表示書式を通した値が届く）。プレビューは
+     * 「取り込むとこう並ぶ」を見せるためのものなので、ここで数値に直すと
+     * 実際と違うものを見せることになる。型付けは取り込み時に coerceValue が行う。
+     */
+    expect(choice.preview.rows[0]).toEqual(["営業部", "4月", "120"]);
+    expect(choice.preview.rows.length).toBeGreaterThan(1);
+    // 画面を占領しないよう、数行に絞る。
+    expect(choice.preview.rows.length).toBeLessThanOrEqual(4);
+  });
+
+  it("単位の質問も選択肢を持ち、対象の列と倍率を持ち歩く", () => {
+    const sheets = scan([
+      {
+        name: "予算",
+        rows: [
+          ["部門", "売上（千円）"],
+          ["営業部", 1200],
+        ],
+      },
+    ]);
+    const q = about(sheets, "単位が書かれている")[0];
+    const choice = q.choice!;
+    if (choice.id !== "unitScale") throw new Error("unitScale のはず");
+    expect(choice.defaultValue).toBe("keep");
+    expect(choice.columns).toEqual([
+      { header: "売上（千円）", scale: 1000, unit: "千円" },
+    ]);
+  });
+
+  /**
+   * 直すのが Excel 側である指摘（結合セル・見出し行のずれ）は、こちらの動きを
+   * 変えられないので選択肢を持たない。持たせると「選んだのに何も起きない」に
+   * なる。
+   */
+  it("Excel側を直すしかない指摘には、選択肢を付けない", () => {
+    const sheets = scan([
+      {
+        name: "受注明細",
+        rows: [
+          ["2026年度 受注明細"],
+          [],
+          ["受注日", "取引先", "金額"],
+          ["2026-04-01", "山田商事", 120000],
+        ],
+      },
+    ]);
+    const headerQ = structuralQuestions(sheets).find((q) =>
+      q.message.includes("行目を見出しとして読みました"),
+    );
+    expect(headerQ).toBeDefined();
+    expect(headerQ!.choice).toBeUndefined();
+  });
+});
+
 describe("列名に埋まった単位の指摘", () => {
   it("千円・百万円の列を見つけて、実額に直すか聞く", () => {
     const sheets = scan([
