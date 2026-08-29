@@ -30,12 +30,20 @@ import type {
   SankeyData,
   JapanMapWidget,
   JapanMapData,
+  RecurringWidget,
+  RecurringData,
   SeriesData,
   Unit,
 } from "./widgets";
 import { foldWidthVariants } from "./formula";
 import { formatCompact } from "./utils";
 import { findPrefecture } from "./japan";
+import {
+  detectRecurring,
+  detectChargeColumns,
+  CADENCE_LABEL,
+  type Charge,
+} from "./recurring";
 
 export interface AggRecord {
   id: string;
@@ -1782,6 +1790,71 @@ function computeHistogram(w: HistogramWidget, col: AggCollection): SeriesData {
  * Compute a single widget. Returns a null-ish empty WidgetData when the source
  * collection is missing so the renderer can show a graceful empty state.
  */
+/**
+ * 定期支払いの検出。
+ *
+ * 明細の列を見つけられなければ `notApplicable: true` で返す。0件とは別の状態
+ * として扱うのが肝で、「見た結果1件も無かった」と「そもそも見ていない」を
+ * 同じ顔で出すと、利用者は無いことを確認できない。
+ */
+function computeRecurring(
+  w: RecurringWidget,
+  col: AggCollection,
+  now: Date,
+): RecurringData {
+  const empty: RecurringData = {
+    type: "recurring",
+    items: [],
+    monthlyTotal: 0,
+    yearlyTotal: 0,
+    endedCount: 0,
+    notApplicable: true,
+  };
+
+  // 指定があればそれを使い、無ければ探す。3つとも揃わなければ何も出さない。
+  const auto = detectChargeColumns(col.fields);
+  const dateKey = w.dateField ?? auto?.dateKey;
+  const labelKey = w.labelField ?? auto?.labelKey;
+  const amountKey = w.amountField ?? auto?.amountKey;
+  if (!dateKey || !labelKey || !amountKey) return empty;
+
+  const filtered = applyFilters(col.records, w.filters);
+  const charges: Charge[] = [];
+  for (const r of filtered) {
+    const date = toDate(r.data[dateKey]);
+    const amount = toNumber(r.data[amountKey]);
+    if (!date || amount === null) continue;
+    const label = String(r.data[labelKey] ?? "").trim();
+    if (!label) continue;
+    charges.push({ date, label, amount });
+  }
+
+  const summary = detectRecurring(charges, now);
+  return {
+    type: "recurring",
+    items: summary.charges.map((c) => ({
+      label: c.label,
+      cadence: CADENCE_LABEL[c.cadence],
+      amount: c.amount,
+      monthly: c.monthlyEquivalent,
+      variable: c.variable,
+      occurrences: c.occurrences,
+      active: c.active,
+      last: isoDay(c.last),
+    })),
+    monthlyTotal: summary.monthlyTotal,
+    yearlyTotal: summary.yearlyTotal,
+    endedCount: summary.endedCount,
+    notApplicable: false,
+  };
+}
+
+/** ローカル日付を YYYY-MM-DD に。toISOString は UTC に寄せるので使わない。 */
+function isoDay(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 export function computeWidget(
   widget: WidgetSpec,
   collections: CollectionMap,
@@ -1846,6 +1919,15 @@ export function computeWidget(
           unit: widget.unit ?? "number",
           fromLabel: "",
           toLabel: "",
+        };
+      case "recurring":
+        return {
+          type: "recurring",
+          items: [],
+          monthlyTotal: 0,
+          yearlyTotal: 0,
+          endedCount: 0,
+          notApplicable: true,
         };
       case "japanmap":
         return {
@@ -1919,6 +2001,8 @@ export function computeWidget(
       return computeSankey(widget, col);
     case "japanmap":
       return computeJapanMap(widget, col);
+    case "recurring":
+      return computeRecurring(widget, col, now);
   }
 }
 

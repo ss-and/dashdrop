@@ -9,6 +9,7 @@
  */
 import { FIELD_TYPE_META, type FieldType } from "./field-types";
 import type { WidgetSpec } from "./widgets";
+import { detectChargeColumns } from "./recurring";
 
 export type BuilderWidgetType =
   | "kpi"
@@ -30,6 +31,7 @@ export type BuilderWidgetType =
   | "radar"
   | "sankey"
   | "japanmap"
+  | "recurring"
   | "pivot"
   | "heatmap"
   | "table";
@@ -75,6 +77,7 @@ export const WIDGET_TYPES: BuilderWidgetType[] = [
   "pivot",
   "heatmap",
   "table",
+  "recurring",
 ];
 
 export const WIDGET_META: Record<BuilderWidgetType, WidgetMeta> = {
@@ -232,6 +235,13 @@ export const WIDGET_META: Record<BuilderWidgetType, WidgetMeta> = {
     defaultSpan: 2,
     group: "明細",
   },
+  recurring: {
+    label: "定期支払い",
+    icon: "table",
+    hint: "毎月・毎年くり返し出ている支払いを見つける",
+    defaultSpan: 2,
+    group: "明細",
+  },
 };
 
 function meta(type: string) {
@@ -323,6 +333,13 @@ export function canAddWidget(
     case "funnel":
     case "table":
       return fields.length > 0;
+    case "recurring":
+      /*
+       * 日付・摘要・金額の3本が揃っていないと、そもそも定期支払いを探せない。
+       * 押せてしまうと「置いたのに何も出ない」ウィジェットになるので、
+       * 検出と同じ判定をここでも通す。
+       */
+      return detectChargeColumns(fields) !== null;
     default:
       return true;
   }
@@ -618,6 +635,18 @@ export function newWidget(
         columns: fields.slice(0, 5).map((f) => f.key),
         limit: 8,
       };
+    case "recurring": {
+      // 列は保存しておく。あとから列名が変わっても、作ったときの解釈が残る。
+      const cols = detectChargeColumns(fields);
+      return {
+        ...base,
+        type: "recurring",
+        title: "定期支払い",
+        dateField: cols?.dateKey,
+        labelField: cols?.labelKey,
+        amountField: cols?.amountKey,
+      };
+    }
   }
 }
 

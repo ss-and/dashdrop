@@ -27,6 +27,7 @@ import {
 } from "./data-profile";
 import type { WidgetSpec, Unit } from "./widgets";
 import { findPrefecture } from "./japan";
+import { detectChargeColumns } from "./recurring";
 import {
   DEFAULT_INTENT,
   audienceMeta,
@@ -698,6 +699,34 @@ function layoutForSheet(
   const aud = audienceMeta(intent.audience);
   const capped = selectByIntent(out, extras, intent.lens, aud);
 
+  /* --------------------------- 定期支払い -------------------------------- */
+
+  /*
+   * 明細の形（日付・摘要・金額）をしているシートには、定期支払いの一覧を足す。
+   *
+   * カード明細・経費精算・口座の入出金は、置いた人が一番知りたいことが
+   * 「いま何に払い続けているか」で、それは合計やグラフからは読めない——
+   * 年1回のものは12か月ぶんスクロールしないと見えないし、解約したつもりで
+   * 引かれ続けているものは、探そうと思わない限り見つからない。
+   *
+   * 列が揃わないシート（大多数）では `detectChargeColumns` が null を返すので、
+   * 何も足さない。当たらないシートに空の枠を置くほうが、無いより悪い。
+   *
+   * `aud.detail` で明細表と同じ扱いにしてある。ここを通さずに足すと、
+   * 枚数を絞る読み手（「上に見せる」）で上限を1枚ぶん超える——`capped` は
+   * 既に選び終えた配列なので、後から押し込むぶんは誰も数えていない。
+   * 中身は1行ずつ並ぶ一覧なので、明細を載せない画面には載せないのが筋も合う。
+   */
+  if (aud.detail && detectChargeColumns(sheet.fields)) {
+    capped.push({
+      id: genWidgetId(),
+      type: "recurring",
+      title: "定期支払い",
+      collection: S,
+      span: 2,
+    });
+  }
+
   /* ------------------------------- 明細 ---------------------------------- */
 
   const cols = detailColumns(sheet.fields, 6);
@@ -766,6 +795,9 @@ function roleOf(w: WidgetSpec): WidgetRole {
     case "japanmap":
       return "geo";
     case "table":
+    case "recurring":
+      // どちらも「並べて読むもの」。定期支払いは明細を畳んだ一覧なので、
+      // 図ではなく明細の側に置く。
       return "detail";
   }
 }

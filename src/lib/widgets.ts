@@ -353,6 +353,27 @@ export const japanMapWidgetSchema = baseWidget.extend({
 });
 export type JapanMapWidget = z.infer<typeof japanMapWidgetSchema>;
 
+/**
+ * 定期支払い（サブスク・固定費）の一覧。
+ *
+ * 明細を置いたときに一番知りたいのは合計額ではなく「いま何に課金され続けて
+ * いるか」。判定は src/lib/recurring.ts の決定的なルールで、外部へは何も送らない。
+ *
+ * 列を指定しないと、明細らしい列（日付・摘要・金額）を自分で探す。見つからな
+ * ければ空で返す——**推測で列を埋めない**。取り違えると、間違った定期支払いの
+ * 一覧という、最も質の悪い出力になる。
+ */
+export const recurringWidgetSchema = baseWidget.extend({
+  type: z.literal("recurring"),
+  /** 日付の列。省略時は自動で探す。 */
+  dateField: z.string().optional(),
+  /** 摘要・加盟店名の列。省略時は自動で探す。 */
+  labelField: z.string().optional(),
+  /** 金額の列。省略時は自動で探す。 */
+  amountField: z.string().optional(),
+});
+export type RecurringWidget = z.infer<typeof recurringWidgetSchema>;
+
 export const widgetSchema = z.discriminatedUnion("type", [
   kpiWidgetSchema,
   seriesWidgetSchema.extend({ type: z.literal("line") }),
@@ -374,6 +395,7 @@ export const widgetSchema = z.discriminatedUnion("type", [
   radarWidgetSchema,
   sankeyWidgetSchema,
   japanMapWidgetSchema,
+  recurringWidgetSchema,
 ]);
 export type WidgetSpec = z.infer<typeof widgetSchema>;
 
@@ -699,6 +721,38 @@ export interface JapanMapData {
   collectionId?: string;
 }
 
+/** 定期支払いの一覧（ウィジェットに渡す形）。 */
+export interface RecurringData {
+  type: "recurring";
+  items: Array<{
+    label: string;
+    /** 「毎月」「年1回」など。 */
+    cadence: string;
+    /** 1回あたりの額。 */
+    amount: number;
+    /** 月あたりに直した額。並びの基準。 */
+    monthly: number;
+    /** 額が毎回変わるか（電気・ガスなど）。 */
+    variable: boolean;
+    occurrences: number;
+    /** まだ続いていそうか。false は合計に入れない。 */
+    active: boolean;
+    /** 最後の支払日（ISO の日付部分だけ）。 */
+    last: string;
+  }>;
+  /** 続いているものだけの月換算合計。 */
+  monthlyTotal: number;
+  yearlyTotal: number;
+  /** 止まったと判断したものの件数。 */
+  endedCount: number;
+  /**
+   * 明細の列を見つけられなかったか。true のとき items は必ず空で、
+   * 画面は「0件」ではなく「この表は明細の形ではない」と出す必要がある。
+   * 0件と「見ていない」を同じ顔で出すと、無いことの確認にならない。
+   */
+  notApplicable: boolean;
+}
+
 export type WidgetData =
   | KpiData
   | BoxplotData
@@ -711,4 +765,5 @@ export type WidgetData =
   | SeriesData
   | BreakdownData
   | TableData
-  | ScatterData;
+  | ScatterData
+  | RecurringData;

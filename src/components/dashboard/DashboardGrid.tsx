@@ -12,6 +12,7 @@ import { BoxPlot } from "./widgets/BoxPlot";
 import { RadarChartWidget } from "./widgets/RadarChartWidget";
 import { SankeyFlow } from "./widgets/SankeyFlow";
 import { JapanMap } from "./widgets/JapanMap";
+import { RecurringList } from "./widgets/RecurringList";
 import { PaletteProvider } from "./PaletteContext";
 import { DrillOriginProvider } from "./DrillOriginContext";
 
@@ -67,6 +68,8 @@ function WidgetBody({ data }: { data: WidgetData }) {
       return <SankeyFlow data={data} />;
     case "japanmap":
       return <JapanMap data={data} />;
+    case "recurring":
+      return <RecurringList data={data} />;
     default:
       return (
         <div className="flex h-24 items-center justify-center text-sm text-ink-faint">
