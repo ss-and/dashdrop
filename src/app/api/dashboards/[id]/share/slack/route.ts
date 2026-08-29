@@ -10,10 +10,22 @@ import { getIntegration } from "@/lib/integrations";
 import { notifyWorkspaceSlack } from "@/lib/slack";
 import { breakdownLines, isEmptyDigest } from "@/lib/dashboard-digest";
 import { loadShareSubject, stampedAt } from "../digest";
-import { assertCapability } from "@/lib/workspace";
 
 export const POST = withAuth(async (_req, { user, params }) => {
-  assertCapability(user, "integrations");
+  /*
+   * Slack は**無料でも使える**。
+   *
+   * 理由は原価ではなく、広がり方。Slack で起きるのは2つだけで、
+   *   1. アラートが発火したときの自動通知（src/lib/alerts.ts）
+   *   2. ダッシュボードを手で Slack に送る
+   * このうち 1 は「アラート」の権限（alerts）で別に閉じているので、ここを
+   * 開けても自動通知は開かない。開くのは 2——**チームの目に DashDrop が
+   * 触れる経路**だけ。共有リンクと同じで、これは製品が広がる仕組みなので、
+   * 閉じると自分の首を絞める。送信そのものの原価も HTTP POST 1本でほぼ0。
+   *
+   * だから integrations の権限からは外してある（残っているのは Notion と
+   * Google スプレッドシートで、こちらは取り込み経路を持つぶん重い）。
+   */
   const workspaceId = user.workspace.id;
 
   // 未接続のまま送ろうとしたときは、何をすればいいかまで返す。

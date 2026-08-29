@@ -28,7 +28,13 @@ export type PlanId = "free" | "pro" | "business";
  * 気づくのは「なぜか使えている」と言われたときになる。
  */
 export type Capability =
-  /** Slack / Notion / Google スプレッドシート との連携。 */
+  /**
+   * Notion / Google スプレッドシート との連携。
+   *
+   * **Slack はここに含めない。** Slack で開くのは「ダッシュボードを手で送る」
+   * だけ（アラートの自動通知は alerts の権限で別に閉じている）。それは
+   * チームの目に触れる＝製品が広がる経路なので、無料側に置く。
+   */
   | "integrations"
   /** 数式・VLOOKUP・ルックアップ・ロールアップ（計算する項目）。 */
   | "computedFields"
@@ -55,7 +61,7 @@ export type Capability =
   | "aiAssist";
 
 export const CAPABILITY_LABEL: Record<Capability, string> = {
-  integrations: "連携（Slack・Notion・Google スプレッドシート）",
+  integrations: "連携（Notion・Google スプレッドシート）",
   computedFields: "数式・VLOOKUP",
   alerts: "通知ルール",
   reports: "定期レポート",
@@ -175,7 +181,7 @@ export const PLANS: Record<PlanId, Plan> = {
     planned: [
       "Excel 20ファイルまで・スプレッドシート 50個まで",
       "1シート 50,000行まで",
-      "連携（Slack・Notion・Google スプレッドシート）",
+      "連携（Notion・Google スプレッドシート）",
       "数式・VLOOKUP・シート間リレーション",
       "通知ルール（条件に当てはまったら知らせる）",
       "定期レポート（決まった時刻に送る）",

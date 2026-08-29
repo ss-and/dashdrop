@@ -20,7 +20,6 @@ import {
   type IntegrationSummary,
 } from "@/lib/integrations";
 import { buildMessage, postToSlack } from "@/lib/slack";
-import { assertCapability } from "@/lib/workspace";
 
 const connectSchema = z.object({
   webhookUrl: z.string().min(1, "Webhook URL を入力してください。"),
@@ -55,8 +54,20 @@ export const GET = withAuth(async (_req, { user }) => {
 });
 
 export const POST = withAuth(async (req, { user }) => {
-  // integrations は有料プランの機能。判定は assertCapability に一本化する。
-  assertCapability(user, "integrations");
+  /*
+   * Slack は**無料でも使える**。
+   *
+   * 理由は原価ではなく、広がり方。Slack で起きるのは2つだけで、
+   *   1. アラートが発火したときの自動通知（src/lib/alerts.ts）
+   *   2. ダッシュボードを手で Slack に送る
+   * このうち 1 は「アラート」の権限（alerts）で別に閉じているので、ここを
+   * 開けても自動通知は開かない。開くのは 2——**チームの目に DashDrop が
+   * 触れる経路**だけ。共有リンクと同じで、これは製品が広がる仕組みなので、
+   * 閉じると自分の首を絞める。送信そのものの原価も HTTP POST 1本でほぼ0。
+   *
+   * だから integrations の権限からは外してある（残っているのは Notion と
+   * Google スプレッドシートで、こちらは取り込み経路を持つぶん重い）。
+   */
   const body = await readJson(req, connectSchema);
 
   // 形の検査を先に済ませる。https://hooks.slack.com 以外を弾くのはここで、
