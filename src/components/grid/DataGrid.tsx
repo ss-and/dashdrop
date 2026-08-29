@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import {
   FIELD_TYPE_META,
   displayValue,
@@ -361,6 +362,13 @@ export function DataGrid({
 
   const [busy, setBusy] = useState(0);
   const [error, setError] = useState<string | null>(null);
+
+  /*
+   * 行と項目の削除の確認。以前はブラウザ標準の確認ダイアログだったが、この画面は
+   * 表そのものが主役なので、OS のダイアログが被さると「別のアプリに
+   * 移った」ように見えていた。表の上に製品のダイアログを出す。
+   */
+  const { ask, confirmDialog } = useConfirm();
 
   const [fieldModal, setFieldModal] = useState<
     { mode: "add" } | { mode: "edit"; field: GridField } | null
@@ -794,10 +802,17 @@ export function DataGrid({
     setError(null);
   }, []);
 
-  /** Delete a row (with confirm) — optimistic removal, restore on failure. */
+  /** 1行を削除する（確認あり）— 先に画面から消し、失敗したら戻す。 */
   const deleteRecord = useCallback(
     async (id: string) => {
-      if (!confirm("この行を削除しますか？")) return;
+      const ok = await ask({
+        title: "この行を削除しますか？",
+        body: "この1行に入っている値がすべて消えます。元には戻せません。",
+        keeps: "ほかの行と、項目（列）の設定はそのまま残ります。",
+        confirmLabel: "行を削除",
+        destructive: true,
+      });
+      if (!ok) return;
       const snapshot = records;
       setRecords((rs) => rs.filter((r) => r.id !== id));
       bump(1);
@@ -815,13 +830,26 @@ export function DataGrid({
         bump(-1);
       }
     },
-    [records, bump],
+    [records, bump, ask],
   );
 
   const deleteField = useCallback(
     async (field: GridField) => {
       setMenuField(null);
-      if (!confirm(`項目「${field.name}」を削除しますか？`)) return;
+      /*
+       * 列の削除は行の削除より重い。全行のその列の値が一度に消えるうえ、
+       * その列を参照している計算式・VLOOKUP まで巻き込む。ネイティブの
+       * 1行では「項目「〇〇」を削除しますか？」としか言えず、どこまで
+       * 波及するかを伝える場所が無かった。
+       */
+      const ok = await ask({
+        title: `項目「${field.name}」を削除しますか？`,
+        body: `この列と、すべての行に入っている「${field.name}」の値が消えます。元には戻せません。この項目を参照している計算式やVLOOKUPの列があると、そちらも計算できなくなります。`,
+        keeps: "ほかの項目と、行そのものは残ります。",
+        confirmLabel: "項目を削除",
+        destructive: true,
+      });
+      if (!ok) return;
       bump(1);
       try {
         const res = await fetch(
@@ -840,7 +868,7 @@ export function DataGrid({
         bump(-1);
       }
     },
-    [collection.id, refetchFields, bump],
+    [collection.id, refetchFields, bump, ask],
   );
 
   const columns = useMemo(
@@ -1062,6 +1090,7 @@ export function DataGrid({
 
   return (
     <div ref={gridRef} className="animate-fade-in space-y-3">
+      {confirmDialog}
       <div className="flex items-center justify-between gap-3">
         <div className="relative w-full max-w-xs">
           <span className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-ink-faint">

@@ -181,7 +181,7 @@ export function ImportReview({
     }));
   }
 
-  function confirm() {
+  function confirmMapping() {
     onConfirm(
       chosen.map((s) => {
         const st = state[s.sheetName];
@@ -447,7 +447,7 @@ export function ImportReview({
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button onClick={confirm} disabled={busy || chosen.length === 0}>
+        <Button onClick={confirmMapping} disabled={busy || chosen.length === 0}>
           {busy
             ? "取り込み中…"
             : `この内容で取り込む（${chosen.length} シート）`}

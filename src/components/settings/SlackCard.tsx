@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card, CardHeader, CardTitle, CardBody } from "@/components/ui/Card";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { Input, Label } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
 import type { IntegrationSummary, IntegrationStatus } from "@/lib/integrations";
@@ -56,6 +57,7 @@ type Pending = "connect" | "test" | "remove" | null;
  * into a password field, sent once, and only ever displayed masked afterwards.
  */
 export function SlackCard({ initial }: { initial: IntegrationSummary | null }) {
+  const { ask, confirmDialog } = useConfirm();
   const [summary, setSummary] = useState<IntegrationSummary | null>(initial);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [channelHint, setChannelHint] = useState(channelHintOf(initial) ?? "");
@@ -167,13 +169,15 @@ export function SlackCard({ initial }: { initial: IntegrationSummary | null }) {
 
   async function disconnect() {
     if (busy) return;
-    if (
-      !window.confirm(
-        "Slack連携を解除します。以降、アラートはSlackに通知されません（アプリ内の通知は続きます）。よろしいですか？",
-      )
-    ) {
-      return;
-    }
+    const ok = await ask({
+      title: "Slack連携を解除しますか？",
+      body: "保存してあるWebhook URLを削除します。以降、アラートもダッシュボードもSlackへは送られません。",
+      keeps:
+        "アプリ内の通知（右上のベル）は今までどおり届きます。アラートの設定そのものも消えません。Webhook URLを入れ直せば、すぐ元に戻せます。",
+      confirmLabel: "連携を解除",
+      destructive: true,
+    });
+    if (!ok) return;
     begin("remove");
     try {
       const res = await fetch("/api/integrations/slack", { method: "DELETE" });
@@ -206,6 +210,7 @@ export function SlackCard({ initial }: { initial: IntegrationSummary | null }) {
 
   return (
     <Card>
+      {confirmDialog}
       <CardHeader className="flex flex-wrap items-center justify-between gap-2">
         <CardTitle>Slack連携</CardTitle>
         <Badge tone={connected ? "success" : "neutral"} variant="soft">

@@ -615,19 +615,29 @@ describe("SlackCard", () => {
     expect((input as HTMLInputElement).value).toBe(OTHER_WEBHOOK);
   });
 
-  it("解除の確認文は、実際に止まるものだけを述べる", () => {
-    const confirmed: string[] = [];
-    vi.spyOn(window, "confirm").mockImplementation((msg?: string) => {
-      confirmed.push(String(msg));
-      return false;
-    });
+  it("解除の確認文は、実際に止まるものだけを述べる", async () => {
+    /*
+     * 確認はブラウザ標準のダイアログをやめ、製品の中のダイアログに移した
+     * （src/components/ui/ConfirmDialog.tsx）。読むのが window.confirm に
+     * 渡した文字列から画面上のダイアログの中身に変わっただけで、
+     * ここで確かめたいことは変わらない——止まらないものまで
+     * 「止まります」と言わないこと。
+     */
+    const fetchMock = stubFetch(200, { ok: true });
     renderCard(summary());
-
     fireEvent.click(screen.getByRole("button", { name: "解除" }));
 
-    expect(confirmed[0]).toContain("アラート");
-    expect(confirmed[0]).not.toContain("レポート");
-    expect(confirmed[0]).toContain("アプリ内の通知は続きます");
+    const dialog = await screen.findByRole("dialog");
+    const text = dialog.textContent ?? "";
+    expect(text).toContain("アラート");
+    // レポートの配信は Slack を経由していない。巻き添えにして怖がらせない。
+    expect(text).not.toContain("レポート");
+    // 何が残るかは本文と別の口で言う。ネイティブの1行では書けなかった側。
+    expect(text).toContain("残るもの");
+    expect(text).toContain("アプリ内の通知");
+
+    // 確認する前に解除の通信が飛んでいないこと。
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("エラーと結果の読み上げ領域は、中身より先に存在する", () => {

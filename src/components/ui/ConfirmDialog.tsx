@@ -4,7 +4,7 @@
  * 破壊的な操作を確かめるダイアログ。
  *
  * ここに至った経緯:
- * 削除まわりの確認はぜんぶ `window.confirm()` に任せていた。動きはするが、
+ * 削除まわりの確認はぜんぶブラウザ標準の確認ダイアログに任せていた。動きはするが、
  * この製品が「ひと続きに見えること」を売りにしている以上、いちばん緊張する
  * 瞬間にだけ OS のダイアログが割り込むのは筋が悪かった。具体的に何が困るか:
  *
@@ -168,7 +168,12 @@ function ConfirmDialogPanel({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30 p-4"
+      /*
+       * 覆いは 30% では薄かった。背後のKPIの数字（¥150,500 など）が明るいまま
+       * 目に入り続け、「今はこの問いに答える場面だ」という切り替えが起きない。
+       * 破壊的な確認ほど、背後を静かにしてから読ませたい。
+       */
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/45 p-4"
       onMouseDown={(e) => {
         if (e.target !== e.currentTarget) return;
         /*
@@ -255,7 +260,7 @@ function ConfirmDialogPanel({
 /**
  * 呼び出し側のための入り口。
  *
- * `window.confirm()` は「聞いて、答えを返す」1行だった。置き換えでその形を
+ * ブラウザ標準の確認ダイアログは「聞いて、答えを返す」1行だった。置き換えでその形を
  * 失うと、削除処理が「押した時」と「確認された時」の2つに割れて読みにくく
  * なるので、同じ1行で書けるようにしてある:
  *

@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Input";
 import { Card, CardHeader, CardTitle, CardBody } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 interface Summary {
   connected: boolean;
@@ -41,6 +42,7 @@ function formatDate(iso: string | null): string {
  * status — so it can be dropped anywhere with `<NotionCard />`.
  */
 export function NotionCard({ initial }: { initial?: Summary | null }) {
+  const { ask, confirmDialog } = useConfirm();
   const [summary, setSummary] = useState<Summary | null>(initial ?? null);
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(initial === undefined);
@@ -98,9 +100,15 @@ export function NotionCard({ initial }: { initial?: Summary | null }) {
   }
 
   async function disconnect() {
-    if (!window.confirm("Notionとの接続を解除しますか？保存済みのトークンは削除されます。")) {
-      return;
-    }
+    const ok = await ask({
+      title: "Notionとの接続を解除しますか？",
+      body: "保存してあるインテグレーショントークンを削除します。取り込み画面でNotionのデータベースを選べなくなり、ダッシュボードをNotionへ送ることもできなくなります。",
+      keeps:
+        "すでに取り込み済みのデータと、Notion側のページはどちらも消えません。新しいトークンを入れ直せば、また接続できます。",
+      confirmLabel: "接続を解除",
+      destructive: true,
+    });
+    if (!ok) return;
     setError(null);
     setNotice(null);
     setBusy(true);
@@ -124,6 +132,7 @@ export function NotionCard({ initial }: { initial?: Summary | null }) {
 
   return (
     <Card>
+      {confirmDialog}
       <CardHeader className="flex flex-wrap items-center justify-between gap-2">
         <CardTitle>Notion連携</CardTitle>
         {!loading && (

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, buttonStyles } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { NavIcon } from "@/components/app/icons";
 
 /**
@@ -48,6 +49,7 @@ function Row({
   autoDeliveryPossible: boolean;
 }) {
   const router = useRouter();
+  const { ask, confirmDialog } = useConfirm();
   const [sending, setSending] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -78,7 +80,15 @@ function Row({
   }
 
   async function remove() {
-    if (!confirm("このレポートを削除します。よろしいですか？")) return;
+    const ok = await ask({
+      title: "この定期レポートを削除しますか？",
+      body: "配信の予定と設定が消え、以降このレポートは作られません。元には戻せません。",
+      keeps:
+        "これまでに届いたレポートの通知と、元になっているダッシュボードは残ります。同じダッシュボードから、いつでも作り直せます。",
+      confirmLabel: "レポートを削除",
+      destructive: true,
+    });
+    if (!ok) return;
     setDeleting(true);
     setError(null);
     try {
@@ -106,6 +116,7 @@ function Row({
 
   return (
     <div className="flex flex-col gap-3 rounded-md border border-ink-line bg-paper-raised p-4 sm:flex-row sm:items-center sm:justify-between">
+      {confirmDialog}
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <NavIcon name="report" className="h-4 w-4 shrink-0 text-khaki-500" />

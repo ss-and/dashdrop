@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 /**
  * Per-rule controls: an enabled toggle and a delete action. Kept small so the
@@ -15,6 +16,7 @@ export function AlertRuleActions({
   enabled: boolean;
 }) {
   const router = useRouter();
+  const { ask, confirmDialog } = useConfirm();
   const [busy, setBusy] = useState(false);
   const [on, setOn] = useState(enabled);
 
@@ -37,7 +39,19 @@ export function AlertRuleActions({
   }
 
   async function remove() {
-    if (!confirm("このアラートを削除しますか？")) return;
+    /*
+     * 「一時的に止めたいだけ」でここへ来る人がいる。ネイティブの1行では
+     * 隣のスイッチのことまで書けなかったので、本文で逃げ道を示す。
+     */
+    const ok = await ask({
+      title: "このアラートを削除しますか？",
+      body: "条件と通知先の設定が消え、元には戻せません。しばらく鳴らしたくないだけなら、削除せず隣のスイッチで停止できます。",
+      keeps:
+        "これまでに届いた通知と、監視していたシートのデータは残ります。",
+      confirmLabel: "アラートを削除",
+      destructive: true,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const res = await fetch(`/api/alerts/${id}`, { method: "DELETE" });
@@ -49,6 +63,7 @@ export function AlertRuleActions({
 
   return (
     <div className="flex items-center gap-3">
+      {confirmDialog}
       <button
         type="button"
         onClick={toggle}
