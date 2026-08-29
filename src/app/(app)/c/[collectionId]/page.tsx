@@ -27,33 +27,68 @@ import { DeleteDataButton } from "@/components/data/DeleteDataButton";
 import { collectDeleteImpact } from "@/lib/data-delete";
 import { AnalyzeView } from "@/components/sheet/AnalyzeView";
 import { RememberVisit } from "@/components/app/RememberVisit";
+import {
+  drillHref,
+  drillHrefWithout,
+  drillLabel,
+  parseDrill,
+  parseLegacyDrill,
+  recordMatchesDrill,
+  needsComputedResolution,
+  drillLookup,
+  type DrillFilter,
+} from "@/lib/drill";
 
 /** 絞り込み時に読む最大行数。全件読みにしないための上限。 */
 const DRILL_SCAN_LIMIT = 5000;
+
+/** 一度に画面へ渡す行数。DataGrid が続きをカーソルで取りに行く。 */
+const PAGE_ROWS = 200;
 
 export default async function CollectionPage({
   params,
   searchParams,
 }: {
   params: Promise<{ collectionId: string }>;
-  searchParams: Promise<{ view?: string; f?: string; v?: string }>;
+  searchParams: Promise<{
+    view?: string;
+    /** 旧形式（共有済みURL）。単一の eq として読む。 */
+    f?: string;
+    v?: string;
+    /** 新形式。条件1つにつき d が1個。 */
+    d?: string | string[];
+  }>;
 }) {
   const user = await getSession();
   if (!user) redirect("/login");
 
   const { collectionId } = await params;
-  const { view, f: filterField, v: filterValue } = await searchParams;
+  const {
+    view,
+    f: filterField,
+    v: filterValue,
+    d: drillParam,
+  } = await searchParams;
   const isAnalyze = view === "analyze";
+
   /**
-   * ダッシュボードからの絞り込み（?f=列キー&v=値）。
+   * ダッシュボードからの絞り込み。
    *
    * グラフのひと切れを押したときに、その内訳の行だけを開くための入口。これが
    * 無いと「フェーズBが3,600万」で終わってしまい、どの案件なのかに辿り着けない。
+   *
+   * 形式は `?d=<json>` の繰り返し（src/lib/drill.ts）。1条件1パラメータなので、
+   * チップの ✕ が「その条件だけ抜いたURL」を指せる。
+   *
+   * 旧い `?f=&v=` も読む。すでに共有されたURLと、まだ直していないウィジェットの
+   * ため。単一の eq に正規化して同じ道に合流させる。
    */
-  const drill =
-    filterField && filterValue !== undefined
-      ? { field: filterField, value: filterValue }
-      : null;
+  const drillRaw = drillParam === undefined ? [] : ([] as string[]).concat(drillParam);
+  const parsedDrill = parseDrill(drillRaw);
+  const drills: DrillFilter[] = [
+    ...parsedDrill.filters,
+    ...parseLegacyDrill(filterField, filterValue),
+  ];
 
   let collection: Awaited<ReturnType<typeof getCollectionForUser>>;
   try {
@@ -87,29 +122,68 @@ export default async function CollectionPage({
      * SQLite では Prisma の JSON パス検索が使えないため、DB 側では絞れない。
      * 上限つきなので、巨大なシートでも読み切りにはならない。
      */
+    const active = drills.length > 0;
     const records = await db.record.findMany({
       where: { collectionId: collection.id },
       orderBy: { createdAt: "desc" },
-      take: drill ? DRILL_SCAN_LIMIT : 100,
+      take: active ? DRILL_SCAN_LIMIT : PAGE_ROWS / 2,
       select: { id: true, data: true },
     });
+    // 走査が上限に当たったか。当たっていたら「これで全部」とは言えない。
+    const scanTruncated = active && records.length === DRILL_SCAN_LIMIT;
 
-    const matched = drill
-      ? records.filter((r) => {
-          const v = (r.data as Record<string, unknown>)?.[drill.field];
-          return v !== null && v !== undefined && String(v) === drill.value;
-        })
-      : records;
+    const asRow = (r: (typeof records)[number]) => ({
+      id: r.id,
+      data: (r.data as Record<string, unknown>) ?? {},
+    });
 
-    // Resolve cross-spreadsheet lookup/rollup values + relation labels.
-    const resolved = await resolveCollectionRecords(
-      user!.workspace.id,
-      collection as unknown as EngineCollection,
-      matched.slice(0, 200).map((r) => ({
-        id: r.id,
-        data: (r.data as Record<string, unknown>) ?? {},
-      })),
-    );
+    /*
+     * 計算列（数式・VLOOKUP・ルックアップ・ロールアップ）で絞るときは、
+     * **解決してから絞る**。
+     *
+     * 元の不具合: 計算列は保存されず読み取り時に評価されるので、生の data には
+     * 存在しない。ダッシュボード側は computed を data にマージしてから集計する
+     * （src/lib/apply-template.ts）のに、ここは生の data だけを見ていた。結果、
+     * 数式で作った円グラフのスライスを押すと**静かに0件の表**が出ていた。
+     * エラーも警告も出ないので、何が起きたのか誰にも分からない。
+     *
+     * 生の列だけで絞れるときは今までどおり「絞ってから解決」でよい。解決は
+     * 行数ぶんのクエリを投げるわけではない（関連1本あたり2クエリ）が、行数が
+     * 増えるほど JS の仕事は増えるので、要らないときは走らせない。
+     */
+    const needsComputed = needsComputedResolution(collection.fields, drills);
+
+    let resolved;
+    let matchedCount: number;
+
+    if (active && needsComputed) {
+      const all = await resolveCollectionRecords(
+        user!.workspace.id,
+        collection as unknown as EngineCollection,
+        records.map(asRow),
+      );
+      const hits = all.records.filter((r) =>
+        recordMatchesDrill(drillLookup(r), drills),
+      );
+      matchedCount = hits.length;
+      resolved = { ...all, records: hits.slice(0, PAGE_ROWS) };
+    } else {
+      const matched = active
+        ? records.filter((r) =>
+            recordMatchesDrill(
+              (key) => (r.data as Record<string, unknown>)?.[key],
+              drills,
+            ),
+          )
+        : records;
+      matchedCount = matched.length;
+      // Resolve cross-spreadsheet lookup/rollup values + relation labels.
+      resolved = await resolveCollectionRecords(
+        user!.workspace.id,
+        collection as unknown as EngineCollection,
+        matched.slice(0, PAGE_ROWS).map(asRow),
+      );
+    }
 
     // Other spreadsheets in this workspace — used by the field editor to
     // configure relation / lookup / rollup targets.
@@ -126,7 +200,7 @@ export default async function CollectionPage({
       },
     });
 
-    return { resolved, workspaceCollections };
+    return { resolved, workspaceCollections, matchedCount, scanTruncated };
   }
 
   const gridData = isAnalyze ? null : await loadGrid();
@@ -253,24 +327,68 @@ export default async function CollectionPage({
             ダッシュボードから飛んできたときの絞り込み表示。何で絞られているのかと、
             解除の導線を必ず出す。出さないと「行が少ない表」に見えてしまう。
           */}
-          {drill && gridData && (
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-khaki-300 bg-khaki-50 px-3 py-2 text-sm">
-              <span className="text-ink-soft">絞り込み中:</span>
-              <span className="font-medium text-ink">
-                {collection.fields.find((f) => f.key === drill.field)?.name ??
-                  drill.field}
-                {" = "}
-                {drill.value}
-              </span>
-              <span className="text-ink-muted">
-                {gridData.resolved.records.length} 件
-              </span>
-              <Link
-                href={`/c/${collection.id}`}
-                className="ml-auto font-medium text-khaki-700 hover:underline"
-              >
-                絞り込みを解除
-              </Link>
+          {/*
+            ダッシュボードから飛んできたときの絞り込み表示。何で絞られているのかと、
+            解除の導線を必ず出す。出さないと「行が少ない表」に見えてしまう。
+
+            条件は1つずつチップにして、それぞれに解除を付ける。まとめて1つの
+            チップにすると「部門とフェーズで絞ったが、部門だけ外したい」ができない。
+          */}
+          {drills.length > 0 && gridData && (
+            <div className="space-y-2 rounded-md border border-khaki-300 bg-khaki-50 px-3 py-2 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="shrink-0 text-ink-soft">絞り込み中:</span>
+                {drills.map((d, i) => (
+                  <span
+                    key={`${d.op}:${d.field}:${i}`}
+                    className="inline-flex items-center gap-1.5 rounded border border-khaki-300 bg-paper-raised px-2 py-0.5"
+                  >
+                    <span className="font-medium text-ink">
+                      {drillLabel(
+                        d,
+                        collection.fields.find((f) => f.key === d.field)?.name,
+                      )}
+                    </span>
+                    <Link
+                      href={drillHrefWithout(collection.id, drills, i)}
+                      aria-label={`${drillLabel(d)} の絞り込みを外す`}
+                      className="text-ink-muted hover:text-ink"
+                    >
+                      ×
+                    </Link>
+                  </span>
+                ))}
+                {drills.length > 1 && (
+                  <Link
+                    href={drillHref(collection.id, [])}
+                    className="ml-auto shrink-0 font-medium text-khaki-700 hover:underline"
+                  >
+                    すべて解除
+                  </Link>
+                )}
+              </div>
+              {/*
+                件数。以前は画面に渡した行数（200で頭打ち）をそのまま「N件」と
+                出していたので、201件以上あるときは必ず「200件」と嘘をついていた。
+                一致した数と、表示している数を分けて出す。
+
+                走査の上限（5000行）に当たったときは、その先にも一致があるかも
+                しれないと必ず言う。この製品は「打ち切りを黙って行わない」を
+                徹底しているので、ここだけ例外にはしない。
+              */}
+              <p className="text-xs text-ink-muted">
+                {gridData.matchedCount.toLocaleString("ja-JP")} 件が一致
+                {gridData.matchedCount > PAGE_ROWS &&
+                  `（先頭 ${PAGE_ROWS} 件を表示中）`}
+                {gridData.scanTruncated &&
+                  `。新しい順 ${DRILL_SCAN_LIMIT.toLocaleString("ja-JP")} 行だけを対象に数えているため、これより古い行に一致があっても含まれていません。`}
+              </p>
+              {parsedDrill.dropped > 0 && (
+                <p className="text-xs text-warning">
+                  読めない絞り込み条件が {parsedDrill.dropped} 件ありました（項目が
+                  削除された可能性があります）。その条件は無視しています。
+                </p>
+              )}
             </div>
           )}
 

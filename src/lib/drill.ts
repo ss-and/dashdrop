@@ -29,6 +29,7 @@
  * この2つは専用の演算子（empty / has）で表す。
  */
 import { z } from "zod";
+import { isComputedField } from "./field-types";
 
 /** 空グループの表示キー。`bucketKeys()`（aggregate.ts）と必ず同じ字にすること。 */
 export const EMPTY_BUCKET = "—";
@@ -310,4 +311,48 @@ export function drillLabel(filter: DrillFilter, fieldName?: string): string {
     case "range":
       return `${name} = ${filter.label ?? rangeLabel(filter.from, filter.to)}`;
   }
+}
+
+/* ========================================================================== *
+ * 計算列の扱い
+ * ========================================================================== */
+
+/**
+ * 絞り込みに計算列が混ざっているか。
+ *
+ * 混ざっていたら、**行を解決してから絞る**必要がある。計算列（数式・VLOOKUP・
+ * ルックアップ・ロールアップ）は保存されず読み取り時に評価されるので、生の
+ * `data` には存在しないため。
+ *
+ * これは実際に起きていた不具合の芯そのもの。ダッシュボード側は computed を
+ * data にマージしてから集計するのに、表の画面は生の data だけを見ていた。
+ * 結果、数式で作った円グラフのスライスを押すと**静かに0件の表**が出ていた。
+ * エラーも警告も出ないので、何が起きたのか誰にも分からない。
+ *
+ * 逆に、生の列だけで絞れるときは解決を挟まない方が速い。この判定を1か所に
+ * 置いて、呼び出し側が間違えられないようにする。
+ */
+export function needsComputedResolution(
+  fields: Array<{ key: string; type: string }>,
+  filters: DrillFilter[],
+): boolean {
+  if (filters.length === 0) return false;
+  const computed = new Set(
+    fields.filter((f) => isComputedField(f.type)).map((f) => f.key),
+  );
+  return filters.some((f) => computed.has(f.field));
+}
+
+/**
+ * 解決済みの1行から値を引く関数を作る。`recordMatchesDrill` に渡す。
+ *
+ * `data` を先に見るのは、保存された値が常に正になるから。`computed` は
+ * 同じキーで別の意味を持つことは無い設計だが、万一かぶったときに保存値を
+ * 上書きされない側に倒しておく。
+ */
+export function drillLookup(row: {
+  data: Record<string, unknown>;
+  computed: Record<string, unknown>;
+}): (key: string) => unknown {
+  return (key) => (key in row.data ? row.data[key] : row.computed[key]);
 }

@@ -19,6 +19,8 @@ import {
   drillBucketKeys,
   matchesFilter,
   recordMatchesDrill,
+  needsComputedResolution,
+  drillLookup,
   drillLabel,
   EMPTY_BUCKET,
   MAX_DRILL_FILTERS,
@@ -253,5 +255,76 @@ describe("日本語の表示", () => {
     expect(drillLabel(mk("2026-01-01", "2027-01-01"), "受注日")).toBe("受注日 = 2026年");
     expect(drillLabel(mk("2026-04-28", "2026-05-05"), "受注日")).toBe("受注日 = 2026/4/28 の週");
     expect(drillLabel(mk("2026-04-28", "2026-04-29"), "受注日")).toBe("受注日 = 2026/4/28");
+  });
+});
+
+
+/**
+ * 実際に起きていた不具合の芯。
+ *
+ * ダッシュボード側は計算列を data にマージしてから集計するのに、表の画面は
+ * 生の data だけを見ていた。計算列は保存されず読み取り時に評価されるので、
+ * 数式で作った円グラフのスライスを押すと**静かに0件の表**が出ていた。
+ * エラーも警告も出ないので、何が起きたのか誰にも分からない。
+ */
+describe("計算列が混ざっているかの判定", () => {
+  const fields = [
+    { key: "dept", type: "text" },
+    { key: "amount", type: "number" },
+    { key: "margin", type: "formula" },
+    { key: "customerName", type: "lookup" },
+    { key: "total", type: "rollup" },
+  ];
+
+  it("生の列だけなら解決は要らない", () => {
+    expect(needsComputedResolution(fields, [eq("dept", "営業部")])).toBe(false);
+    expect(needsComputedResolution(fields, [eq("amount", "100")])).toBe(false);
+  });
+
+  it("数式・ルックアップ・ロールアップのどれでも解決が要る", () => {
+    expect(needsComputedResolution(fields, [eq("margin", "38%")])).toBe(true);
+    expect(needsComputedResolution(fields, [eq("customerName", "山田商事")])).toBe(true);
+    expect(needsComputedResolution(fields, [eq("total", "500")])).toBe(true);
+  });
+
+  it("1つでも計算列が混ざっていれば解決が要る", () => {
+    expect(
+      needsComputedResolution(fields, [eq("dept", "営業部"), eq("margin", "38%")]),
+    ).toBe(true);
+  });
+
+  it("条件が無ければ要らない", () => {
+    expect(needsComputedResolution(fields, [])).toBe(false);
+  });
+
+  /** 列が消された後の共有URL。知らないキーで解決を走らせる意味は無い。 */
+  it("知らない項目キーでは解決を要求しない", () => {
+    expect(needsComputedResolution(fields, [eq("deleted", "x")])).toBe(false);
+  });
+});
+
+describe("drillLookup", () => {
+  const row = {
+    data: { dept: "営業部", amount: 120 },
+    computed: { margin: "38%" },
+  };
+
+  it("data と computed の両方から引ける", () => {
+    const get = drillLookup(row);
+    expect(get("dept")).toBe("営業部");
+    expect(get("margin")).toBe("38%");
+    expect(get("unknown")).toBeUndefined();
+  });
+
+  /** 保存された値が常に正。computed に同じキーがあっても上書きさせない。 */
+  it("同じキーがあれば保存値を優先する", () => {
+    const get = drillLookup({ data: { x: "保存" }, computed: { x: "計算" } });
+    expect(get("x")).toBe("保存");
+  });
+
+  /** null が保存されているのと、計算列である のは違う。 */
+  it("data に null で入っていれば、それを返す（computed に落ちない）", () => {
+    const get = drillLookup({ data: { x: null }, computed: { x: "計算" } });
+    expect(get("x")).toBeNull();
   });
 });
