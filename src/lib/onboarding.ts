@@ -98,8 +98,14 @@ export function onboardingSteps(s: OnboardingState): OnboardingStep[] {
     {
       id: "verifyEmail",
       label: "メールアドレスを確認する",
-      description:
-        "確認が済むと公開リンクを作れます。通知メールの宛先もここで確定します。",
+      /*
+       * 「通知メールの宛先もここで確定します」と書いていたが、**この製品に
+       * メールで通知する経路は無い**。通知は画面の中と Slack だけで、
+       * alerts の channel も inapp|slack のまま（src/lib/alerts.ts に
+       * 「email を足さないこと」と明記してある）。
+       * 確認メール自体は届くので、それらしく読めてしまうのが厄介だった。
+       */
+      description: "確認が済むと、ダッシュボードの公開リンクを作れます。",
       href: "/settings",
       done: s.emailVerified,
     },
