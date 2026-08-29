@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import { formatValue, formatCompact } from "@/lib/utils";
 import { drillHref, EMPTY_BUCKET, type DrillFilter } from "@/lib/drill";
+import { useDrillOrigin } from "../DrillOriginContext";
 import { CHART_GRID as GRID, CHART_TEXT as TEXT } from "@/lib/palette";
 import { usePalette } from "../PaletteContext";
 import type { WaterfallData } from "@/lib/widgets";
@@ -48,6 +49,7 @@ export function WaterfallChart({ data }: { data: WaterfallData }) {
   const palette = usePalette();
   const router = useRouter();
   const { steps, unit, groupBy, groupByMulti, collectionId } = data;
+  const origin = useDrillOrigin();
 
   if (steps.length === 0) {
     return (
@@ -124,7 +126,7 @@ export function WaterfallChart({ data }: { data: WaterfallData }) {
             // 選択肢型の列は保存値ではなく表示名をチップに出す。
             ...(row.x !== row.key ? { label: row.x } : {}),
           };
-    return drillHref(collectionId!, [filter]);
+    return drillHref(collectionId!, [filter], { from: origin ?? undefined });
   };
   const drill = (row: (typeof rows)[number]) => {
     const href = hrefFor(row);

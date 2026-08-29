@@ -21,6 +21,7 @@ import {
 } from "recharts";
 import { formatCompact } from "@/lib/utils";
 import { drillHref, EMPTY_BUCKET, type DrillFilter } from "@/lib/drill";
+import { useDrillOrigin } from "../DrillOriginContext";
 import type { BreakdownData } from "@/lib/widgets";
 
 /**
@@ -113,6 +114,7 @@ const tooltipStyle = {
 export function BreakdownChart({ data }: { data: BreakdownData }) {
   const palette = usePalette();
   const { type, slices, total, groupBy, groupByMulti, collectionId } = data;
+  const origin = useDrillOrigin();
   const empty = slices.length === 0 || total === 0;
   const router = useRouter();
 
@@ -159,7 +161,7 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
     synthetic?: boolean;
   }): string | null => {
     const f = filterFor(slice);
-    return f ? drillHref(collectionId!, [f]) : null;
+    return f ? drillHref(collectionId!, [f], { from: origin ?? undefined }) : null;
   };
   const drillTo = (slice: { key?: string; label?: string; synthetic?: boolean }) => {
     const href = hrefFor(slice);

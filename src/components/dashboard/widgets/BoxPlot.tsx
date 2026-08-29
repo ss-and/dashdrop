@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { formatValue, formatCompact } from "@/lib/utils";
 import { drillHref, EMPTY_BUCKET, type DrillFilter } from "@/lib/drill";
+import { useDrillOrigin } from "../DrillOriginContext";
 import { CHART_GRID as GRID, CHART_TEXT as TEXT } from "@/lib/palette";
 import { usePalette } from "../PaletteContext";
 import type { BoxplotBox, BoxplotData } from "@/lib/widgets";
@@ -39,6 +40,7 @@ export function BoxPlot({ data }: { data: BoxplotData }) {
   const palette = usePalette();
   const router = useRouter();
   const { boxes, unit, fieldLabel, groupBy, groupByMulti, collectionId } = data;
+  const origin = useDrillOrigin();
 
   const real = boxes.filter((b) => !b.synthetic);
   const dropped = boxes.find((b) => b.synthetic);
@@ -99,7 +101,7 @@ export function BoxPlot({ data }: { data: BoxplotData }) {
             // 選択肢型の列は保存値ではなく表示名をチップに出す。
             ...(b.label !== b.key ? { label: b.label } : {}),
           };
-    return drillHref(collectionId!, [filter]);
+    return drillHref(collectionId!, [filter], { from: origin ?? undefined });
   };
   const drill = (b: BoxplotBox) => {
     const href = hrefFor(b);

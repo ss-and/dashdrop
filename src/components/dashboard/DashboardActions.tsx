@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button, buttonStyles } from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { NavIcon } from "@/components/app/icons";
 
 /**
@@ -35,6 +36,12 @@ export function DashboardActions({
   initialShareToken?: string | null;
 }) {
   const router = useRouter();
+  /*
+   * 破壊的な操作の確認。以前は window.confirm() を3か所で呼んでいたが、
+   * 1行しか書けないので「何が残るか」を語尾に押し込むしか無かった。
+   * 製品の中のダイアログにして、残るものを別の行で言えるようにしてある。
+   */
+  const { ask, confirmDialog } = useConfirm();
   const [clearing, setClearing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,7 +126,15 @@ export function DashboardActions({
   }
 
   async function revokeShare() {
-    if (!confirm("共有リンクを停止します。現在のリンクは無効になります。よろしいですか？")) return;
+    const ok = await ask({
+      title: "共有リンクを停止しますか？",
+      body: "すでに配ってあるリンクは、停止した時点で開けなくなります。リンクを渡した相手に通知は行きません。",
+      keeps:
+        "ダッシュボードと、その元になっているデータはそのまま残ります。あとから共有リンクを作り直すこともできます（URLは新しいものになります）。",
+      confirmLabel: "リンクを停止",
+      destructive: true,
+    });
+    if (!ok) return;
     setShareBusy(true);
     setError(null);
     try {
@@ -145,12 +160,15 @@ export function DashboardActions({
   }
 
   async function clearSamples() {
-    if (
-      !confirm(
-        "サンプルデータをすべて削除します。実際に入力したデータは残ります。よろしいですか？",
-      )
-    )
-      return;
+    const ok = await ask({
+      title: "サンプルデータを削除しますか？",
+      body: "最初から入っていた見本の行だけを、すべてのシートから削除します。元には戻せません。",
+      keeps:
+        "ご自身で入力・取り込みしたデータは1行も消えません。シートの項目（列）とダッシュボードの組み立ても、そのまま残ります。",
+      confirmLabel: "サンプルデータを削除",
+      destructive: true,
+    });
+    if (!ok) return;
     setClearing(true);
     setError(null);
     try {
@@ -168,12 +186,15 @@ export function DashboardActions({
   }
 
   async function deleteDashboard() {
-    if (
-      !confirm(
-        "このダッシュボードを削除します。スプレッドシートとデータは残ります。よろしいですか？",
-      )
-    )
-      return;
+    const ok = await ask({
+      title: "このダッシュボードを削除しますか？",
+      body: "グラフの並び・絞り込み・配色といった組み立てが失われ、元には戻せません。共有リンクを配っている場合は、そのリンクも開けなくなります。",
+      keeps:
+        "元になっているスプレッドシートと、その中のデータは残ります。同じデータから、いつでも作り直せます。",
+      confirmLabel: "ダッシュボードを削除",
+      destructive: true,
+    });
+    if (!ok) return;
     setDeleting(true);
     setError(null);
     try {
@@ -192,6 +213,9 @@ export function DashboardActions({
 
   return (
     <div className="flex flex-col items-end gap-1.5">
+      {/* 共有の吹き出しの中ではなく外側に置く。中に置くと、吹き出しが
+          閉じた瞬間に問いかけごと消えてしまう。 */}
+      {confirmDialog}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative">
           <Button

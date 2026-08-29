@@ -169,25 +169,51 @@ export function parseLegacyDrill(
   return [{ op: "eq", field, value }];
 }
 
+/**
+ * どこから来たか。
+ *
+ * ドリルダウンは「ダッシュボード → グラフのひと切れ → その裏の行」という
+ * 一続きの動きなのに、着いた先に**帰る手段が無かった**。ブラウザの戻るは
+ * 効くが、押した本人はもう表を触っていて（並べ替え・列の編集）、戻るを
+ * 何回押せばいいのか分からない。「どこから来たか」を持ち歩いて、着いた先に
+ * その場所の名前で戻り道を出す。
+ *
+ * 持つのはダッシュボードの id だけ。題名はURLに載せない——長くなるうえ、
+ * 改名されたときに古い名前が残る。受け側が id から引き直す。
+ */
+export const DRILL_FROM_PARAM = "from";
+
 /** 条件の並びから、表の画面へのリンクを組む。 */
-export function drillHref(collectionId: string, filters: DrillFilter[]): string {
-  if (filters.length === 0) return `/c/${collectionId}`;
+export function drillHref(
+  collectionId: string,
+  filters: DrillFilter[],
+  options?: { from?: string },
+): string {
   const params = new URLSearchParams();
   for (const f of filters.slice(0, MAX_DRILL_FILTERS)) {
     params.append("d", serializeDrill(f));
   }
-  return `/c/${collectionId}?${params.toString()}`;
+  if (options?.from) params.set(DRILL_FROM_PARAM, options.from);
+  const qs = params.toString();
+  return qs ? `/c/${collectionId}?${qs}` : `/c/${collectionId}`;
 }
 
-/** 条件を1つ外したリンク（チップの ✕ 用）。 */
+/**
+ * 条件を1つ外したリンク（チップの ✕ 用）。
+ *
+ * 条件を外しても**来た場所は忘れない**。1つ外したとたんに戻り道が消えると、
+ * 「絞り込みを緩めたら帰れなくなった」という妙な体験になる。
+ */
 export function drillHrefWithout(
   collectionId: string,
   filters: DrillFilter[],
   index: number,
+  options?: { from?: string },
 ): string {
   return drillHref(
     collectionId,
     filters.filter((_, i) => i !== index),
+    options,
   );
 }
 

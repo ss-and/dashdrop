@@ -186,6 +186,49 @@ describe("URL の読み書き", () => {
   });
 
   /**
+   * 着いた先から元のダッシュボードへ帰れるように、どこから来たかを持ち歩く。
+   * ブラウザの戻るでも帰れるが、着いた先で表を触ったあと（並べ替え・列の
+   * 編集・別の行を開く）では、何回押せばいいのか分からない。
+   */
+  describe("来た場所を持ち歩く", () => {
+    it("from を載せる", () => {
+      const href = drillHref("c1", [eq("dept", "営業部")], { from: "d9" });
+      expect(new URL(`http://x${href}`).searchParams.get("from")).toBe("d9");
+    });
+
+    it("条件が無くても from だけは載せる", () => {
+      expect(drillHref("c1", [], { from: "d9" })).toBe("/c/c1?from=d9");
+    });
+
+    /**
+     * 回帰の芯: 条件を1つ外したとたんに戻り道が消えると、「絞り込みを緩めたら
+     * 帰れなくなった」という妙な体験になる。外しても来た場所は忘れない。
+     */
+    it("条件を1つ外しても from は残る", () => {
+      const href = drillHrefWithout(
+        "c1",
+        [eq("a", "1"), eq("b", "2")],
+        0,
+        { from: "d9" },
+      );
+      const params = new URL(`http://x${href}`).searchParams;
+      expect(params.get("from")).toBe("d9");
+      expect(params.getAll("d")).toHaveLength(1);
+    });
+
+    it("すべて外しても from は残る", () => {
+      expect(drillHrefWithout("c1", [eq("a", "1")], 0, { from: "d9" })).toBe(
+        "/c/c1?from=d9",
+      );
+    });
+
+    it("from を渡さなければ載らない（戻り先が無い画面）", () => {
+      const href = drillHref("c1", [eq("a", "1")]);
+      expect(new URL(`http://x${href}`).searchParams.has("from")).toBe(false);
+    });
+  });
+
+  /**
    * 共有URLは、列が消された後にも開かれる。1つ壊れているだけで画面ごと
    * エラーにするより、読めた条件で表を出す方が使える。
    */

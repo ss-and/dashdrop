@@ -57,6 +57,8 @@ export default async function CollectionPage({
     v?: string;
     /** 新形式。条件1つにつき d が1個。 */
     d?: string | string[];
+    /** どのダッシュボードから来たか。着いた先に戻り道を出すために使う。 */
+    from?: string;
   }>;
 }) {
   const user = await getSession();
@@ -68,6 +70,7 @@ export default async function CollectionPage({
     f: filterField,
     v: filterValue,
     d: drillParam,
+    from: fromDashboardId,
   } = await searchParams;
   const isAnalyze = view === "analyze";
 
@@ -89,6 +92,26 @@ export default async function CollectionPage({
     ...parsedDrill.filters,
     ...parseLegacyDrill(filterField, filterValue),
   ];
+
+  /*
+   * 来た場所。
+   *
+   * ドリルダウンは「ダッシュボード → グラフのひと切れ → その裏の行」という
+   * 一続きの動きなのに、着いた先に帰る手段が無かった。ブラウザの戻るは効くが、
+   * 押した本人はもう表を触っていて（並べ替え・列の編集・別の行を開く）、
+   * 何回戻ればいいのか分からない。
+   *
+   * 題名はURLに載せずidだけを持ち歩き、ここで引き直す。長いURLにならないし、
+   * ダッシュボードが改名されても古い名前が残らない。**必ずワークスペースで
+   * 絞る**——他人のダッシュボードのidを入れて題名を覗けてはいけない。
+   * 見つからなければ黙って戻り道を出さない（消された後の共有URL）。
+   */
+  const origin = fromDashboardId
+    ? await db.dashboard.findFirst({
+        where: { id: fromDashboardId, workspaceId: user.workspace.id },
+        select: { id: true, name: true },
+      })
+    : null;
 
   let collection: Awaited<ReturnType<typeof getCollectionForUser>>;
   try {
@@ -334,6 +357,21 @@ export default async function CollectionPage({
             条件は1つずつチップにして、それぞれに解除を付ける。まとめて1つの
             チップにすると「部門とフェーズで絞ったが、部門だけ外したい」ができない。
           */}
+          {/*
+            来た場所へ戻る1行。グラフを押して行に辿り着いた人が、元の絵に
+            帰れるようにする。ブラウザの戻るでも帰れるが、着いた先で表を
+            触ったあとでは何回押せばいいのか分からない。
+          */}
+          {origin && (
+            <Link
+              href={`/d/${origin.id}`}
+              className="inline-flex items-center gap-1.5 text-sm text-ink-muted transition-colors duration-fast hover:text-ink"
+            >
+              <span aria-hidden="true">←</span>
+              <span className="font-medium">{origin.name}</span>に戻る
+            </Link>
+          )}
+
           {drills.length > 0 && gridData && (
             <div className="space-y-2 rounded-md border border-khaki-300 bg-khaki-50 px-3 py-2 text-sm">
               <div className="flex flex-wrap items-center gap-2">
@@ -350,7 +388,7 @@ export default async function CollectionPage({
                       )}
                     </span>
                     <Link
-                      href={drillHrefWithout(collection.id, drills, i)}
+                      href={drillHrefWithout(collection.id, drills, i, { from: origin?.id })}
                       aria-label={`${drillLabel(d)} の絞り込みを外す`}
                       className="text-ink-muted hover:text-ink"
                     >
@@ -360,7 +398,7 @@ export default async function CollectionPage({
                 ))}
                 {drills.length > 1 && (
                   <Link
-                    href={drillHref(collection.id, [])}
+                    href={drillHref(collection.id, [], { from: origin?.id })}
                     className="ml-auto shrink-0 font-medium text-khaki-700 hover:underline"
                   >
                     すべて解除

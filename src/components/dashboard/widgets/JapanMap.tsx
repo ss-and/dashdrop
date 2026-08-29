@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { formatValue } from "@/lib/utils";
 import { drillHref } from "@/lib/drill";
+import { useDrillOrigin } from "../DrillOriginContext";
 import { rgbTriple } from "@/lib/palette";
 import { usePalette } from "../PaletteContext";
 import { GRID_COLS, GRID_ROWS, PREFECTURES } from "@/lib/japan";
@@ -32,6 +33,7 @@ export function JapanMap({ data }: { data: JapanMapData }) {
   const palette = usePalette();
   const router = useRouter();
   const { values, max, unit, unmatched, groupBy, collectionId } = data;
+  const origin = useDrillOrigin();
 
   const byCode = new Map(values.map((v) => [v.code, v]));
   const rgb = rgbTriple(palette.ramp);
@@ -55,10 +57,12 @@ export function JapanMap({ data }: { data: JapanMapData }) {
     keysPartial?: boolean;
   }): string | null => {
     if (!canDrill || !hit || hit.keysPartial || hit.keys.length === 0) return null;
-    return drillHref(collectionId!, [
+    return drillHref(
+      collectionId!,
       // ラベルは表示名。チップに「東京都渋谷区1-2-3 ほか37件」とは出さない。
-      { op: "in", field: groupBy!, values: hit.keys, label: hit.name },
-    ]);
+      [{ op: "in", field: groupBy!, values: hit.keys, label: hit.name }],
+      { from: origin ?? undefined },
+    );
   };
 
   const W = GRID_COLS * (CELL + GAP);

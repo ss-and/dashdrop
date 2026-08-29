@@ -13,6 +13,7 @@ import { RadarChartWidget } from "./widgets/RadarChartWidget";
 import { SankeyFlow } from "./widgets/SankeyFlow";
 import { JapanMap } from "./widgets/JapanMap";
 import { PaletteProvider } from "./PaletteContext";
+import { DrillOriginProvider } from "./DrillOriginContext";
 
 /**
  * Renders a computed dashboard layout on a 4-column responsive grid. Each
@@ -122,14 +123,22 @@ const KPI_COLS: Record<number, string> = {
 export function DashboardGrid({
   computed,
   theme,
+  dashboardId,
 }: {
   computed: ComputedWidget[];
   theme?: string | null;
+  /**
+   * このダッシュボードの id。渡すと、グラフから飛んだ先に「ここへ戻る」の
+   * 導線が出る。戻り先が無い画面（共有リンク・印刷・シート内の分析タブ）は
+   * 省略してよい——省略すると戻り道が出ないだけで、他は変わらない。
+   */
+  dashboardId?: string | null;
 }) {
   const blocks = toBlocks(computed);
 
   return (
     <PaletteProvider theme={theme}>
+      <DrillOriginProvider dashboardId={dashboardId}>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {blocks.map((block) => {
           if (block.kind === "kpis") {
@@ -173,6 +182,7 @@ export function DashboardGrid({
           );
         })}
       </div>
+      </DrillOriginProvider>
     </PaletteProvider>
   );
 }
