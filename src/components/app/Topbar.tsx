@@ -142,7 +142,7 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
 
   return (
     <header className="shrink-0 border-b border-ink-line bg-paper-raised">
-      <div className="flex h-14 items-center justify-between px-5">
+      <div className="flex h-14 items-center justify-between px-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-3">
           {/* 左レールの開閉。グラフを見ている間は畳んで横幅を稼げるようにする。 */}
           <SidebarToggle />

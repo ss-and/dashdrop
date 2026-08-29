@@ -40,9 +40,18 @@ export function VerifyEmailBanner({ email }: { email: string }) {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2.5 border-t border-ink-line bg-warning-soft/60 px-5 py-2 text-xs">
-      <NavIcon name="bell" className="h-4 w-4 shrink-0 text-warning" />
-      <p className="min-w-0 flex-1 text-ink-soft">
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 border-t border-ink-line bg-warning-soft/60 px-4 py-2 text-xs sm:px-5">
+      <NavIcon name="bell" className="hidden h-4 w-4 shrink-0 text-warning sm:block" />
+      {/*
+        狭い画面では、文章だけで1行を占めさせる。
+
+        `flex-1`（flex-basis: 0）のままだとボタンが先に幅を取り、文章は
+        残った隙間に押し込まれる——390px の画面で実際に**1文字ずつ縦に
+        折り返り**、バナーだけで画面の3分の1を占めていた。`w-full` にすれば
+        `flex-wrap` が効いて、ボタンは次の行へ降りる。
+      */}
+      <p className="w-full min-w-0 text-ink-soft sm:w-auto sm:flex-1">
+        <NavIcon name="bell" className="mr-1 inline-block h-3.5 w-3.5 shrink-0 align-[-2px] text-warning sm:hidden" />
         <span className="font-medium text-ink">{email}</span> の確認が済んでいません。
         確認が済むまで、ダッシュボードの<span className="font-medium text-ink">公開リンク</span>は作成できません。
       </p>

@@ -301,6 +301,14 @@ export function SetupGuide({
  * 角丸は rounded-md（4px）まで、影は shadow-raised、面は paper-raised。
  */
 const shell = cn(
+  /*
+   * 狭い画面には出さない。
+   *
+   * 幅 19rem は 390px の画面ではほぼ全幅で、右下に置くと**表やグラフの上に
+   * 居座る**（実機で表の4行目以降を覆っていた）。しかもここが促すのは
+   * 「Excelを取り込む」——スマホでやる作業ではない。覆ってまで出す価値がない。
+   */
+  "hidden sm:block",
   "fixed bottom-4 right-4 z-30 w-[min(19rem,calc(100vw-2rem))]",
   "animate-fade-in rounded-md border border-ink-line bg-paper-raised shadow-raised",
 );

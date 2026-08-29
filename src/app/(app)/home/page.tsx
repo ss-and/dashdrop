@@ -339,7 +339,7 @@ export default async function HomePage() {
   return (
     <>
       <Topbar user={user} title="ホーム" />
-      <main className="flex-1 overflow-y-auto p-6">
+      <main className="flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="mx-auto max-w-4xl space-y-8">
           {/* 1) 主役。中身の有無に関わらず、常にここ。 */}
           <ExcelDropZone />

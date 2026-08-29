@@ -11,7 +11,7 @@ export default async function ImportPage() {
   return (
     <>
       <Topbar user={user} title="Excel取り込み" />
-      <main className="flex-1 overflow-y-auto p-6">
+      <main className="flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="mx-auto max-w-4xl">
           <ImportWizard />
         </div>

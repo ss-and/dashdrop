@@ -91,7 +91,7 @@ export default async function SamplesPage({
   return (
     <>
       <Topbar user={user} title="参考スプレッドシート" />
-      <main className="flex-1 overflow-y-auto p-6">
+      <main className="flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="mx-auto max-w-6xl space-y-6">
           {/* Category filter (calm tabs) */}
           <nav className="flex flex-wrap gap-1 border-b border-ink-line pb-2">
