@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { formatValue, formatCompact } from "@/lib/utils";
+import { drillHref, EMPTY_BUCKET, type DrillFilter } from "@/lib/drill";
 import { CHART_GRID as GRID, CHART_TEXT as TEXT } from "@/lib/palette";
 import { usePalette } from "../PaletteContext";
 import type { BoxplotBox, BoxplotData } from "@/lib/widgets";
@@ -37,7 +38,7 @@ const TICKS = 4;
 export function BoxPlot({ data }: { data: BoxplotData }) {
   const palette = usePalette();
   const router = useRouter();
-  const { boxes, unit, fieldLabel, groupBy, collectionId } = data;
+  const { boxes, unit, fieldLabel, groupBy, groupByMulti, collectionId } = data;
 
   const real = boxes.filter((b) => !b.synthetic);
   const dropped = boxes.find((b) => b.synthetic);
@@ -68,12 +69,41 @@ export function BoxPlot({ data }: { data: BoxplotData }) {
   const y = (v: number) =>
     PAD_TOP + plotH * (1 - (v - bottom) / (top - bottom));
 
+  /*
+   * 箱を押したら、その区分の行を開く。
+   *
+   * 回帰: ここは `?f_部門=営業部` という、受け側がまったく読まない形のURLを
+   * 組んでいた。遷移はするので**絞り込まれていない全件の表**が黙って開き、
+   * 押した人には「なぜ全部出たのか」が分からなかった。URLの形は drill.ts に
+   * 集約したので、ここでは条件だけを組み立てる。
+   */
   const canDrill = Boolean(groupBy && collectionId);
+  const hrefFor = (b: BoxplotBox): string | null => {
+    if (!canDrill || b.synthetic || b.key === undefined) return null;
+    /*
+     * 空グループは「—」という値ではなく「空である」こと。eq で「—」を送ると、
+     * 実データに「—」と書かれた行だけが出る。
+     *
+     * それ以外は has。この列が複数選択かどうかがウィジェットには渡って
+     * いないため——集計側は配列を要素ごとに全バケットへ展開するので、
+     * 複数選択の列に eq を当てると必ず 0 件になる。単一値なら has と eq は
+     * 同じ行に当たるので、判別できないうちは has に倒す。
+     */
+    const filter: DrillFilter =
+      b.key === EMPTY_BUCKET
+        ? { op: "empty", field: groupBy! }
+        : {
+            op: groupByMulti ? "has" : "eq",
+            field: groupBy!,
+            value: b.key,
+            // 選択肢型の列は保存値ではなく表示名をチップに出す。
+            ...(b.label !== b.key ? { label: b.label } : {}),
+          };
+    return drillHref(collectionId!, [filter]);
+  };
   const drill = (b: BoxplotBox) => {
-    if (!canDrill || b.synthetic || b.key === undefined) return;
-    router.push(
-      `/c/${collectionId}?${new URLSearchParams({ [`f_${groupBy}`]: b.key })}`,
-    );
+    const href = hrefFor(b);
+    if (href) router.push(href);
   };
 
   const ticks = Array.from({ length: TICKS + 1 }, (_, i) => bottom + ((top - bottom) * i) / TICKS);
@@ -122,7 +152,8 @@ export function BoxPlot({ data }: { data: BoxplotData }) {
             <g
               key={b.label}
               onClick={() => drill(b)}
-              style={{ cursor: canDrill ? "pointer" : undefined }}
+              // 押せない箱では指の形も変えない（押せるのに 0 件、より良い）。
+              style={{ cursor: hrefFor(b) ? "pointer" : undefined }}
             >
               <title>
                 {`${b.label}（${b.count}件）\n中央値 ${formatValue(b.median, unit)}\n四分位 ${formatValue(b.q1, unit)}〜${formatValue(b.q3, unit)}\nひげ ${formatValue(b.low, unit)}〜${formatValue(b.high, unit)}${b.outliers.length ? `\n外れ値 ${b.outliers.length}件` : ""}`}

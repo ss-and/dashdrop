@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { formatValue } from "@/lib/utils";
+import { drillHref } from "@/lib/drill";
 import { rgbTriple } from "@/lib/palette";
 import { usePalette } from "../PaletteContext";
 import { GRID_COLS, GRID_ROWS, PREFECTURES } from "@/lib/japan";
@@ -36,6 +37,30 @@ export function JapanMap({ data }: { data: JapanMapData }) {
   const rgb = rgbTriple(palette.ramp);
   const canDrill = Boolean(groupBy && collectionId);
 
+  /*
+   * 升を押したら、その県の行を開く。
+   *
+   * 回帰: ここは2つ壊れていた。(1) `?f_都道府県=東京都` という受け側が読まない
+   * 形のURLで、絞り込まれていない全件の表が黙って開いていた。(2) 送っていたのが
+   * **正規化後の表示名**（p.name）だった——元データが「東京」や「13」や
+   * 「東京都渋谷区…」なら、形式が直っても1件も一致しない。
+   *
+   * 正しくは、集計側がその升に積んだ**生キー**のいずれか、で絞る（in）。
+   * 生キーを取り切れなかった県（種類が多すぎる住所列など）は、中途半端に
+   * 絞った表を出すより押せないままにする。
+   */
+  const hrefFor = (hit?: {
+    name: string;
+    keys: string[];
+    keysPartial?: boolean;
+  }): string | null => {
+    if (!canDrill || !hit || hit.keysPartial || hit.keys.length === 0) return null;
+    return drillHref(collectionId!, [
+      // ラベルは表示名。チップに「東京都渋谷区1-2-3 ほか37件」とは出さない。
+      { op: "in", field: groupBy!, values: hit.keys, label: hit.name },
+    ]);
+  };
+
   const W = GRID_COLS * (CELL + GAP);
   const H = GRID_ROWS * (CELL + GAP);
 
@@ -68,17 +93,14 @@ export function JapanMap({ data }: { data: JapanMapData }) {
             hit && max > 0 ? (Math.abs(hit.value) / max) * MAX_ALPHA : 0;
           const x = p.col * (CELL + GAP);
           const y = p.row * (CELL + GAP);
-          const drill = () => {
-            if (!canDrill || !hit) return;
-            router.push(
-              `/c/${collectionId}?${new URLSearchParams({ [`f_${groupBy}`]: p.name })}`,
-            );
-          };
+          const href = hrefFor(hit);
           return (
             <g
               key={p.code}
-              onClick={drill}
-              style={{ cursor: canDrill && hit ? "pointer" : undefined }}
+              onClick={() => {
+                if (href) router.push(href);
+              }}
+              style={{ cursor: href ? "pointer" : undefined }}
             >
               <title>
                 {hit

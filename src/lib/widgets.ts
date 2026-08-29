@@ -489,6 +489,15 @@ export interface BreakdownData {
   total: number;
   /** 絞り込み先を組み立てるための情報。 */
   groupBy?: string;
+  /**
+   * groupBy の列が1行に複数の値を持つか（複数選択）。
+   *
+   * 集計は配列を要素ごとに全バケットへ展開するので、複数選択の列は `eq` では
+   * 絶対に一致しない（`has` が要る）。逆に単一値の列に `has` を使うと、
+   * 絞り込みのチップが「部門 に 営業部 を含む」という硬い文言になる。
+   * 型そのものを配らず、判断に必要な1ビットだけを渡す。
+   */
+  groupByMulti?: boolean;
   collectionId?: string;
 }
 export interface TableData {
@@ -584,6 +593,8 @@ export interface WaterfallData {
   total: number;
   unit: Unit;
   groupBy?: string;
+  /** groupBy の列が1行に複数の値を持つか。BreakdownData の同名の項目と同じ意味。 */
+  groupByMulti?: boolean;
   collectionId?: string;
 }
 
@@ -617,6 +628,8 @@ export interface BoxplotData {
   /** 分布を見た列の名前。 */
   fieldLabel: string;
   groupBy?: string;
+  /** groupBy の列が1行に複数の値を持つか。BreakdownData の同名の項目と同じ意味。 */
+  groupByMulti?: boolean;
   collectionId?: string;
 }
 
@@ -654,7 +667,24 @@ export interface SankeyData {
 export interface JapanMapData {
   type: "japanmap";
   /** 値のあった県だけ。無い県は塗らない（0 と「データ無し」は違う）。 */
-  values: Array<{ code: string; name: string; value: number }>;
+  values: Array<{
+    code: string;
+    name: string;
+    value: number;
+    /**
+     * 絞り込みに使う **生キー**（正規化前の、実データにそのまま入っている値）。
+     *
+     * `name` は正規化後の表示名（「東京都」）で、実データは「東京」「13」
+     * 「東京都渋谷区…」のこともある。表示名で絞ると1件も一致しないので、
+     * 1つの県に積まれた書き方を全部持っておき、そのいずれかで絞る。
+     */
+    keys: string[];
+    /**
+     * 生キーを取り切れなかった（種類が多すぎる／配列だった）。
+     * true の県は、中途半端に絞った表を出さないために押させない。
+     */
+    keysPartial?: boolean;
+  }>;
   max: number;
   min: number;
   unit: Unit;
@@ -664,6 +694,8 @@ export interface JapanMapData {
    */
   unmatched: { count: number; samples: string[] };
   groupBy?: string;
+  /** groupBy の列が1行に複数の値を持つか。BreakdownData の同名の項目と同じ意味。 */
+  groupByMulti?: boolean;
   collectionId?: string;
 }
 

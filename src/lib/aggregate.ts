@@ -403,6 +403,22 @@ function bucketKeys(raw: unknown): string[] {
   return [raw === null || raw === undefined || raw === "" ? "—" : String(raw)];
 }
 
+/**
+ * その列は1行に複数の値を持つか（複数選択）。
+ *
+ * ドリルダウンの絞り込みを組むときに要る。集計側は配列を要素ごとに全バケットへ
+ * 展開する（bucketKeys）ので、複数選択の列は `eq` では絶対に一致しない——
+ * `has` を使う必要がある。
+ *
+ * 一方、単一値の列にまで `has` を使うと、チップの文言が「部門 に 営業部 を
+ * 含む」になって読みにくい。「= 営業部」と出したい。**列の型そのものを
+ * ウィジェットに配ると増やしすぎる**ので、判断に必要な1ビットだけを渡す。
+ */
+function isMultiValueField(col: AggCollection, key: string | undefined): boolean {
+  if (!key) return false;
+  return col.fields.find((f) => f.key === key)?.type === "multiselect";
+}
+
 /* ------------------------------- widgets -------------------------------- */
 
 /*
@@ -605,6 +621,7 @@ function computeWaterfall(w: WaterfallWidget, col: AggCollection): WaterfallData
     total,
     unit: w.unit ?? "number",
     groupBy: w.groupBy,
+    groupByMulti: isMultiValueField(col, w.groupBy),
     collectionId: col.id,
   };
 }
@@ -732,6 +749,7 @@ function computeBoxplot(w: BoxplotWidget, col: AggCollection): BoxplotData {
     unit: w.unit ?? "number",
     fieldLabel: nameOf(w.field),
     groupBy: w.groupBy,
+    groupByMulti: isMultiValueField(col, w.groupBy),
     collectionId: col.id,
   };
 }
@@ -951,9 +969,23 @@ function computeSankey(w: SankeyWidget, col: AggCollection): SankeyData {
 /** 読めなかった値の実例を、いくつまで見せるか。 */
 const UNMATCHED_SAMPLES = 3;
 
+/**
+ * 1県あたりに覚えておく生キーの上限。
+ *
+ * ドリルダウンは `in`（複数キーのいずれか）で絞るが、URL に載せられる値の数は
+ * drill.ts の schema が 64 で切っている。住所がそのまま入っている列では
+ * 「東京都渋谷区…」が1行1種類になり、いくらでも増えてしまうので、ここで諦める。
+ * 諦めたことは keysPartial で伝え、**中途半端に絞った表を出さない**——
+ * グラフが 120 件と言っているのに表が 64 件では、どちらが嘘なのか分からない。
+ */
+const MAX_PREF_KEYS = 64;
+
 function computeJapanMap(w: JapanMapWidget, col: AggCollection): JapanMapData {
   const filtered = applyFilters(col.records, w.filters);
-  const buckets = new Map<string, { name: string; bucket: MeasureBucket }>();
+  const buckets = new Map<
+    string,
+    { name: string; bucket: MeasureBucket; keys: Set<string>; partial: boolean }
+  >();
   const unmatched = new Set<string>();
   let unmatchedCount = 0;
 
@@ -972,10 +1004,31 @@ function computeJapanMap(w: JapanMapWidget, col: AggCollection): JapanMapData {
     }
     let e = buckets.get(pref.code);
     if (!e) {
-      e = { name: pref.name, bucket: emptyBucket() };
+      e = { name: pref.name, bucket: emptyBucket(), keys: new Set(), partial: false };
       buckets.set(pref.code, e);
     }
     addValue(e.bucket, v);
+    /*
+     * 絞り込みに使う生キーを覚える。
+     *
+     * 回帰: ここを持たなかったので、地図を押したウィジェットは正規化後の
+     * 表示名（「東京都」）で絞り込んでいた。実データが「東京」や
+     * 「東京都渋谷区…」なら1件も一致せず、絞られていない全件の表が開いていた。
+     * 1つの県に複数の書き方が積まれるのが普通なので、集合で持つ。
+     *
+     * 配列（複数選択）は、findPrefecture が配列全体を文字列にして見ている
+     * ——つまり「どの要素で当たったか」が分からない。当てずっぽうで要素を
+     * 選ぶと別の県の行まで混ざるので、取り切れなかった扱いにして押させない。
+     */
+    if (Array.isArray(raw)) {
+      e.partial = true;
+    } else {
+      const key = String(raw);
+      if (!e.keys.has(key)) {
+        if (e.keys.size >= MAX_PREF_KEYS) e.partial = true;
+        else e.keys.add(key);
+      }
+    }
   }
 
   const values = Array.from(buckets.entries())
@@ -983,6 +1036,8 @@ function computeJapanMap(w: JapanMapWidget, col: AggCollection): JapanMapData {
       code,
       name: e.name,
       value: round2(bucketValue(e.bucket, w.measure.kind) ?? 0),
+      keys: Array.from(e.keys),
+      ...(e.partial ? { keysPartial: true as const } : {}),
     }))
     .sort((a, b) => a.code.localeCompare(b.code));
 
@@ -1371,6 +1426,7 @@ function computeBreakdown(w: BreakdownWidget, col: AggCollection): WidgetData {
       bucketValue(mergeBuckets(entries.map((e) => e.bucket)), w.measure.kind) ?? 0,
     ),
     groupBy: w.groupBy,
+    groupByMulti: isMultiValueField(col, w.groupBy),
     collectionId: col.id,
   };
 }

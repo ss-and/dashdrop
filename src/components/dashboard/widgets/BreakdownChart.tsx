@@ -20,6 +20,7 @@ import {
   Funnel,
 } from "recharts";
 import { formatCompact } from "@/lib/utils";
+import { drillHref, EMPTY_BUCKET, type DrillFilter } from "@/lib/drill";
 import type { BreakdownData } from "@/lib/widgets";
 
 /**
@@ -111,7 +112,7 @@ const tooltipStyle = {
 
 export function BreakdownChart({ data }: { data: BreakdownData }) {
   const palette = usePalette();
-  const { type, slices, total, groupBy, collectionId } = data;
+  const { type, slices, total, groupBy, groupByMulti, collectionId } = data;
   const empty = slices.length === 0 || total === 0;
   const router = useRouter();
 
@@ -119,14 +120,50 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
    * ひと切れ押したら、その内訳の行を開く。
    *
    * 「フェーズB が 3,600万」で終わってしまうと、どの案件なのかに辿り着けない。
-   * 残余（その他）は複数の値をまとめた合成なので、絞り込み先が定まらず押せない。
+   * 残余（その他）は複数の値をまとめた合成なので、絞り込み先が定まらず押せない
+   * ——集計側は畳んだキーの一覧を残していないので、押せてしまうと必ず 0 件になる。
+   *
+   * URLは自分で組まず drillHref に任せる。以前は各ウィジェットが手で組んでいて
+   * `?f=&v=` と `?f_列=` の2種類に割れ、後者は受け側が読まないまま**絞り込まれて
+   * いない全件の表**を開いていた（型が無いので誰も気づけなかった）。
    */
   const canDrill = Boolean(groupBy && collectionId);
-  const drillTo = (slice: { key?: string; synthetic?: boolean }) => {
-    if (!canDrill || slice.synthetic || slice.key === undefined) return;
-    router.push(
-      `/c/${collectionId}?f=${encodeURIComponent(groupBy!)}&v=${encodeURIComponent(slice.key)}`,
-    );
+  const filterFor = (slice: {
+    key?: string;
+    label?: string;
+    synthetic?: boolean;
+  }): DrillFilter | null => {
+    if (!canDrill || slice.synthetic || slice.key === undefined) return null;
+    // 空・null・"" は集計側が1つのグループに畳んでいる。eq で「—」を送ると、
+    // 実データに「—」という文字が入っている行しか出ない。
+    if (slice.key === EMPTY_BUCKET) return { op: "empty", field: groupBy! };
+    /*
+     * has を使うのは、この列が複数選択かどうかが**ここでは分からない**ため。
+     * 集計側は配列を要素ごとに全バケットへ展開するので、複数選択の列に eq を
+     * 当てると必ず 0 件になる。単一値では has と eq は同じ行に当たる（drill.ts の
+     * matchesFilter を参照）ので、判別できない側に倒すなら has が安全。
+     * ウィジェットへ列の型（fields[].type）が渡るようになったら、単一値の列は
+     * eq に落として「= 営業部」と表示したい。
+     */
+    return {
+      op: groupByMulti ? "has" : "eq",
+      field: groupBy!,
+      value: slice.key,
+      // 選択肢型は保存値（"parttime"）ではなく表示名（"パート・アルバイト"）を出す。
+      ...(slice.label && slice.label !== slice.key ? { label: slice.label } : {}),
+    };
+  };
+  const hrefFor = (slice: {
+    key?: string;
+    label?: string;
+    synthetic?: boolean;
+  }): string | null => {
+    const f = filterFor(slice);
+    return f ? drillHref(collectionId!, [f]) : null;
+  };
+  const drillTo = (slice: { key?: string; label?: string; synthetic?: boolean }) => {
+    const href = hrefFor(slice);
+    if (href) router.push(href);
   };
 
   if (empty) {
@@ -149,6 +186,8 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
       size: Math.abs(s.value),
       value: s.value,
       key: s.key,
+      // ラベルは表示だけでなく絞り込みチップの文字にも使う（選択肢の表示名）。
+      label: s.label,
       synthetic: s.synthetic,
       fill: seriesColor(palette, i, s.color),
     }));
@@ -162,7 +201,9 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
             isAnimationActive={false}
             content={<TreemapCell />}
             onClick={(node: unknown) => {
-              const n = node as { key?: string; synthetic?: boolean } | undefined;
+              const n = node as
+                | { key?: string; label?: string; synthetic?: boolean }
+                | undefined;
               if (n) drillTo(n);
             }}
           />
@@ -209,7 +250,12 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
               cursor={canDrill ? "pointer" : undefined}
             >
               {rows.map((r) => (
-                <Cell key={r.label} fill={r.fill} />
+                <Cell
+                  key={r.label}
+                  fill={r.fill}
+                  /* 残余（その他）は押せないので、指の形も変えない。 */
+                  cursor={hrefFor(r) ? "pointer" : "default"}
+                />
               ))}
               <LabelList
                 dataKey="caption"
@@ -273,7 +319,12 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
               cursor={canDrill ? "pointer" : undefined}
             >
               {rows.map((r) => (
-                <Cell key={r.label} fill={r.fill} />
+                <Cell
+                  key={r.label}
+                  fill={r.fill}
+                  /* 残余（その他）は押せないので、指の形も変えない。 */
+                  cursor={hrefFor(r) ? "pointer" : "default"}
+                />
               ))}
               <LabelList
                 dataKey="value"
@@ -310,7 +361,12 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
             cursor={canDrill ? "pointer" : undefined}
           >
             {rows.map((r) => (
-              <Cell key={r.label} fill={r.fill} />
+              <Cell
+                  key={r.label}
+                  fill={r.fill}
+                  /* 残余（その他）は押せないので、指の形も変えない。 */
+                  cursor={hrefFor(r) ? "pointer" : "default"}
+                />
             ))}
           </Pie>
         </PieChart>
@@ -350,11 +406,12 @@ export function BreakdownChart({ data }: { data: BreakdownData }) {
         );
         const cls =
           "flex items-center gap-2 rounded px-2 py-1 text-sm text-ink-soft";
+        const href = hrefFor(r);
         return (
           <li key={r.label}>
-            {canDrill && !r.synthetic && r.key !== undefined ? (
+            {href ? (
               <Link
-                href={`/c/${collectionId}?f=${encodeURIComponent(groupBy!)}&v=${encodeURIComponent(r.key)}`}
+                href={href}
                 className={`${cls} transition-colors duration-fast hover:bg-paper-sunken hover:text-ink active:bg-ink-line`}
               >
                 {label}

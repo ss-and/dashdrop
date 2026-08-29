@@ -13,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { formatValue, formatCompact } from "@/lib/utils";
+import { drillHref, EMPTY_BUCKET, type DrillFilter } from "@/lib/drill";
 import { CHART_GRID as GRID, CHART_TEXT as TEXT } from "@/lib/palette";
 import { usePalette } from "../PaletteContext";
 import type { WaterfallData } from "@/lib/widgets";
@@ -46,7 +47,7 @@ const axisTick = { fill: TEXT, fontSize: 12 } as const;
 export function WaterfallChart({ data }: { data: WaterfallData }) {
   const palette = usePalette();
   const router = useRouter();
-  const { steps, unit, groupBy, collectionId } = data;
+  const { steps, unit, groupBy, groupByMulti, collectionId } = data;
 
   if (steps.length === 0) {
     return (
@@ -95,13 +96,39 @@ export function WaterfallChart({ data }: { data: WaterfallData }) {
   /*
    * 押したらその区分の行を開く。合計と残余（その他）は複数をまとめた合成なので、
    * 絞り込み先が定まらず押せない。
+   *
+   * 回帰: ここは `?f_費目=原価` という、受け側がまったく読まない形のURLを
+   * 組んでいた。遷移はするので**絞り込まれていない全件の表**が黙って開き、
+   * 段の数字と表の行数が合わない理由が誰にも分からなかった。URLの形は
+   * drill.ts に集約したので、ここでは条件だけを組み立てる。
    */
   const canDrill = Boolean(groupBy && collectionId);
+  const hrefFor = (row: (typeof rows)[number]): string | null => {
+    if (!canDrill || row.synthetic || row.key === undefined) return null;
+    /*
+     * 空グループは「—」という値ではなく「空である」こと（集計側の bucketKeys が
+     * 空・null・"" を1つに畳んでいる）。eq で「—」を送ると、実データに「—」と
+     * 書かれた行だけが出る。
+     *
+     * それ以外は has。この列が複数選択かどうかがウィジェットには渡っていない
+     * ため——複数選択の列に eq を当てると必ず 0 件になる。単一値なら has と eq は
+     * 同じ行に当たるので、判別できないうちは has に倒す。
+     */
+    const filter: DrillFilter =
+      row.key === EMPTY_BUCKET
+        ? { op: "empty", field: groupBy! }
+        : {
+            op: groupByMulti ? "has" : "eq",
+            field: groupBy!,
+            value: row.key,
+            // 選択肢型の列は保存値ではなく表示名をチップに出す。
+            ...(row.x !== row.key ? { label: row.x } : {}),
+          };
+    return drillHref(collectionId!, [filter]);
+  };
   const drill = (row: (typeof rows)[number]) => {
-    if (!canDrill || row.synthetic || row.key === undefined) return;
-    router.push(
-      `/c/${collectionId}?${new URLSearchParams({ [`f_${groupBy}`]: row.key })}`,
-    );
+    const href = hrefFor(row);
+    if (href) router.push(href);
   };
 
   return (
@@ -146,7 +173,12 @@ export function WaterfallChart({ data }: { data: WaterfallData }) {
             cursor={canDrill ? "pointer" : undefined}
           >
             {rows.map((r) => (
-              <Cell key={r.x} fill={colorOf(r.kind)} />
+              <Cell
+                key={r.x}
+                fill={colorOf(r.kind)}
+                /* 合計と残余は押せないので、指の形も変えない。 */
+                cursor={hrefFor(r) ? "pointer" : "default"}
+              />
             ))}
           </Bar>
         </BarChart>
