@@ -154,7 +154,18 @@ export function SetupGuide({
   }
 
   const next = pickNextStep(steps);
-  const collapsed = stored.collapsed === true;
+  /*
+   * 既定は畳んだ状態。
+   *
+   * 全ステップを開いたまま常駐させると、右下で 200px 以上を占め、ダッシュ
+   * ボードのグラフや凡例を permanently に覆ってしまう（実際に「受注 / 失注」の
+   * 凡例が隠れていた）。常に出しておくのは「進捗」と「次にやること1行」だけで
+   * 足り、一覧は開いたときに見せる。
+   *
+   * `collapsed` が未設定なら畳む。明示的に false を入れた人（一度開いた人）は
+   * 開いたままにする。
+   */
+  const collapsed = stored.collapsed !== false;
   const percent = Math.round((progress.done / progress.total) * 100);
 
   return (
@@ -202,6 +213,28 @@ export function SetupGuide({
       >
         <div className="h-full bg-khaki-500" style={{ width: `${percent}%` }} />
       </div>
+
+      {/*
+        畳んでいるときの1行。ここが常駐時の本体になる——「あと何があるか」より
+        「次に何をすればいいか」の方が、手が動く。
+      */}
+      {collapsed && next && (
+        <button
+          type="button"
+          onClick={() => update({ collapsed: false })}
+          className="flex w-full items-start gap-2 px-3.5 py-2.5 text-left transition-colors duration-fast hover:bg-paper-sunken"
+        >
+          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-khaki-500" />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-ink">
+              次: {next.label}
+            </span>
+            <span className="mt-0.5 block text-xs text-ink-muted">
+              {next.description}
+            </span>
+          </span>
+        </button>
+      )}
 
       {!collapsed && (
         <ul className="max-h-[min(24rem,60vh)] overflow-y-auto py-1">

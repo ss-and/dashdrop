@@ -10,7 +10,6 @@ import {
 import { Sidebar } from "@/components/app/Sidebar";
 import { SidebarProvider, SidebarPane } from "@/components/app/SidebarShell";
 import { SetupGuide } from "@/components/app/SetupGuide";
-import { VerifyEmailBanner } from "@/components/app/VerifyEmailBanner";
 
 /**
  * Authenticated app shell. Guards every /(app) route: unauthenticated users
@@ -74,8 +73,12 @@ export default async function AppLayout({
           <Sidebar user={user} />
         </SidebarPane>
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* 未確認のときだけ。中の機能は止めない（止めるのは公開リンクだけ）。 */}
-          {!user.emailVerified && <VerifyEmailBanner email={user.email} />}
+          {/*
+            メール未確認の知らせは Topbar の中（ロゴ・ナビの下）に置いてある。
+            以前はここ——つまり**トップバーより上**——に全幅で出していたので、
+            製品のクロームより通知の方が上位に見えていた。知らせが看板を
+            上回る画面は、それだけで作りが粗く見える。
+          */}
           {children}
         </div>
         {/* 右下に常駐。入口は塞がず、消えるべきときには自分で消える。 */}

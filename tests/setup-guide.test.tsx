@@ -61,12 +61,33 @@ describe("SetupGuide", () => {
     expect(screen.getByText("次: 表の中身を見る")).toBeInTheDocument();
   });
 
-  it("畳むと見出しだけになる（進捗バーは残す）", () => {
+  /**
+   * 既定は畳んだ状態。全ステップを開いたまま常駐させると右下で 200px 以上を
+   * 占め、ダッシュボードのグラフや凡例を覆ってしまう（実際に凡例が隠れていた）。
+   * 常に出すのは「進捗」と「次の1行」だけで足りる。
+   */
+  it("既定は畳んだ状態で、次にやること1行だけを出す", () => {
     show(EMPTY);
-    fireEvent.click(screen.getByRole("button", { expanded: true }));
-    expect(screen.queryByText("次: Excelを取り込む")).toBeNull();
-    expect(screen.getByText("0/5")).toBeInTheDocument();
+    expect(screen.getByText("次: Excelを取り込む")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toBeInTheDocument();
+    expect(screen.getByText("0/5")).toBeInTheDocument();
+    // 一覧は出さない。
+    expect(screen.queryByText("ダッシュボードを作る")).toBeNull();
+  });
+
+  it("開くと全ステップが出る", () => {
+    show(EMPTY);
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByText("ダッシュボードを作る")).toBeInTheDocument();
+    expect(screen.getByText("共有リンクを作る")).toBeInTheDocument();
+  });
+
+  it("開いたあとは開いたままにする（畳み直すまで）", () => {
+    show(EMPTY);
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    cleanup();
+    show(EMPTY);
+    expect(screen.getByText("ダッシュボードを作る")).toBeInTheDocument();
   });
 
   it("閉じたら、次に開いた画面でも出てこない", () => {

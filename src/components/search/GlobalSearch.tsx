@@ -495,7 +495,7 @@ export function GlobalSearch({
           }
           autoComplete="off"
           value={query}
-          placeholder="顧客・商談・シートを検索…"
+          placeholder="検索"
           onChange={(e) => {
             setQuery(e.target.value);
             setOpen(true);
@@ -517,9 +517,12 @@ export function GlobalSearch({
             className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1"
             aria-hidden="true"
           >
-            <kbd className="rounded-sm border border-ink-line bg-paper-sunken px-1.5 py-0.5 text-2xs font-normal text-ink-faint">
-              /
-            </kbd>
+            {/*
+              ヒントは1つだけ出す。`/` と `⌘K` の両方を並べると、幅の限られた
+              入力欄の右側を2つのキャップが占領し、プレースホルダが途中で
+              切れて「顧客・商談・シートを検」のような壊れた見た目になっていた。
+              どちらも効くことは変わらないが、画面に出すのは覚えやすい方だけ。
+            */}
             <kbd className="rounded-sm border border-ink-line bg-paper-sunken px-1.5 py-0.5 text-2xs font-normal text-ink-faint">
               ⌘K
             </kbd>

@@ -10,6 +10,7 @@ import { SidebarToggle } from "./SidebarShell";
 import { BackButton } from "./BackButton";
 import { getPlanBadge } from "./plan-badge";
 import { GlobalSearch } from "@/components/search/GlobalSearch";
+import { VerifyEmailBanner } from "./VerifyEmailBanner";
 import type { CurrentUser } from "@/lib/auth";
 
 /**
@@ -230,6 +231,13 @@ export function Topbar({ user, title }: { user: CurrentUser; title?: string }) {
         </div>
       </div>
 
+      {/*
+        メール未確認の知らせ。**トップバーの中**（ロゴ・ナビの下）に置く。
+        以前はレイアウト側でトップバーより上に全幅で出していたため、通知が
+        製品のクロームより上位に見えていた。中の機能は止めない——止めるのは
+        公開リンクの作成だけなので、知らせも1行に抑える。
+      */}
+      {!user.emailVerified && <VerifyEmailBanner email={user.email} />}
     </header>
   );
 }
