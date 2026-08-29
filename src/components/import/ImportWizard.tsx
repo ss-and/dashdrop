@@ -13,6 +13,12 @@ import {
   FIELD_TYPE_META,
   type FieldType,
 } from "@/lib/field-types";
+import {
+  IMPORT_MODE_OPTIONS,
+  defaultImportMode,
+  type ExistingWorkbook,
+  type ImportMode,
+} from "@/lib/import-mode";
 
 interface InferredField {
   name: string;
@@ -65,6 +71,42 @@ interface NotionImportResult {
   collectionId?: string;
   /** 行が途中で打ち切られたときの日本語の警告。全行取り込めていれば null。 */
   warning?: string | null;
+}
+
+/**
+ * 取り込んだものからダッシュボードを1枚作り、その行き先を返す。
+ *
+ * ホームのドロップゾーンと**同じ手順**（src/components/home/ExcelDropZone.tsx）。
+ * 2か所で別々に組み立てると、片方だけ直して食い違う——実際に、あちらだけが
+ * ダッシュボードへ送っていて、こちらは表に着地していた。
+ *
+ * 失敗しても投げない。取り込みそのものは成功しているので、呼び出し側が
+ * 表へ送れるように null を返すだけにする。
+ */
+async function autoDashboardHref(
+  data: FileImportResult | undefined,
+): Promise<string | null> {
+  const target = data?.workbookId
+    ? { workbookId: data.workbookId }
+    : data?.collectionId
+      ? { collectionId: data.collectionId }
+      : null;
+  if (!target) return null;
+  try {
+    const res = await fetch("/api/dashboards/auto", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(target),
+    });
+    const body = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      data?: { dashboardId?: string };
+    } | null;
+    if (!res.ok || !body?.ok || !body.data?.dashboardId) return null;
+    return `/d/${body.data.dashboardId}`;
+  } catch {
+    return null;
+  }
 }
 
 /** /api/import と /api/import/gsheets の成功ペイロードのうち、この画面が使う部分。 */
@@ -123,6 +165,21 @@ export function ImportWizard() {
   const [importWarning, setImportWarning] = useState<string | null>(null);
   const [importDest, setImportDest] = useState<string | null>(null);
 
+  /*
+   * 同じ名前で既に入っているファイル（/api/import/preview が返す）と、その扱い。
+   *
+   * 【回帰防止】以前この画面は mode を送っていなかったので、/api/import は
+   * 常に "add" として動いていた。毎月同じ「売上台帳」を入れ直す人のファイルが
+   * 1つずつ増え、同名のシートとダッシュボードが並んで見分けが付かなくなる。
+   * ホームのドロップゾーン（ExcelDropZone → ImportReview）は最初から選ばせて
+   * いたのに、設定ガイドが案内するのはこちらの画面だった。
+   *
+   * 既定は import-mode.ts の defaultImportMode に任せる（同名があれば
+   * "replace"）。ホーム側と既定が食い違うと、同じ操作の結果が入口で変わる。
+   */
+  const [existing, setExisting] = useState<ExistingWorkbook | null>(null);
+  const [mode, setMode] = useState<ImportMode>("add");
+
   // Import source: a local file, a public/link-shared Google Sheets URL, or a
   // Notion database read through the workspace's stored integration token.
   const [source, setSource] = useState<"file" | "gsheets" | "notion">("file");
@@ -158,6 +215,9 @@ export function ImportWizard() {
 
   const step: "upload" | "map" = sheets ? "map" : "upload";
   const selectedCount = sheets?.filter((s) => s.selected).length ?? 0;
+  // 実際に取り込まれるシート。上書き時に「どれが入れ替わるか」を出すのに使う
+  // （runImport が送る chosen と同じ条件にしてあること）。
+  const chosenSheets = sheets?.filter((s) => s.selected && s.fields.length > 0) ?? [];
   // 列名が空のまま送ると、サーバ側でその項目が落ちて以降の列が1つずつずれる
   // （入社日の欄に部署が入り、最後の列は消える）。押せる前に止める。
   const blankNameBlocked =
@@ -182,6 +242,10 @@ export function ImportWizard() {
     setNotionTruncatedDbId(null);
     setImportWarning(null);
     setImportDest(null);
+    setExisting(null);
+    // 別のファイルを選び直したのに前のファイルの「上書きする」が残っていると、
+    // 関係ないブックを置き換えてしまう。ここで必ず安全側（追加）へ戻す。
+    setMode("add");
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -234,8 +298,16 @@ export function ImportWizard() {
         setFile(null);
         return;
       }
-      const data = body.data as { sheets: SheetPreview[] };
+      const data = body.data as {
+        sheets: SheetPreview[];
+        existing?: ExistingWorkbook | null;
+      };
       setSource("file");
+      // 古いデプロイの preview が existing を返さない場合もあるので、
+      // 無ければ「同名なし」＝従来どおりの追加として扱う。
+      const found = data.existing ?? null;
+      setExisting(found);
+      setMode(defaultImportMode(found));
       ingestSheets(data.sheets);
     } catch {
       setError("通信エラーが発生しました。しばらくして再度お試しください。");
@@ -267,6 +339,14 @@ export function ImportWizard() {
       const data = body.data as { sheets: SheetPreview[] };
       setFile(null);
       setSource("gsheets");
+      /*
+       * Google スプレッドシート経由には同名の置き換えが無い。
+       * /api/import/gsheets は mode を受け取らず必ず db.workbook.create する
+       * ので、選択肢を出しても効かない（押せるのに何も変わらないのが最悪）。
+       * 出さないことをここで明示しておく。
+       */
+      setExisting(null);
+      setMode("add");
       ingestSheets(data.sheets);
     } catch {
       setError("通信エラーが発生しました。しばらくして再度お試しください。");
@@ -412,6 +492,18 @@ export function ImportWizard() {
         const form = new FormData();
         form.append("file", file as File);
         form.append("sheets", JSON.stringify(selection));
+        /*
+         * 【回帰防止】ここで mode を送らないと /api/import は既定の "add" で
+         * 動き、同名のファイルが黙って増え続ける（この画面が長らくそうだった）。
+         * 同名が無いときは "add" 固定——ホーム側（ImportReview → ExcelDropZone）
+         * と同じ送り方。
+         */
+        form.append("mode", existing ? mode : "add");
+        // 上書き先は名前ではなく id で指定する。下見のあとに同名のファイルが
+        // もう1つ増えていても、利用者が見て選んだものへ確実に当たるように。
+        if (existing && mode === "replace") {
+          form.append("workbookId", existing.workbookId);
+        }
         res = await fetch("/api/import", { method: "POST", body: form });
       }
       const body = await res.json().catch(() => null);
@@ -420,14 +512,27 @@ export function ImportWizard() {
         return;
       }
       const data = body.data as FileImportResult | undefined;
-      // Multi-sheet imports land on the file overview (the nested workbook);
-      // a single sheet goes straight to its grid.
-      const dest =
+
+      /*
+       * 着地はダッシュボード。
+       *
+       * この製品の約束は「Excelを置いたらダッシュボードが出る」。ホームの
+       * ドロップゾーンは最初からそう作られていた（/api/dashboards/auto を
+       * 呼んでから /d/… へ送る）のに、**この画面だけ表かファイル概要に
+       * 着地していた**。同じ部屋への扉が2つあって行き先が違う、という状態で、
+       * /import から入った人だけが「置いたのにグラフが出ない、自分で作りに
+       * 行かないといけない」という体験をしていた。
+       *
+       * グラフ作りに失敗しても取り込み自体は成功しているので、そのときだけ
+       * 従来どおり表（複数シートならファイル概要）へ送る。
+       */
+      const fallback =
         (data?.sheetsImported ?? 0) > 1 && data?.workbookId
           ? `/f/${data.workbookId}`
           : data?.collectionId
             ? `/c/${data.collectionId}`
             : null;
+      const dest = (await autoDashboardHref(data)) ?? fallback;
       if (!dest) {
         setError("取り込み結果を受け取れませんでした。スプレッドシート一覧をご確認ください。");
         return;
@@ -715,6 +820,75 @@ export function ImportWizard() {
             <div className="flex items-center gap-2 rounded-md border border-ink-line bg-paper-raised px-4 py-2.5 text-sm text-ink-muted">
               <Badge tone="khaki" variant="soft">{sheets.length} シート検出</Badge>
               取り込むシートを選び、それぞれの名前と列の型を確認してください。各シートは別々のスプレッドシートになります。
+            </div>
+          )}
+
+          {/*
+            同名ファイルがある場合の選択。
+            見せ方も文言も src/components/home/ImportReview.tsx に合わせてある。
+            同じ判断を入口ごとに違う言い方で聞かれると、別のことを聞かれている
+            と読まれる。文言を直すときは import-mode.ts と両方そろえること。
+          */}
+          {existing && (
+            <div className="space-y-3 rounded-md border border-ink-line bg-paper-raised p-4">
+              <h3 className="text-sm font-semibold text-ink">
+                同じ名前のファイルが既にあります
+              </h3>
+              <p className="text-sm text-ink-soft">
+                「{existing.name}」（
+                {existing.sheets.length.toLocaleString()} シート・
+                {existing.sheets
+                  .reduce((n, sh) => n + sh.rowCount, 0)
+                  .toLocaleString()}
+                行）
+              </p>
+
+              <div className="space-y-2">
+                {IMPORT_MODE_OPTIONS.map((opt) => (
+                  <label
+                    key={opt.value}
+                    className="flex cursor-pointer items-start gap-2.5 rounded px-2 py-1.5 transition-colors duration-fast hover:bg-paper-sunken"
+                  >
+                    <input
+                      type="radio"
+                      name="import-mode"
+                      value={opt.value}
+                      checked={mode === opt.value}
+                      onChange={() => setMode(opt.value)}
+                      disabled={importing}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-khaki-500"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium text-ink">
+                        {opt.label}
+                      </span>
+                      {/* 選んだ結果を1行で。このリポジトリは選択肢に必ず結果を書く。 */}
+                      <span className="block text-xs text-ink-muted">
+                        {opt.hint}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              {mode === "replace" && (
+                /* 何が消えるのかを、押す前に名前と行数で見せる。 */
+                <ul className="space-y-0.5 border-t border-ink-line pt-2 text-xs text-ink-muted">
+                  {existing.sheets.map((sh) => {
+                    const willReplace = chosenSheets.some(
+                      (c) =>
+                        c.collectionName.trim() === sh.name ||
+                        c.sheetName === sh.name,
+                    );
+                    return (
+                      <li key={sh.slug}>
+                        {sh.name}（{sh.rowCount.toLocaleString()}行）—{" "}
+                        {willReplace ? "入れ替え" : "そのまま残ります"}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
           )}
 

@@ -5,9 +5,16 @@
  * Parses EVERY sheet in the workbook and infers a candidate field schema for
  * each WITHOUT writing anything to the database — this powers the mapping /
  * sheet-selection step of the import wizard (multi-tab support).
+ *
+ * 併せて `existing`（同じ名前で既に入っているファイル）も返す。形は
+ * /api/import/analyze と同じ（src/lib/import-mode.ts の ExistingWorkbook）。
+ * これが無かったあいだ、/import の画面は同名を置き換えられず、同じ台帳を
+ * 毎月入れる人のファイルが増え続けていた。
  */
 import { withAuth, ok, ApiError } from "@/lib/api";
 import { readAllSheets, MAX_IMPORT_BYTES } from "@/lib/excel";
+import { findExistingWorkbook } from "@/lib/existing-workbook";
+import { workbookBaseName } from "@/lib/import-mode";
 
 const ALLOWED_EXT = [".xlsx", ".xls", ".csv"];
 /** 利用者に見せる上限の表記。MAX_IMPORT_BYTES と必ず一致させること。 */
@@ -24,7 +31,7 @@ const MAX_LABEL = "4MB";
  */
 export const maxDuration = 60;
 
-export const POST = withAuth(async (req) => {
+export const POST = withAuth(async (req, { user }) => {
   let form: FormData;
   try {
     form = await req.formData();
@@ -59,9 +66,27 @@ export const POST = withAuth(async (req) => {
     throw new ApiError("シートから列を検出できませんでした", 422);
   }
 
+  /*
+   * 同じ名前のファイルが既に入っていないかを見る。
+   *
+   * ここが無かったせいで、/import の画面は同名を知らず**常に新規追加**して
+   * いた。毎月同じ「売上台帳」を入れ直す人のファイルが積み上がり、どれが最新か
+   * 分からなくなる。ホームのドロップゾーン（/api/import/analyze）は最初から
+   * 返していたので、同じ形・同じヘルパでそろえた。
+   *
+   * ここでは判定材料を返すだけで、上書きするかどうかは利用者が選ぶ
+   * （画面が /api/import へ mode を送る）。
+   * ワークスペースの絞りはヘルパ側の必須引数。他社のブック名が
+   * 「同名のファイルがあります」の形で漏れないようにするため。
+   */
+  const existing = await findExistingWorkbook(user.workspace.id, name);
+
   return ok({
     fileName: name,
+    // 取り込み後に付くブック名。画面が「何を置き換えるのか」を出すのに使う。
+    fileBase: workbookBaseName(name),
     sheetCount: usable.length,
     sheets: usable,
+    existing,
   });
 });
