@@ -398,6 +398,12 @@ function round2(n: number): number {
 export interface ChargeColumns {
   dateKey: string;
   labelKey: string;
+  /**
+   * 金額の列。出金と入金が分かれている表（銀行明細）では**出金側**。
+   *
+   * 入金側は選ばない。給与が毎月ほぼ同額で入ってくるので、そのまま
+   * 「定期支払い」として合計に混ぜると、払っていない額が支出に化ける。
+   */
   amountKey: string;
 }
 
@@ -407,42 +413,165 @@ export interface ChargeColumns {
  * 見つからなければ null。**推測で埋めない**——列を1つでも取り違えると、
  * 出てくるのは間違った定期支払いの一覧になる。空で返せば何も出ないだけで、
  * 利用者が嘘を掴まされることはない。
+ *
+ * ## カード会社ごとに列名が違う
+ *
+ * 実物の1行目はこうなっている（いずれも列の意味は同じ）:
+ *
+ *   楽天カード      利用日, 利用店名・商品名, 利用者, 支払方法, 利用金額, 支払手数料, 支払総額
+ *   三井住友カード  ご利用日, ご利用店名及び商品名, ご利用金額, 支払区分
+ *   JCB            ご利用日, ご利用先など, ご利用金額(￥), 支払区分, 今回回数, お支払金額(￥)
+ *   エポス          ご利用年月日, ご利用先, ご利用金額
+ *   三菱UFJ銀行     日付, 摘要, 摘要内容, 支払い金額, 預かり金額, 差引残高
+ *   住信SBI        日付, 内容, 出金金額(円), 入金金額(円), 残高(円)
+ *
+ * 会社ごとの読み取り器を並べる作りにはしない。増え続けるし、様式が変わった
+ * 日に黙って壊れる。代わりに**語彙に優先順位を付けて**選ぶ。同じ表に
+ * 「利用金額」と「支払総額」が両方あるとき、どちらを採るかが決まっている
+ * ことが大事で、そこさえ決まっていれば会社が増えても読める。
  */
 export function detectChargeColumns(
   fields: readonly { key: string; name: string; type: string }[],
 ): ChargeColumns | null {
-  const dateKey = pick(fields, ["date"], DATE_WORDS);
-  const amountKey = pick(fields, ["currency", "number"], AMOUNT_WORDS);
-  if (!dateKey || !amountKey) return null;
+  const date = pick(fields, ["date"], DATE_WORDS, DATE_EXCLUDE);
+  const amount = pick(
+    fields,
+    ["currency", "number"],
+    AMOUNT_WORDS,
+    AMOUNT_EXCLUDE,
+  );
+  if (!date || !amount) return null;
 
   // 摘要は「文字の列で、日付でも金額でもないもの」。名前が当たれば優先する。
-  const labelKey =
-    pick(fields, ["text", "select"], LABEL_WORDS) ??
-    fields.find(
-      (f) =>
-        (f.type === "text" || f.type === "select") &&
-        f.key !== dateKey &&
-        f.key !== amountKey,
-    )?.key;
-  if (!labelKey) return null;
+  const label =
+    pick(fields, ["text", "select"], LABEL_WORDS, LABEL_EXCLUDE) ??
+    fallback(
+      fields.find(
+        (f) =>
+          (f.type === "text" || f.type === "select") &&
+          f.key !== date.key &&
+          f.key !== amount.key &&
+          !hits(f.name, LABEL_EXCLUDE),
+      )?.key,
+    );
+  if (!label) return null;
 
-  return { dateKey, labelKey, amountKey };
+  /*
+   * 3本のうち **2本以上は、名前で当てたもの**であること。
+   *
+   * 型と本数だけで決めると、明細でない表まで明細に見える。実際に踏んだのが
+   * 案件一覧（案件名・担当・提案金額・確度・完了予定日）で、
+   * 日付が1本・金額が1本しか無いので3本とも「取り違えようがない」経路で
+   * 埋まってしまう。結果、営業のダッシュボードすべてに中身の無い
+   * 「定期支払い」の箱が付く。
+   *
+   * 2本にしてあるのは、「支払日」しか日付が無いカード明細を落とさない幅。
+   * 3本を求めると本物の明細まで落ち、1本だと上の案件一覧が通る。
+   */
+  const named = [date, amount, label].filter((c) => c.byName).length;
+  if (named < 2) return null;
+
+  return { dateKey: date.key, labelKey: label.key, amountKey: amount.key };
 }
 
-const DATE_WORDS = ["日付", "利用日", "ご利用日", "取引日", "決済日", "date"];
+interface Picked {
+  key: string;
+  /** 語彙で当てたか（false は「その型が1本しか無かった」）。 */
+  byName: boolean;
+}
+
+function fallback(key: string | undefined): Picked | undefined {
+  return key ? { key, byName: false } : undefined;
+}
+
+/*
+ * 語彙は**優先順に並べる**。上にあるものほど、その列である確信が強い。
+ *
+ * 「支払日」を日付の語彙に入れていないのは、カード明細では全行が同じ日に
+ * なるから。全部同じ日付では間隔が取れず、定期支払いは1件も見つからない。
+ * 「利用日」があるならそちらを見る。支払日しか無い表では、下の
+ * 「その型が1本しか無ければそれで確定」に落ちて拾われる。
+ */
+const DATE_WORDS = [
+  "ご利用年月日",
+  "ご利用日",
+  "利用日",
+  "お取引日",
+  "取引日",
+  "取扱日",
+  "決済日",
+  "年月日",
+  "日付",
+  "date",
+];
+
+/** 明細の日付として選んではいけない列。 */
+const DATE_EXCLUDE = ["登録日", "締切日", "更新日"];
+
 const AMOUNT_WORDS = [
-  "金額",
-  "利用金額",
+  // 銀行明細の出金側。入金と分かれているので、こちらが最優先。
+  "お引出し",
+  "引出し",
+  "出金金額",
+  "出金",
+  "支払い金額",
+  "引落金額",
+  // カード明細。1回ぶんの利用額を採る。
   "ご利用金額",
+  "利用金額",
+  "ご利用額",
+  "利用額",
+  // 分割・リボで手数料が乗ったあとの額。利用額が無いときの受け皿。
+  "お支払金額",
   "支払金額",
+  "支払総額",
+  "ご請求額",
+  "請求金額",
   "請求額",
+  // 汎用。
+  "金額",
   "amount",
 ];
+
+/**
+ * 金額として選んではいけない列。
+ *
+ * 「残高」は行ごとに違う数が入っていて、名前によっては金額の語彙に当たる。
+ * これを金額として読むと、残高の推移が「定期支払い」として並ぶ。
+ * 「預入」「入金」を外すのは、給与を支出に混ぜないため。
+ */
+const AMOUNT_EXCLUDE = [
+  "残高",
+  "お預入れ",
+  "預入",
+  "預かり金額",
+  "入金",
+  "ポイント",
+  "手数料",
+  "割引",
+  "回数",
+  "利用者",
+  "番号",
+  "現地通貨",
+  "レート",
+];
+
 const LABEL_WORDS = [
-  "摘要",
+  "ご利用店名及び商品名",
+  "利用店名・商品名",
+  "ご利用店名",
   "利用店名",
+  "ご利用先など",
   "ご利用先",
+  "利用先",
+  "ご利用内容",
+  "利用内容",
+  "加盟店名",
   "加盟店",
+  "お取引内容",
+  "取引内容",
+  "摘要内容",
+  "摘要",
   "店名",
   "内容",
   "品目",
@@ -450,20 +579,40 @@ const LABEL_WORDS = [
   "description",
 ];
 
-/** 型が合う列のうち、名前が語彙に当たるものを優先して1つ選ぶ。 */
+/** 摘要として選んではいけない列（人の名前や区分は支払い先ではない）。 */
+const LABEL_EXCLUDE = ["利用者", "カード会員", "会員名", "支払区分", "支払方法"];
+
+/** 名前がどれかの語を含むか。 */
+function hits(name: string, words: readonly string[]): boolean {
+  const n = name.toLowerCase();
+  return words.some((w) => n.includes(w.toLowerCase()));
+}
+
+/**
+ * 型が合う列から1つ選ぶ。
+ *
+ * 1. 選んではいけない列を先に外す
+ * 2. 語彙の**優先順**に見て、最初に当たったものを採る
+ * 3. どれも当たらなくても、その型が1本しか残っていなければそれで確定できる
+ *    （取り違えようがない）。2本以上あるときに勝手に選ぶと、間違えたまま
+ *    黙って進むことになるので諦める。
+ */
 function pick(
   fields: readonly { key: string; name: string; type: string }[],
   types: readonly string[],
   words: readonly string[],
-): string | undefined {
-  const typed = fields.filter((f) => types.includes(f.type));
-  if (typed.length === 0) return undefined;
-  const named = typed.find((f) =>
-    words.some((w) => f.name.toLowerCase().includes(w.toLowerCase())),
+  exclude: readonly string[],
+): Picked | undefined {
+  const typed = fields.filter(
+    (f) => types.includes(f.type) && !hits(f.name, exclude),
   );
-  // 名前が当たらなくても、その型の列がちょうど1つしか無ければそれで確定できる。
-  // 2つ以上あるときに勝手に選ぶと、取り違えたまま黙って進むことになる。
-  return named?.key ?? (typed.length === 1 ? typed[0].key : undefined);
+  if (typed.length === 0) return undefined;
+
+  for (const w of words) {
+    const found = typed.find((f) => f.name.toLowerCase().includes(w.toLowerCase()));
+    if (found) return { key: found.key, byName: true };
+  }
+  return typed.length === 1 ? { key: typed[0].key, byName: false } : undefined;
 }
 
 /** 画面に出す周期の名前。 */

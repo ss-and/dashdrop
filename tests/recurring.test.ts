@@ -412,14 +412,33 @@ describe("detectChargeColumns — 推測で埋めない", () => {
     });
   });
 
-  /** 名前が当たらなくても、その型が1つしか無ければ取り違えようがない。 */
-  it("型が1つしか無ければ名前が当たらなくても決められる", () => {
+  /**
+   * 名前が当たらない列も、他の2本が名前で当たっていれば受け入れる。
+   * 摘要の列名は会社ごとの揺れが一番大きいので、ここを厳しくすると
+   * 本物の明細まで落ちる。
+   */
+  it("他の2本が名前で当たっていれば、残り1本は名前が当たらなくてよい", () => {
     const cols = detectChargeColumns([
-      f("a", "いつ", "date"),
+      f("a", "ご利用日", "date"),
       f("b", "なに", "text"),
-      f("c", "いくら", "currency"),
+      f("c", "ご利用金額", "currency"),
     ]);
-    expect(cols?.amountKey).toBe("c");
+    expect(cols?.labelKey).toBe("b");
+  });
+
+  /**
+   * 逆に、名前で当たったのが1本だけなら通さない。型と本数だけで決めると、
+   * 明細でない表（案件一覧・在庫表）まで明細に見える。
+   * 詳しくは tests/statement-columns.test.ts。
+   */
+  it("名前で当たったのが1本だけなら諦める", () => {
+    expect(
+      detectChargeColumns([
+        f("a", "いつ", "date"),
+        f("b", "なに", "text"),
+        f("c", "いくら", "currency"),
+      ]),
+    ).toBeNull();
   });
 
   /**
