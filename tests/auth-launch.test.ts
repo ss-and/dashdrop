@@ -157,3 +157,76 @@ describe("④ 確認リンクの結果が画面に出る", () => {
     expect(route).not.toMatch(/expired|used|invalid_token/);
   });
 });
+
+/* ========================================================================== */
+describe("⑤ メールの送信で、応答を待たせない", () => {
+  /**
+   * nodemailer の待ち時間は 接続10秒・挨拶10秒・通信15秒（src/lib/email.ts）。
+   * SMTP が健康なら数百ミリ秒なので、手元でも少人数でも絶対に気づかない。
+   * 詰まったときだけ、**登録した人が最大25秒、白い画面を見る**。
+   * アカウントはとっくにできているのに本人には「固まった」としか見えないので、
+   * 再読み込みしてもう一度登録し、「既に登録されています」に当たる。
+   *
+   * `after()` は応答を返したあとに走る（Vercel が関数を生かしておく）。
+   */
+  const signup = code("src/app/api/auth/signup/route.ts");
+  const forgot = code("src/app/api/auth/forgot/route.ts");
+
+  it("サインアップは、確認メールを応答の後ろに回す", () => {
+    expect(signup).toContain('from "next/server"');
+    const at = signup.indexOf("after(");
+    expect(at, "after() が無い").toBeGreaterThan(-1);
+    // 送信の呼び出しが全部 after() の内側にあること。
+    for (const m of [...signup.matchAll(/sendMail\(/g)]) {
+      expect(m.index, "sendMail が after() の外にある").toBeGreaterThan(at);
+    }
+  });
+
+  it("セッションのCookieは応答に載る（after より前で設定する）", () => {
+    // after() の中で設定しても、応答はもう出たあとなので載らない。
+    //
+    // 位置だけを比べていると、**行ごと消えた**ときに indexOf が -1 を返して
+    // 「どの位置より前」も成立してしまう（実際にその変異を素通しした）。
+    // 在ることを先に確かめる。
+    const cookie = signup.indexOf("setSessionCookie(");
+    expect(cookie, "setSessionCookie が無い").toBeGreaterThan(-1);
+    expect(cookie).toBeLessThan(signup.indexOf("after("));
+  });
+
+  /**
+   * `sendMail` は失敗しても**例外を投げず** `{ ok: false }` を返す。
+   * 戻り値を捨てていたので try/catch には何も入らず、送れていないのに
+   * 証跡が1行も残らなかった。気づく手段が「お客さまに言われる」しか無い。
+   */
+  it("サインアップは、送信の失敗を運用者に残す", () => {
+    expect(signup).toContain("if (!res.ok)");
+    expect(signup).toContain("reportError");
+  });
+
+  /**
+   * 【回帰】/forgot は名簿の漏れをステータスコードでは塞いだが、
+   * **時間の形で残っていた**。登録済みだけが送信を待つので、
+   * 同じ文面・同じコードでも応答時間で判別できた。
+   */
+  it("/forgot は、登録の有無で応答時間が変わらない", () => {
+    const at = forgot.indexOf("after(");
+    expect(at, "after() が無い").toBeGreaterThan(-1);
+    for (const m of [...forgot.matchAll(/sendMail\(/g)]) {
+      expect(m.index, "sendMail が after() の外にある").toBeGreaterThan(at);
+    }
+    // 応答は今までどおり、どちらの枝でも同じ1か所から返る。
+    expect(forgot).toContain("return ok({ message: ALWAYS })");
+  });
+
+  /**
+   * 再送（/api/auth/resend-verification）は **待って良い**。
+   * 送信の成否で回数の枠を戻すかどうかが決まる（③）ので、結果が要る。
+   * ここを after() に変えると枠の管理が壊れるため、そうなっていないことを固定する。
+   */
+  it("再送は結果を待つ（回数の枠を戻す判断に要る）", () => {
+    const resend = code("src/app/api/auth/resend-verification/route.ts");
+    expect(resend).not.toContain("after(");
+    expect(resend).toContain("if (!res.ok)");
+    expect(resend).toContain("reset(");
+  });
+});

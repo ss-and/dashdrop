@@ -7,6 +7,7 @@
  * 同じ意味を持つ）。登録の有無に関わらず同じ応答にする。
  */
 import { ZodError, z } from "zod";
+import { after } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail } from "@/lib/api";
 import { env } from "@/lib/env";
@@ -64,20 +65,45 @@ export async function POST(req: Request) {
 
     const user = await db.user.findUnique({ where: { email } });
     if (user) {
-      const { token } = await issueToken(user.id, "password_reset");
-      const url = `${env.APP_URL.replace(/\/$/, "")}/reset?token=${encodeURIComponent(token)}`;
-      const res = await sendMail({ to: user.email, ...passwordResetMail(url, PASSWORD_RESET_TTL_MIN) });
-      if (!res.ok) {
-        /*
-         * 設定はあるのに1通が落ちた場合。ここで応答を変えると、上と同じ形で
-         * 名簿が漏れる（落ちるのは登録済みのときだけなので）。
-         * 利用者には同じ文面を返し、**運用者にだけ**知らせる。届かなかった人は
-         * ALWAYS の「数分待っても届かない場合は」に従うことになる。
-         */
-        reportError(new Error("Password reset mail failed"), {
-          where: "api:/api/auth/forgot",
-        });
-      }
+      /*
+       * 送信は**応答を返してから**行う。理由が2つある。
+       *
+       * ① 名簿の漏れが、まだ「時間」の形で残っていた。
+       *    ステータスコードは揃えたが、ここで待っていると
+       *      登録済み  → 送信を待つ（nodemailer の上限は接続10秒・
+       *                  挨拶10秒・通信15秒。詰まれば最大25秒）
+       *      未登録    → 即座に 200
+       *    となり、**応答時間そのものが名簿の答えになる**。
+       *    同じ文面・同じコードでも、秒数で分かれば総当たりは成立する。
+       *
+       * ② 本物の顧客だけが待たされる。パスワードを忘れた人は既に困っている
+       *    のに、そこで25秒固まる。押し直せば同じだけまた待つ。
+       *
+       * `after()` なら応答を返したあとで走るので、両方の枝が同じ速さで返る。
+       * 送信の失敗は今までどおり運用者にだけ知らせる。
+       */
+      after(async () => {
+        try {
+          const { token } = await issueToken(user.id, "password_reset");
+          const url = `${env.APP_URL.replace(/\/$/, "")}/reset?token=${encodeURIComponent(token)}`;
+          const res = await sendMail({
+            to: user.email,
+            ...passwordResetMail(url, PASSWORD_RESET_TTL_MIN),
+          });
+          if (!res.ok) {
+            /*
+             * 設定はあるのに1通が落ちた場合。利用者には同じ文面が既に
+             * 返っている。届かなかった人は ALWAYS の「数分待っても
+             * 届かない場合は」に従うことになるので、**運用者にだけ**知らせる。
+             */
+            reportError(new Error("Password reset mail failed"), {
+              where: "api:/api/auth/forgot",
+            });
+          }
+        } catch (err) {
+          reportError(err, { where: "api:/api/auth/forgot" });
+        }
+      });
     }
 
     return ok({ message: ALWAYS });

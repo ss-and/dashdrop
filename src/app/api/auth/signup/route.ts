@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { after } from "next/server";
 import { db, toJson } from "@/lib/db";
 import { ok, fail } from "@/lib/api";
 import { hashPassword, setSessionCookie } from "@/lib/auth";
@@ -18,6 +19,7 @@ import {
 import { installCrm } from "@/lib/install-crm";
 import type { Prisma } from "@prisma/client";
 import { can } from "@/lib/plans";
+import { reportError } from "@/lib/observability";
 
 /**
  * Pre-auth signup endpoint. Creates the User, their first Workspace + owner
@@ -181,25 +183,55 @@ export async function POST(req: Request) {
       }
     }
 
+    await setSessionCookie(user.id);
+
     /*
      * 確認メール。送れなくても登録は止めない——SMTP が未設定の環境でも
      * 使い始められる方が良く、未確認でも中は使えるようにしてある
      * （止めるのは公開リンクの作成だけ）。
+     *
+     * ## なぜ応答を返してから送るのか
+     *
+     * 以前はここで `await` していた。SMTP が健康なら数百ミリ秒なので、
+     * 手元でも少人数でも気づかない。気づくのは**向こうが遅いとき**で、
+     * nodemailer の待ち時間は接続10秒・挨拶10秒・通信15秒（src/lib/email.ts）。
+     * つまり送信側が詰まると、**登録した人は最大25秒、白い画面を見る**。
+     * アカウントもワークスペースもとっくにできているのに、本人には
+     * 「固まった」としか見えないので、たいてい途中で再読み込みして
+     * もう一度登録し、今度は「既に登録されています」と言われる。
+     *
+     * 1,000人が同じ日に登録する状況で、送信元が少しでも詰まれば全員が踏む。
+     * `after()` は応答を返したあとで走る（Vercel が関数を生かしておく）ので、
+     * 待ち時間は利用者から見えなくなる。
+     *
+     * ## なぜ戻り値を見るのか
+     *
+     * `sendMail` は失敗しても**例外を投げず** `{ ok: false }` を返す。
+     * 以前は戻り値を捨てていたので try/catch には何も入らず、
+     * **送れていないのに証跡が1行も残らなかった**。運用者が気づく手段が
+     * 「お客さまに言われる」しか無い状態だった。
      */
     if (emailConfigured()) {
-      try {
-        const { token } = await issueToken(user.id, "email_verify");
-        const url = `${env.APP_URL.replace(/\/$/, "")}/api/auth/verify?token=${encodeURIComponent(token)}`;
-        await sendMail({
-          to: email,
-          ...emailVerifyMail(url, EMAIL_VERIFY_TTL_HOURS),
-        });
-      } catch (err) {
-        console.error("Verification mail failed for new user:", err);
-      }
+      after(async () => {
+        try {
+          const { token } = await issueToken(user.id, "email_verify");
+          const url = `${env.APP_URL.replace(/\/$/, "")}/api/auth/verify?token=${encodeURIComponent(token)}`;
+          const res = await sendMail({
+            to: email,
+            ...emailVerifyMail(url, EMAIL_VERIFY_TTL_HOURS),
+          });
+          if (!res.ok) {
+            // 宛先そのものは載せない（監視の宛先に個人情報を流さない）。
+            reportError(new Error("Verification mail failed for new user"), {
+              where: "api:/api/auth/signup",
+            });
+          }
+        } catch (err) {
+          reportError(err, { where: "api:/api/auth/signup" });
+        }
+      });
     }
 
-    await setSessionCookie(user.id);
     return ok({ redirect: "/home" });
   } catch (err) {
     if (err instanceof ZodError) {
