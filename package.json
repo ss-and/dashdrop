@@ -8,6 +8,7 @@
     "predev": "node scripts/ensure-env.mjs && node scripts/ensure-single-dev.mjs",
     "dev": "next dev",
     "build": "node scripts/db-provider.mjs && prisma generate --schema prisma/schema.generated.prisma && NEXT_DIST_DIR=.next-build next build",
+    "vercel-build": "node scripts/db-provider.mjs && prisma generate --schema prisma/schema.generated.prisma && next build",
     "start": "NEXT_DIST_DIR=.next-build next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",

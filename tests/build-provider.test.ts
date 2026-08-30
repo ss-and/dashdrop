@@ -80,4 +80,37 @@ describe("ビルドが本番のDBに合ったクライアントを作る", () =>
     const m = /datasource\s+db\s*\{[^}]*?provider\s*=\s*"([^"]+)"/s.exec(generated);
     expect(m?.[1]).toBe("sqlite");
   });
+
+  /**
+   * Vercel は `vercel-build` があればそちらを優先する。分けてある理由:
+   *
+   * 手元の `build` は出力先を `.next-build` にずらしている（開発サーバーの
+   * `.next` を壊さないため。next.config.mjs 参照）。同じものを Vercel に
+   * 使わせると、**Vercel は `.next` を探して見つけられない**。ビルドのログは
+   * 成功で終わるのに、デプロイだけが失敗する形になる。
+   */
+  it("vercel-build がある（Vercel はこちらを使う）", () => {
+    expect(pkg.scripts["vercel-build"]).toBeTruthy();
+  });
+
+  it("vercel-build は出力先をずらさない", () => {
+    expect(pkg.scripts["vercel-build"]).not.toContain("NEXT_DIST_DIR");
+  });
+
+  /** 本番用のクライアントを作る仕組みは、こちらにも通っていること。 */
+  it("vercel-build も db-provider.mjs を通す", () => {
+    const b = pkg.scripts["vercel-build"];
+    expect(b).toContain("db-provider.mjs");
+    expect(b).toContain("--schema prisma/schema.generated.prisma");
+    expect(b).not.toMatch(/prisma generate(?!\s+--schema)/);
+  });
+
+  /**
+   * マイグレーションはビルドに入れない。Vercel はプレビューのデプロイでも
+   * `vercel-build` を走らせるので、入れると**プレビューが本番のDBに
+   * migrate deploy を打つ**。適用は `npm run db:deploy` で明示的に行う。
+   */
+  it("vercel-build はマイグレーションを走らせない", () => {
+    expect(pkg.scripts["vercel-build"]).not.toContain("migrate");
+  });
 });
