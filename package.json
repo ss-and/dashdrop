@@ -7,7 +7,7 @@
     "ensure-env": "node scripts/ensure-env.mjs",
     "predev": "node scripts/ensure-env.mjs && node scripts/ensure-single-dev.mjs",
     "dev": "next dev",
-    "build": "prisma generate && NEXT_DIST_DIR=.next-build next build",
+    "build": "node scripts/db-provider.mjs && prisma generate --schema prisma/schema.generated.prisma && NEXT_DIST_DIR=.next-build next build",
     "start": "NEXT_DIST_DIR=.next-build next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",

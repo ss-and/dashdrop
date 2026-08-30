@@ -59,3 +59,6 @@ _*.mjs
 # テストとして書き直すこと。
 tests/zzprobe*
 tests/*.scratch.test.ts
+
+# 負荷計測の使い捨てDB
+/prisma/bench.db
