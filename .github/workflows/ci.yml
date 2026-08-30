@@ -34,7 +34,25 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        # `npm ci` ではなく `npm install`。
+        #
+        # sharp（Next.js が画像最適化に使う任意の依存）は環境ごとに別パッケージを
+        # 持ち、npm 11 が書き出す package-lock.json には**実行環境ぶんしか
+        # 記録されない**。実際、いまのロックに入っている sharp は
+        #   node_modules/@img/sharp-darwin-arm64
+        #   node_modules/@img/sharp-libvips-darwin-arm64
+        # の2つだけで、Linux 版は1つも無い。これを Linux の `npm ci` に渡せば
+        # 「@img/sharp-linux-x64 が lock file に無い」で必ず落ちる。
+        # 逆向きも同じで、手元でも `npm ci` は @emnapi の食い違いで通らない。
+        #
+        # ここは判断を1つした: **再現性より、CIが実際に走ることを採る。**
+        # 実際、この行が `npm ci` だったせいで CI は10日間ずっと9秒で死んでいて、
+        # 型もテストもビルドも1度も走っていなかった。赤いまま放置されたCIは
+        # 誰も見なくなるので、無いCIより悪い。
+        #
+        # 直接の依存はロックで固定されたままなので、失うのは推移的依存の
+        # 厳密な再現だけ。戻すなら、sharp を外すか npm の該当の挙動が直ってから。
+        run: npm install --no-audit --no-fund
 
       - name: Generate Prisma client
         # Types across the app come from the generated client, so this has to
