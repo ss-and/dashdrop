@@ -10,7 +10,7 @@ import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { issueToken, EMAIL_VERIFY_TTL_HOURS } from "@/lib/auth-tokens";
 import { sendMail, emailVerifyMail } from "@/lib/email";
-import { consume, retryMessage, EMAIL_SEND_RULE } from "@/lib/rate-limit";
+import { consume, reset, retryMessage, EMAIL_SEND_RULE } from "@/lib/rate-limit";
 
 export const POST = withAuth(async (_req, { user }) => {
   const row = await db.user.findUnique({
@@ -31,6 +31,17 @@ export const POST = withAuth(async (_req, { user }) => {
     to: row.email,
     ...emailVerifyMail(url, EMAIL_VERIFY_TTL_HOURS),
   });
-  if (!res.ok) return fail(res.error, 502);
+  if (!res.ok) {
+    /*
+     * 送れなかったぶんは枠を返す。
+     *
+     * consume() は送信の**前**に呼ぶ（叩かれる回数そのものを抑えるため）ので、
+     * 失敗しても1回ぶん減る。運営側の不具合で5回失敗した人は、6回目に
+     * 「60分後に再度お試しください」で締め出される——**唯一の出口が閉じる**。
+     * 実際に手で踏んだ経路なので、ここは返す。
+     */
+    await reset(`verify:${row.id}`);
+    return fail(res.error, 502);
+  }
   return ok({ sent: true });
 });

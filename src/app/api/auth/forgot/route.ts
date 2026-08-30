@@ -11,7 +11,13 @@ import { db } from "@/lib/db";
 import { ok, fail } from "@/lib/api";
 import { env } from "@/lib/env";
 import { issueToken, PASSWORD_RESET_TTL_MIN } from "@/lib/auth-tokens";
-import { sendMail, passwordResetMail } from "@/lib/email";
+import {
+  sendMail,
+  passwordResetMail,
+  emailConfigured,
+  MAIL_UNAVAILABLE,
+} from "@/lib/email";
+import { reportError } from "@/lib/observability";
 import {
   consume,
   consumeOptional,
@@ -42,6 +48,20 @@ export async function POST(req: Request) {
       return fail(`送信の回数が多すぎます。${retryMessage(retryAt)}`, 429);
     }
 
+    /*
+     * 送信手段そのものが無いときは、**登録の有無を調べる前に**同じことを返す。
+     *
+     * 順序が肝。以前は「登録があった → 送信に失敗した → 502」という形だったので、
+     * 登録済みのアドレスだけがエラーになり、**そのアドレスが登録済みかどうかを
+     * 外から判定できた**（このファイルが ALWAYS で防ごうとしていた、まさにそれ）。
+     * しかも利用者から見ると応答が逆で、本物の顧客だけがエラー画面に当たる。
+     *
+     * 送信手段の有無はアカウントと関係が無いので、ここで返すぶんには漏れない。
+     */
+    if (!emailConfigured()) {
+      return ok({ message: MAIL_UNAVAILABLE });
+    }
+
     const user = await db.user.findUnique({ where: { email } });
     if (user) {
       const { token } = await issueToken(user.id, "password_reset");
@@ -49,12 +69,14 @@ export async function POST(req: Request) {
       const res = await sendMail({ to: user.email, ...passwordResetMail(url, PASSWORD_RESET_TTL_MIN) });
       if (!res.ok) {
         /*
-         * ここは伝える。送れていないのに「送りました」と言うと、利用者は
-         * 届かないメールを待ち続けることになる。誰宛かは明かさないので、
-         * 利用者名簿は漏れない。
+         * 設定はあるのに1通が落ちた場合。ここで応答を変えると、上と同じ形で
+         * 名簿が漏れる（落ちるのは登録済みのときだけなので）。
+         * 利用者には同じ文面を返し、**運用者にだけ**知らせる。届かなかった人は
+         * ALWAYS の「数分待っても届かない場合は」に従うことになる。
          */
-        console.error("Password reset mail failed for a user");
-        return fail(res.error, 502);
+        reportError(new Error("Password reset mail failed"), {
+          where: "api:/api/auth/forgot",
+        });
       }
     }
 

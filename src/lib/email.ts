@@ -53,13 +53,22 @@ export function resetMailTransport(): void {
   cached = null;
 }
 
+/**
+ * 送れなかったときに、**利用者に見せてよい**文面。
+ *
+ * 以前は「メールの送信設定（SMTP_HOST / SMTP_USER）がされていないため…」を
+ * そのまま画面に出していた。受け取るのは経理事務の方で、環境変数名を読んでも
+ * できることは何も無い。しかも**自分の入力が悪いのか**と思って黙って閉じる。
+ * 原因は運営側にあり、利用者の操作では直らない——それが伝わる文面にする。
+ */
+export const MAIL_UNAVAILABLE =
+  "ただいまメールをお送りできません。こちらの不具合です。表とグラフはそのままお使いいただけますので、少し時間をおいてからお試しください。";
+
 export async function sendMail(input: MailInput): Promise<MailResult> {
   if (!emailConfigured()) {
-    return {
-      ok: false,
-      error:
-        "メールの送信設定（SMTP_HOST / SMTP_USER）がされていないため、メールを送れませんでした。",
-    };
+    // 運用者向けの理由はログに残す。画面には出さない。
+    console.error("Mail send skipped: SMTP_HOST / SMTP_USER are not configured");
+    return { ok: false, error: MAIL_UNAVAILABLE };
   }
   try {
     await transporter().sendMail({
