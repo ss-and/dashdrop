@@ -1,362 +1,181 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
-import { Card, CardBody } from "@/components/ui/Card";
-import { Badge } from "@/components/ui/Badge";
-import { CollectionIcon, NavIcon } from "@/components/app/icons";
+import { LiveDemo } from "@/components/marketing/LiveDemo";
+import { demoSheet } from "@/lib/demo-sample";
+import { buildDemoDashboard } from "@/lib/demo-pipeline";
+import { WIDGET_TYPES } from "@/lib/widget-builder";
 
 /**
- * DashDrop landing page (site root "/"). Public, server component.
- * No stock imagery — the "product mock" is built entirely from CSS/SVG.
+ * トップページ（サイトのルート "/"）。公開・サーバーコンポーネント。
+ *
+ * ## 何を変えたのか、なぜか
+ *
+ * 前の版は、SaaS のLPとして完全に定型だった:
+ *
+ *   バッジ → 見出しの末尾だけ色付き → 段落 → ボタン2つ →「クレジットカード不要」
+ *   → 手描きの製品モック → アイコン付き4機能グリッド → 番号付き3ステップ
+ *   → 中央寄せのCTA帯 → アイコン付き安心材料3つ
+ *
+ * どれも中身とは無関係の器で、**どの製品にも貼り替えられる**。実際、
+ * 利用者からの指摘は「AI感が強すぎる」だった。正しい。
+ *
+ * 直し方は、飾りを別の飾りに替えることではない。**製品そのものを前に出す**。
+ * この製品の約束は1つ「Excelを置いたらダッシュボードが出る」なので、
+ * それを絵ではなく**動かして**置く。手描きのモックは消した——数字が固定で、
+ * 中身が変われば必ず実物と食い違い、しかも見た人は結局ためさないと
+ * 確かめられなかった。
+ *
+ * 見本の組み立ては**このサーバーコンポーネントの中で**行う。JavaScript が
+ * 動く前から図表が出るし、`xlsx`（900KB）は最初の読み込みに入らない。
+ * 置かれたファイルを読むときだけ、ブラウザ側で動的に読み込む。
  */
-
-/* --- Faux product screenshot: spreadsheet grid + KPI row + sparkline --- */
-function ProductMock() {
-  const rows = [
-    { c: "田中商事", s: "対応済", n: "¥128,000", tone: "success" as const },
-    { c: "山田工業", s: "対応中", n: "¥86,400", tone: "warning" as const },
-    { c: "佐藤フーズ", s: "新規", n: "¥54,200", tone: "info" as const },
-    { c: "鈴木物流", s: "対応済", n: "¥212,900", tone: "success" as const },
-  ];
-  // Weekly bars (relative heights, earthy khaki)
-  const bars = [42, 58, 47, 71, 63, 88, 76];
-
-  return (
-    <div className="rounded-lg border border-ink-line bg-paper-raised p-2 shadow-raised">
-      {/* window chrome */}
-      <div className="flex items-center gap-1.5 px-2 py-1.5">
-        <span className="h-2.5 w-2.5 rounded-full bg-ink-line" />
-        <span className="h-2.5 w-2.5 rounded-full bg-ink-line" />
-        <span className="h-2.5 w-2.5 rounded-full bg-ink-line" />
-        <span className="ml-3 flex items-center gap-1.5 text-2xs text-ink-faint">
-          <NavIcon name="table" className="h-3 w-3" />
-          問い合わせ管理.xlsx
-        </span>
-      </div>
-
-      <div className="grid gap-2 rounded-md bg-paper p-2.5 sm:grid-cols-5">
-        {/* KPI row */}
-        <div className="grid grid-cols-3 gap-2 sm:col-span-5">
-          {[
-            { label: "今週の問い合わせ", value: "34", delta: "+12%" },
-            { label: "対応完了率", value: "82%", delta: "+5%" },
-            { label: "平均対応時間", value: "3.2h", delta: "-8%" },
-          ].map((k) => (
-            <div
-              key={k.label}
-              className="rounded-md border border-ink-line bg-paper-raised px-3 py-2"
-            >
-              <p className="truncate text-2xs text-ink-muted">{k.label}</p>
-              <div className="mt-0.5 flex items-baseline gap-1.5">
-                <span className="text-lg font-semibold text-ink">
-                  {k.value}
-                </span>
-                <span className="text-2xs font-medium text-success">
-                  {k.delta}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Spreadsheet grid */}
-        <div className="overflow-hidden rounded-md border border-ink-line bg-paper-raised sm:col-span-3">
-          <div className="grid grid-cols-[1.4fr_0.9fr_1fr] border-b border-ink-line bg-paper-sunken text-2xs font-medium text-ink-muted">
-            <div className="px-2.5 py-1.5">顧客</div>
-            <div className="px-2.5 py-1.5">状態</div>
-            <div className="px-2.5 py-1.5 text-right">金額</div>
-          </div>
-          {rows.map((r, i) => (
-            <div
-              key={r.c}
-              className={`grid grid-cols-[1.4fr_0.9fr_1fr] items-center text-2xs ${
-                i % 2 ? "bg-paper" : "bg-paper-raised"
-              }`}
-            >
-              <div className="truncate px-2.5 py-1.5 text-ink">{r.c}</div>
-              <div className="px-2.5 py-1.5">
-                <Badge tone={r.tone} variant="soft" className="px-1.5 py-0">
-                  {r.s}
-                </Badge>
-              </div>
-              <div className="px-2.5 py-1.5 text-right font-mono text-ink-soft">
-                {r.n}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Weekly performance sparkline (bars + area) */}
-        <div className="rounded-md border border-ink-line bg-paper-raised p-2.5 sm:col-span-2">
-          <p className="text-2xs text-ink-muted">週間パフォーマンス</p>
-          <div className="mt-2 flex h-20 items-end gap-1.5">
-            {bars.map((h, i) => (
-              <div
-                key={i}
-                className="flex-1 rounded-sm bg-khaki-400"
-                style={{ height: `${h}%`, opacity: 0.55 + i * 0.06 }}
-              />
-            ))}
-          </div>
-          {/* thin area line under the bars */}
-          <svg
-            viewBox="0 0 100 20"
-            preserveAspectRatio="none"
-            className="mt-1 h-5 w-full"
-            aria-hidden="true"
-          >
-            <polyline
-              points="0,14 16,10 33,12 50,6 66,8 83,3 100,5"
-              fill="none"
-              className="stroke-khaki-600"
-              strokeWidth="1.4"
-            />
-          </svg>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const FEATURES = [
-  {
-    icon: "upload",
-    title: "Excel / CSV 連携",
-    body: "手元のファイルをアップロードするだけで即テーブル化。整えたデータはいつでも Excel（.xlsx）に書き出せます。",
-  },
-  {
-    icon: "table",
-    title: "メタデータ・データベース",
-    body: "型付きフィールドで、表計算がそのまま構造化データベースに。列ごとの意味をシステムが理解します。",
-  },
-  {
-    icon: "dashboard",
-    title: "週間パフォーマンス・ダッシュボード",
-    body: "問い合わせやタスクの動きをひと目で可視化。今週どう動いたかが数字でわかります。",
-  },
-  {
-    icon: "inbox",
-    title: "顧客問い合わせ & タスク管理",
-    body: "問い合わせ・タスク用のテンプレートを用意。ゼロから設計せず、すぐに運用を始められます。",
-  },
-];
-
-const STEPS = [
-  {
-    n: "1",
-    icon: "upload",
-    title: "取り込む",
-    body: "Excel / CSV をアップロード。既存の管理表がそのまま出発点になります。",
-  },
-  {
-    n: "2",
-    icon: "settings",
-    title: "整える",
-    body: "フィールドに型を付けて、問い合わせ・タスクのテンプレートで形を整えます。",
-  },
-  {
-    n: "3",
-    icon: "dashboard",
-    title: "ひと目で把握",
-    body: "週間ダッシュボードで、経営の数字とお客様対応の状況をまとめて確認。",
-  },
-];
-
-const TRUST = [
-  {
-    icon: "sparkles",
-    title: "シンプルな料金",
-    body: "わかりやすい3プラン。使う分だけ、無理なく。",
-  },
-  {
-    icon: "check-square",
-    title: "データはあなたのもの",
-    body: "取り込んだデータの所有権はお客様に。囲い込みません。",
-  },
-  {
-    icon: "download",
-    title: "いつでもエクスポート",
-    /*
-     * 「Excel / CSV に書き出し」と書いていたが、CSV で書き出す経路は
-     * この製品に無い（src/app/api/export/[collectionId]/route.ts は
-     * .xlsx 固定で、text/csv を返すコードはどこにも存在しない）。
-     * 取り込みは CSV も受けるので、**入口と出口を混ぜない**書き方にする。
-     * 料金ページ（src/lib/plans.ts の features）は元々
-     *「Excel（.xlsx）への書き出し」と正しく書いてあり、LP だけが古かった。
-     */
-    body: "取り込みは Excel / CSV、書き出しは Excel（.xlsx）。持ち出しは自由。",
-  },
-];
-
 export default function LandingPage() {
+  // 製品と同じ関数で組み立てる。ここで見えるものは、登録後に見えるものと同じ。
+  const demo = buildDemoDashboard(demoSheet());
+
   return (
     <div className="animate-fade-in">
-      {/* ---------------- HERO ---------------- */}
-      <section className="mx-auto max-w-content px-4 pb-16 pt-16 sm:px-6 sm:pt-20 lg:px-8">
-        <div className="grid items-center gap-12 lg:grid-cols-2">
-          <div>
-            <Badge tone="khaki" variant="soft" className="mb-5">
-              中小企業の経営者向け
-            </Badge>
-            {/* 44px, not 48: at 48 the first line (12 full-width characters)
-                overruns the hero column and strands 「で、」 on its own line. */}
-            <h1 className="text-3xl font-semibold leading-tight tracking-tight text-ink sm:text-4xl lg:text-[2.75rem]">
-              スプレッドシート感覚で、
-              <br className="hidden sm:block" />
-              経営の数字とお客様対応を
-              <span className="text-khaki-600">ひとつに。</span>
-            </h1>
-            <p className="mt-5 max-w-xl text-base leading-relaxed text-ink-soft sm:text-lg">
-              問い合わせ・タスク・週間パフォーマンスを、使い慣れた Excel
-              連携で管理。導入のための特別な準備はいりません。今の管理表のまま、経営の全体像がひと目でわかります。
-            </p>
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Link href="/signup">
-                <Button size="lg" className="w-full sm:w-auto">
-                  無料で始める
-                </Button>
+      {/* ───────────────── 冒頭 ＋ 実物 ───────────────── */}
+      <section className="mx-auto max-w-content px-4 pb-14 pt-14 sm:px-6 sm:pt-16 lg:px-8">
+        <div className="max-w-2xl">
+          <h1 className="text-3xl font-semibold leading-[1.3] tracking-tight text-ink sm:text-4xl">
+            その Excel を、そのまま置いてください。
+          </h1>
+          <p className="mt-5 text-base leading-relaxed text-ink-soft sm:text-lg">
+            列の意味を読み取って、ダッシュボードにします。設定も、学習も、
+            テンプレート選びも要りません。
+            <span className="text-ink">
+              　下の画面は説明用の絵ではなく、いま動いている本物です。
+            </span>
+          </p>
+          <div className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-3">
+            <Link href="/signup">
+              <Button size="lg">無料で始める</Button>
+            </Link>
+            <span className="text-sm text-ink-muted">
+              クレジットカード不要・
+              <Link
+                href="/pricing"
+                className="text-khaki-700 underline underline-offset-2 hover:text-khaki-600"
+              >
+                料金を見る
               </Link>
-              {/* 「デモを見る」はログイン画面に飛ばしていただけで、デモ口座の
-                  認証情報が画面に印刷されていたから成立していた導線だった。
-                  実体が無い誘い文句は出さない。 */}
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-9">
+          <LiveDemo
+            initial={demo.computed}
+            initialRowCount={demo.rowCount}
+            initialFieldCount={demo.fieldCount}
+          />
+        </div>
+      </section>
+
+      {/* ───────────────── 何が起きているのか ───────────────── */}
+      <section className="border-t border-ink-line bg-paper-raised">
+        <div className="mx-auto max-w-content px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
+          <div className="grid gap-10 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] lg:gap-14">
+            <div className="max-w-2xl">
+              <h2 className="text-2xl font-semibold tracking-tight text-ink">
+                置いたあと、何をしているか
+              </h2>
+              <div className="mt-4 flex flex-col gap-4 text-base leading-relaxed text-ink-soft">
+                <p>
+                  まず1列ずつ中身を読みます。「受注日」は日付、「金額」は通貨、
+                  「担当」は繰り返しの少ない分類。
+                  列名だけで決めると、<span className="text-ink">案件IDでドーナツを描いて全部1件のスライスにしたり、空の数式列を合計してゼロを並べたり</span>
+                  します。1行読めば分かることを、読まずに推測しないようにしています。
+                </p>
+                <p>
+                  そのうえで、この表で意味を持つ図表だけを選びます。
+                  {WIDGET_TYPES.length}種類ありますが、全部は出しません。
+                  日付が無ければ推移は描かないし、
+                  <span className="text-ink">当たらない図表は枠ごと出しません</span>
+                  ——空の枠は、無いより悪いからです。
+                </p>
+                <p>
+                  同じファイルなら、何度置いても同じ画面になります。
+                  生成のたびに答えが変わる道具は、経営の判断には使えません。
+                </p>
+              </div>
+            </div>
+
+            <div className="lg:pt-1">
+              <h3 className="font-mono text-2xs uppercase tracking-wider text-ink-faint">
+                できること / できないこと
+              </h3>
+              <dl className="mt-4 divide-y divide-ink-line border-y border-ink-line">
+                {[
+                  ["取り込み", "Excel（.xlsx / .xls）と CSV。1ファイル 4MB まで"],
+                  ["書き出し", "Excel（.xlsx）。取り込んだデータは持ち出し自由"],
+                  ["共有", "ログイン不要の公開リンク。社外の方にそのまま渡せます"],
+                  ["通知", "しきい値を超えたら Slack かアプリ内へ"],
+                  ["定期の集計", "15分ごとに自動で評価"],
+                ].map(([k, v]) => (
+                  <div key={k} className="grid gap-1 py-3 sm:grid-cols-[7rem_1fr] sm:gap-3">
+                    <dt className="text-sm font-medium text-ink">{k}</dt>
+                    <dd className="text-sm leading-relaxed text-ink-soft">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="mt-4 text-sm leading-relaxed text-ink-muted">
+                リアルタイム連携、権限の細かい設計、BIツール並みの自由なグラフ作成は
+                ありません。そこが必要な規模になったら、データを持ち出して
+                別の道具へ移ってください。
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ───────────────── 外に出さない ───────────────── */}
+      <section className="mx-auto max-w-content px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
+        <div className="max-w-2xl">
+          <h2 className="text-2xl font-semibold tracking-tight text-ink">
+            表を、外に出さずに済ませる
+          </h2>
+          <p className="mt-4 text-base leading-relaxed text-ink-soft">
+            売上や取引先の一覧をチャットに貼るのが気持ち悪い、というのは正しい
+            感覚です。
+            <span className="text-ink">
+              上のデモに置いたファイルは、実際にどこにも送っていません
+            </span>
+            ——読み取りも集計も、すべてお使いの端末の中で終わっています。
+            ページの読み込み後は通信も発生していないので、
+            開発者ツールの通信欄で確かめられます。
+          </p>
+          <p className="mt-4 text-base leading-relaxed text-ink-soft">
+            登録して使う場合は、取り込んだデータを保管します。所有権はお客様のもので、
+            いつでも Excel に書き出せます。囲い込みません。
+          </p>
+        </div>
+      </section>
+
+      {/* ───────────────── 締め ───────────────── */}
+      <section className="border-t border-ink-line bg-paper-raised">
+        <div className="mx-auto max-w-content px-4 py-14 sm:px-6 lg:px-8">
+          <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+            <div className="max-w-xl">
+              <h2 className="text-2xl font-semibold tracking-tight text-ink">
+                今の管理表のまま、はじめられます
+              </h2>
+              <p className="mt-3 text-base leading-relaxed text-ink-soft">
+                作り直しも、移行作業もありません。いつも開いているファイルを
+                1つ置くところからです。
+              </p>
+            </div>
+            <div className="flex flex-none flex-wrap gap-3">
+              <Link href="/signup">
+                <Button size="lg">無料で始める</Button>
+              </Link>
               <Link href="/pricing">
-                <Button variant="outline" size="lg" className="w-full sm:w-auto">
+                <Button variant="outline" size="lg">
                   料金を見る
                 </Button>
               </Link>
             </div>
-            <p className="mt-4 text-sm text-ink-muted">
-              クレジットカード不要・数分でセットアップ
-            </p>
-          </div>
-
-          <div className="lg:pl-4">
-            <ProductMock />
-          </div>
-        </div>
-      </section>
-
-      {/* ---------------- FEATURES ---------------- */}
-      <section
-        id="features"
-        className="scroll-mt-20 border-t border-ink-line bg-paper-raised"
-      >
-        <div className="mx-auto max-w-content px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
-          <div className="max-w-2xl">
-            <h2 className="text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
-              表計算の手軽さ、データベースの確かさ
-            </h2>
-            <p className="mt-3 text-base leading-relaxed text-ink-soft">
-              使い慣れた表の形はそのままに、その裏側をきちんと構造化。経営に必要な数字とお客様対応を、ひとつの画面に集約します。
-            </p>
-          </div>
-
-          <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-            {FEATURES.map((f) => (
-              <Card key={f.title} className="h-full">
-                <CardBody>
-                  <div className="flex h-10 w-10 items-center justify-center rounded-md bg-khaki-100 text-khaki-700">
-                    <CollectionIcon name={f.icon} className="h-5 w-5" />
-                  </div>
-                  <h3 className="mt-4 text-base font-semibold text-ink">
-                    {f.title}
-                  </h3>
-                  <p className="mt-2 text-sm leading-relaxed text-ink-soft">
-                    {f.body}
-                  </p>
-                </CardBody>
-              </Card>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ---------------- HOW IT WORKS ---------------- */}
-      <section className="mx-auto max-w-content px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
-        <div className="max-w-2xl">
-          <h2 className="text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
-            3ステップで動き出す
-          </h2>
-          <p className="mt-3 text-base leading-relaxed text-ink-soft">
-            取り込んで、整えて、把握する。むずかしい初期設定はありません。
-          </p>
-        </div>
-
-        <div className="mt-10 grid gap-5 md:grid-cols-3">
-          {STEPS.map((s, i) => (
-            <div key={s.n} className="relative">
-              <Card className="h-full">
-                <CardBody>
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-khaki-500 text-sm font-semibold text-white">
-                      {s.n}
-                    </span>
-                    <NavIcon
-                      name={s.icon}
-                      className="h-5 w-5 text-khaki-600"
-                    />
-                    <h3 className="text-base font-semibold text-ink">
-                      {s.title}
-                    </h3>
-                  </div>
-                  <p className="mt-3 text-sm leading-relaxed text-ink-soft">
-                    {s.body}
-                  </p>
-                </CardBody>
-              </Card>
-              {i < STEPS.length - 1 && (
-                <span
-                  aria-hidden="true"
-                  className="absolute -right-3 top-1/2 hidden -translate-y-1/2 text-ink-faint md:block"
-                >
-                  →
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ---------------- CLOSING CTA BAND ---------------- */}
-      <section className="mx-auto max-w-content px-4 pb-16 sm:px-6 lg:px-8">
-        <div className="rounded-lg border border-khaki-200 bg-khaki-50 px-6 py-12 text-center sm:px-12 sm:py-16">
-          <h2 className="text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
-            今の管理表のまま、はじめられます
-          </h2>
-          <p className="mx-auto mt-3 max-w-xl text-base leading-relaxed text-ink-soft">
-            無料プランで、経営の数字とお客様対応がひとつになる感覚を試してみてください。
-          </p>
-          <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-            <Link href="/signup">
-              <Button size="lg" className="w-full sm:w-auto">
-                無料で始める
-              </Button>
-            </Link>
-            <Link href="/pricing">
-              <Button variant="secondary" size="lg" className="w-full sm:w-auto">
-                料金を見る
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* ---------------- TRUST SIGNALS ---------------- */}
-      <section className="border-t border-ink-line bg-paper-raised">
-        <div className="mx-auto max-w-content px-4 py-12 sm:px-6 lg:px-8">
-          <div className="grid gap-8 sm:grid-cols-3">
-            {TRUST.map((t) => (
-              <div key={t.title} className="flex gap-3">
-                <div className="mt-0.5 flex h-9 w-9 flex-none items-center justify-center rounded-md bg-khaki-100 text-khaki-700">
-                  <NavIcon name={t.icon} className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-semibold text-ink">{t.title}</h3>
-                  <p className="mt-1 text-sm leading-relaxed text-ink-soft">
-                    {t.body}
-                  </p>
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       </section>
