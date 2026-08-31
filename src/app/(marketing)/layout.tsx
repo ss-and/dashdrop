@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Logo } from "@/components/ui/Logo";
 import { Button } from "@/components/ui/Button";
+import { MobileNav } from "@/components/marketing/MobileNav";
 
 /**
  * Public marketing chrome (landing + pricing). No auth guard, no app sidebar —
@@ -49,9 +50,16 @@ export default function MarketingLayout({
             >
               ログイン
             </Link>
-            <Link href="/signup">
+            {/* 狭い画面では「無料で始める」を出さない。メニューの中に置く。 */}
+            <Link href="/signup" className="hidden sm:block">
               <Button size="sm">無料で始める</Button>
             </Link>
+            {/*
+             * 768px 未満では上の並びが `hidden md:flex` で**1つも出ていなかった**。
+             * スマートフォンで開いた人は最下部まで送らないと何も選べない。
+             * 日本の中小企業では、最初にスマートフォンで開かれるほうが多い。
+             */}
+            <MobileNav />
           </div>
         </nav>
       </header>

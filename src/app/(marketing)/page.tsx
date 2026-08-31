@@ -2,6 +2,7 @@ import Link from "next/link";
 import { LiveDemo } from "@/components/marketing/LiveDemo";
 import { Aurora } from "@/components/marketing/Aurora";
 import { GridField } from "@/components/marketing/GridField";
+import { DashboardGrid } from "@/components/dashboard/DashboardGrid";
 import { Highlights } from "@/components/marketing/Highlights";
 import { Reveal } from "@/components/marketing/Reveal";
 import { demoSheet } from "@/lib/demo-sample";
@@ -78,7 +79,8 @@ export default function LandingPage() {
           }}
         />
         <div className="relative mx-auto max-w-content border-ink-line px-5 sm:border-x sm:px-10 lg:px-14">
-          <section className="pb-20 pt-24 sm:pb-32 sm:pt-40">
+          <section className="grid items-center gap-12 pb-14 pt-12 sm:pb-28 sm:pt-24 lg:grid-cols-[minmax(0,1.18fr)_minmax(0,1fr)] lg:gap-10 lg:pb-32 lg:pt-28">
+            <div>
             {/*
              * ここには「217行を読み、7点の図表を選ぶまで 19ミリ秒」と
              * 出していた。**伝わらない**——相手は従業員20〜50人の会社の
@@ -93,21 +95,27 @@ export default function LandingPage() {
               下の画面は、いま動いています
             </p>
 
-            <h1 className="mt-8 font-display text-[2.5rem] font-normal leading-[1.26] tracking-[-0.045em] text-ink sm:text-[3.5rem] lg:text-[4.25rem]">
+            <h1 className="mt-6 font-display text-[2.125rem] font-normal leading-[1.3] tracking-[-0.04em] text-ink sm:mt-8 sm:text-[3.25rem] sm:leading-[1.26] sm:tracking-[-0.045em] lg:text-[2.375rem] xl:text-[2.875rem]">
+              {/*
+               * 改行は広い画面だけ。狭い画面で入れると
+               *「そのまま／置いてください。」と割れて3行のばらけた形になる。
+               */}
               その Excel を、
-              <br />
+              <br className="hidden sm:block" />
               そのまま置いてください。
             </h1>
 
-            <p className="mt-9 max-w-[54ch] text-lg font-light leading-[1.95] text-ink">
+            {/*
+             * 5行あった本文を2行に落とした。指摘は「テキストの量も気になる」で、
+             * 実際スマートフォンでは本文だけで5行になり、CTA が画面の外へ出ていた。
+             * 言うことを増やすほど、どれも読まれなくなる。
+             */}
+            <p className="mt-7 max-w-[30ch] text-base font-light leading-[1.9] text-ink sm:mt-9 sm:max-w-[34ch] sm:text-lg">
               列の意味を読み取って、ダッシュボードにします。
-              <span className="text-ink-faint">
-                　設定も、学習も、テンプレート選びも要りません。
-                登録もインストールも不要で、いますぐ下で試せます。
-              </span>
+              <span className="text-ink-faint">　設定も、学習も要りません。</span>
             </p>
 
-            <div className="mt-12 flex flex-wrap items-center gap-3">
+            <div className="mt-9 flex flex-wrap items-center gap-3 sm:mt-12">
               <Link
                 href="/signup"
                 className="inline-flex items-center gap-1.5 rounded bg-khaki-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-khaki-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-khaki-500"
@@ -126,6 +134,25 @@ export default function LandingPage() {
                   ›
                 </span>
               </Link>
+            </div>
+            </div>
+
+            {/*
+             * 右の列。長らく**空**で、左に文字・右に色の面だけという偏った
+             * 紙面だった。飾りの絵を足すと最初に言われた「中身と無関係の器」に
+             * 戻るので、置くのは**下のデモと同じ計算結果**——実物そのもの。
+             *
+             * 絶対配置で重ねたら見出しの上に乗って文字が読めなくなったので、
+             * 2段組にした。画面の外へ食み出させるのは、全部を見せないことで
+             * 「続きがある」と伝えるため。
+             *
+             * 狭い画面では出さない。すぐ下に本物が丸ごと出るので二重になり、
+             * 縦だけが伸びる。
+             */}
+            <div className="pointer-events-none hidden lg:block">
+              <div className="w-[calc(100%+7rem)] rounded-lg border border-ink-line bg-paper-raised/95 p-3 shadow-[0_28px_70px_-24px_rgba(28,27,23,0.32)] backdrop-blur-sm xl:w-[calc(100%+10rem)]">
+                <DashboardGrid computed={demo.computed.slice(0, 6)} />
+              </div>
             </div>
           </section>
         </div>
