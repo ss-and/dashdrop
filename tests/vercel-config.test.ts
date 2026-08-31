@@ -23,8 +23,20 @@ const config = JSON.parse(readFileSync("vercel.json", "utf8")) as {
 };
 
 describe("① 実行リージョン", () => {
-  it("東京（hnd1）で動かす", () => {
-    expect(config.regions).toEqual(["hnd1"]);
+  /**
+   * DBと同じ場所に置くこと。ここが一番効く。
+   *
+   * 最初は関数を東京（hnd1）に、DBは Neon の既定でバージニア（us-east-1）に
+   * 作られた。**これが一番遅い組み合わせ**で、1画面が7〜14クエリ投げるたびに
+   * 太平洋を往復する（150ms × 14 で2秒）。利用者に近いかどうかより、
+   * **関数とDBが同じ場所にあるか**のほうが効く。
+   *
+   * Neon は東京を持っていない（cle1/iad1/pdx1/fra1/lhr1/syd1/sin1/gru1）。
+   * 最寄りのシンガポール（sin1 = ap-southeast-1）に両方を揃えた。
+   * 日本からは片道 約70ms が1回だけ乗る。静的ファイルは東京のCDNから出る。
+   */
+  it("DBと同じシンガポール（sin1）で動かす", () => {
+    expect(config.regions).toEqual(["sin1"]);
   });
 });
 
