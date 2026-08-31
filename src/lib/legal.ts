@@ -27,11 +27,11 @@ export const SERVICE_NAME = "DashDrop";
  * 有料で提供する場合、ここが空のまま公開することはできない。
  */
 export const COMMERCE_ENTRIES: LegalEntry[] = [
-  { label: "販売事業者", value: "", required: true },
-  { label: "運営統括責任者", value: "", required: true },
+  { label: "販売事業者", value: "S&S合同会社", required: true },
+  { label: "運営統括責任者", value: "境野 竣介", required: true },
   { label: "所在地", value: "", required: true, note: "請求があれば遅滞なく開示する旨の記載でも可" },
   { label: "電話番号", value: "", required: true, note: "請求があれば遅滞なく開示する旨の記載でも可" },
-  { label: "メールアドレス", value: "", required: true },
+  { label: "メールアドレス", value: "ssakaino@ss-and.com", required: true },
   { label: "販売価格", value: "料金ページに記載の金額（消費税込み）", required: true },
   { label: "商品代金以外の必要料金", value: "インターネット接続に必要な通信料はお客様のご負担となります。" },
   { label: "支払方法", value: "", required: true, note: "クレジットカード決済など、実際の手段を記載" },
@@ -45,6 +45,17 @@ export const COMMERCE_ENTRIES: LegalEntry[] = [
   { label: "動作環境", value: "最新版の Google Chrome / Microsoft Edge / Safari / Firefox" },
 ];
 
+/**
+ * 「誰が運営しているか」だけを抜き出したもの。
+ *
+ * 無償で提供している間は特商法の表示義務が無い。それでも運営者と連絡先は
+ * 出す——名前も宛先も無いサービスに、自社の売上や顧客の一覧を預ける人はいない。
+ * 売り始めたら COMMERCE_ENTRIES の全項目に切り替わる。
+ */
+export const SELLER_ENTRIES: LegalEntry[] = COMMERCE_ENTRIES.filter((e) =>
+  ["販売事業者", "運営統括責任者", "メールアドレス"].includes(e.label),
+);
+
 /** 未記入の必須項目。1つでもあれば公開前の作業が残っている。 */
 export function missingCommerceEntries(): string[] {
   return COMMERCE_ENTRIES.filter((e) => e.required && e.value.trim() === "").map(
@@ -53,7 +64,7 @@ export function missingCommerceEntries(): string[] {
 }
 
 /** 問い合わせ先。規約・ポリシーの末尾に出す。 */
-export const CONTACT_EMAIL = "";
+export const CONTACT_EMAIL = "ssakaino@ss-and.com";
 
 /** 最終改定日。文面を変えたら必ず更新する。 */
 export const LEGAL_UPDATED_AT = "2026-08-20";
