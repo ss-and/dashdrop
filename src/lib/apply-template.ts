@@ -24,6 +24,7 @@ import { autoLayout, type AutoSheet } from "./widget-builder";
 import { profileFields } from "./data-profile";
 import { autoLayoutFromProfiles, type ProfiledSheet } from "./auto-layout";
 import { paletteFor } from "./palette";
+import { computeWidget } from "./aggregate";
 import { DEFAULT_INTENT, type DashboardIntent } from "./dashboard-intent";
 import type { CurrentUser } from "./auth";
 import type { AggCollection, CollectionMap } from "./aggregate";
@@ -267,6 +268,69 @@ const AUTO_PROFILE_SAMPLE = 5000;
  */
 const AUTO_DESCRIPTION = "取り込んだデータから自動作成しました。";
 
+/**
+ * 「定期支払い」が空振りする画面から、その枠を落とす。
+ *
+ * ## なぜ要るのか
+ *
+ * この図表を足すかどうかは、これまで**列の形**だけで決めていた
+ * （`detectChargeColumns` が 日付・摘要・金額 に当たる列を見つけたか）。
+ * ところが売上台帳は、まさにその形をしている——日付・得意先・金額。
+ * だから**ごく普通の売上ファイルで必ず枠が作られ、必ず空になる**。
+ *
+ * 実際に本番で通したときに出たのがこれで、180行の売上に対して
+ *
+ *   定期支払い
+ *   くり返し出ている支払いは見つかりませんでした
+ *
+ * が1枠を占めていた。売上ファイルはこの製品で一番よく置かれるものなので、
+ * 放っておくと**ほとんどの利用者の初回の画面に、空の枠が1つ混ざる**。
+ * 自動作成の最初の印象を落とす場所としては、かなり悪い。
+ *
+ * 列の形だけでは足りず、**実際に見つかるかどうか**まで見ないと判断できない。
+ * ここは自動作成の1回きりなので、既に読んである行をそのまま使える
+ * （組み立ての時点＝auto-layout には行が渡っていないので、そちらでは判断できない）。
+ *
+ * 落とすのは0件のときだけ。列が揃わないシートには元から足されないし、
+ * 1件でも見つかったシートではそのまま残る。
+ */
+function dropEmptyRecurring(
+  layout: WidgetSpec[],
+  sheets: AutoSheet[],
+  rowsBySlug: Map<string, Array<Record<string, unknown>>>,
+): WidgetSpec[] {
+  if (!layout.some((w) => w.type === "recurring")) return layout;
+
+  const now = new Date();
+  const map = new Map(
+    sheets.map((s) => [
+      s.slug,
+      {
+        slug: s.slug,
+        name: s.name,
+        fields: s.fields,
+        /*
+         * `computeWidget` は AggRecord（id と createdAt を持つ）を求めるが、
+         * 定期支払いの検出が読むのは `data` の中身だけ。ここは自動作成の
+         * 内側だけで使う写しなので、要求される形を満たす最小限を入れる。
+         */
+        records: (rowsBySlug.get(s.slug) ?? []).map((data, i) => ({
+          id: `auto-${i}`,
+          createdAt: now,
+          data,
+        })),
+      },
+    ]),
+  );
+
+  return layout.filter((w) => {
+    if (w.type !== "recurring") return true;
+    const data = computeWidget(w, map, now);
+    // 列が見つからない（notApplicable）ものは、そもそもここへ来ない。
+    return data.type === "recurring" && data.items.length > 0;
+  });
+}
+
 export async function createAutoDashboard(
   user: CurrentUser,
   opts: {
@@ -335,6 +399,11 @@ export async function createAutoDashboard(
    * 行数は上限つき——傾向を見るのに全件は要らない。
    */
   const profiled: ProfiledSheet[] = [];
+  /*
+   * 読んだ行は、組み立てのあとにもう一度使う（下の「空振りする図表を落とす」）。
+   * 同じ問い合わせを二度投げないよう、ここで持っておく。
+   */
+  const rowsBySlug = new Map<string, Array<Record<string, unknown>>>();
   for (const sheet of sheets) {
     const collection = await db.collection.findFirst({
       where: { workspaceId, slug: sheet.slug },
@@ -349,6 +418,7 @@ export async function createAutoDashboard(
     const rows = records.map(
       (r) => (r.data as Record<string, unknown>) ?? {},
     );
+    rowsBySlug.set(sheet.slug, rows);
     profiled.push({
       slug: sheet.slug,
       name: sheet.name,
@@ -359,9 +429,13 @@ export async function createAutoDashboard(
 
   // 中身が読めたときはそれを使い、読めなければ従来の型ベースに落とす。
   const intent = opts.intent ?? DEFAULT_INTENT;
-  const layout = profiled.some((p) => p.rowCount > 0)
-    ? autoLayoutFromProfiles(profiled, intent)
-    : autoLayout(sheets);
+  const layout = dropEmptyRecurring(
+    profiled.some((p) => p.rowCount > 0)
+      ? autoLayoutFromProfiles(profiled, intent)
+      : autoLayout(sheets),
+    sheets,
+    rowsBySlug,
+  );
   if (layout.length === 0) {
     throw new ApiError(
       "自動作成できる項目が見つかりませんでした。ビルダーから手動で作成してください。",
