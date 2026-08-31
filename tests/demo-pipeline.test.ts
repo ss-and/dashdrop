@@ -202,9 +202,28 @@ describe("④ トップページが、手描きのモックに戻っていない
     expect(page).not.toContain("FEATURES");
   });
 
-  /** 数は実装から数える。手で書くと必ずずれる。 */
+  /**
+   * 数は実装から数える。手で書くと必ずずれる（実際に2回ずれた）。
+   *
+   * 見る先はトップページだけではない。機能の見せ方を札の並びに変えたとき、
+   * 数の導出は Highlights.tsx へ移った。**画面に出る文言のどこにも
+   * 手書きの数字が無いこと**が守りたいことなので、両方見る。
+   */
   it("図表の種類数を文言に直接書いていない", () => {
-    expect(page).toContain("WIDGET_TYPES.length");
-    expect(page).not.toMatch(/\d+種類/);
+    const files = [
+      "src/app/(marketing)/page.tsx",
+      "src/components/marketing/Highlights.tsx",
+    ];
+    const sources = files.map((f) =>
+      readFileSync(f, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, ""),
+    );
+    // どこかで実装から数えていること。
+    expect(sources.some((s) => s.includes("WIDGET_TYPES.length"))).toBe(true);
+    // どのファイルにも、手書きの「N種類」が無いこと。
+    for (const [i, src] of sources.entries()) {
+      expect(src, files[i]).not.toMatch(/\d+種類/);
+    }
   });
 });

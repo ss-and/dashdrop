@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { LiveDemo } from "@/components/marketing/LiveDemo";
 import { Aurora } from "@/components/marketing/Aurora";
+import { Highlights } from "@/components/marketing/Highlights";
+import { Reveal } from "@/components/marketing/Reveal";
 import { demoSheet } from "@/lib/demo-sample";
 import { buildDemoDashboard } from "@/lib/demo-pipeline";
-import { WIDGET_TYPES } from "@/lib/widget-builder";
 
 /**
  * トップページ（サイトのルート "/"）。公開・サーバーコンポーネント。
@@ -140,144 +141,82 @@ export default function LandingPage() {
         </div>
       </div>
 
-      {/* ───────────────────── 実測の数字（暗い帯） ───────────────────── */}
+      {/* ───────────────────── 外に出さない（暗い帯） ───────────────────── */}
       {/*
-       * 紙面に明暗の動きを作る。参考にした紙面は、白い面が続いたあとに
-       * 濃い面へ落ちて、そこで数字を大きく見せていた。ずっと同じ明るさだと
-       * 「1枚の長い文書」に見えて、どこが節目か分からなくなる。
+       * ここを暗くする。紙面に明暗の動きが要る——ずっと同じ明るさだと
+       * 1枚の長い文書に見えて、どこが節目か分からなくなる。
+       *
+       * 数字の段は消した。5万行・23種類・15分は下のハイライトに移したので、
+       * 残しておくと同じ数字が2回出て、どちらを読めばよいのか分からなくなる。
        */}
       <div className="relative overflow-hidden bg-ink">
         <Aurora
           tone="deep"
-          className="-right-[16%] -top-[85%] h-[250%] w-[78%] rounded-[50%]"
-          opacity={0.75}
+          className="-right-[16%] -top-[85%] h-[250%] w-[78%]"
+          opacity={0.7}
         />
         <div className="relative mx-auto max-w-content border-white/10 px-5 sm:border-x sm:px-10 lg:px-14">
-          <section className="grid gap-10 py-16 sm:grid-cols-2 sm:py-24 lg:grid-cols-4">
-            {[
-              ["5万行", "1つのシートに取り込める行数"],
-              [`${WIDGET_TYPES.length}種類`, "選べる図表。当たらないものは出しません"],
-              ["15分", "しきい値を確認する間隔"],
-              ["0件", "デモでファイルを置いたときの通信"],
-            ].map(([n, note]) => (
-              <div key={note} className="flex flex-col gap-2.5">
-                <span className="text-[2.25rem] font-light leading-none tracking-[-0.03em] text-paper">
-                  {n}
-                </span>
-                <span className="max-w-[22ch] text-sm leading-relaxed text-paper/55">
-                  {note}
-                </span>
+          <section className="py-16 sm:py-28">
+            <Reveal>
+              <h2 className="max-w-[22ch] text-[1.875rem] font-light leading-[1.4] tracking-[-0.025em] text-paper sm:text-[2.5rem]">
+                表を、外に出さずに済ませる
+              </h2>
+            </Reveal>
+            <Reveal delay={100}>
+              <p className="mt-8 max-w-[30ch] text-[1.3125rem] font-semibold leading-[1.6] text-paper">
+                置いたファイルは、どこにも送っていません。
+              </p>
+            </Reveal>
+            <Reveal delay={180}>
+              <div className="mt-7 grid max-w-3xl gap-8 sm:grid-cols-2">
+                <p className="max-w-[26ch] text-sm leading-[1.9] text-paper/60">
+                  読み取りも集計も、すべてお使いの端末の中で終わっています。
+                  ページの読み込み後は通信も発生していないので、開発者ツールの
+                  通信欄で確かめられます。
+                </p>
+                <p className="max-w-[26ch] text-sm leading-[1.9] text-paper/60">
+                  登録して使う場合は取り込んだデータを保管しますが、所有権は
+                  お客様のもので、いつでも Excel に書き出せます。囲い込みません。
+                </p>
               </div>
-            ))}
+            </Reveal>
           </section>
         </div>
       </div>
 
-      {/* ───────────────────── 外に出さない ───────────────────── */}
+      {/* ───────────────────── 機能（ハイライト） ───────────────────── */}
       {/*
-       * ここには一度、実画面を切り取って色の地に重ねた「場面カード」を4枚
-       * 並べた。参考にした紙面がそうしていたため。**外した。**
+       * ここには3段落の地の文と「できること／できないこと」の一覧表が
+       * 入っていた。指摘は「機能とかだいぶわかりづらい」で、正しかった——
+       * 原因は文章量。読むのに気力が要る形だった。
        *
-       * 理由は出来。KPIの見出しが幅不足で1文字ずつ縦に折り返し、色の地は
-       * 濁った染みになり、白いカードが白い地の上に浮いて構図が成立しなかった。
-       * あちらの場面が成立するのは、1枚ごとに絵を作り込んでいるからで、
-       * 断片を置けば同じになるものではない。
-       *
-       * この製品には、切り取った絵より強いものが既にある——上で本当に
-       * 動いているダッシュボード。作り込めていない飾りを足すより、
-       * そちらに寄せるほうが正しい。
+       * apple.com を計測したら、機能の見せ方は「1つの札に考えは1つ、
+       * 主張は太字で1文、本文の幅は最大232px」だった。同じ形にする。
+       * できないことは下に短く残す（書かないと約束が膨らむ）。
        */}
-      <div className="mx-auto max-w-content border-ink-line px-5 sm:border-x sm:px-10 lg:px-14">
-        <section className="py-16 sm:py-24">
-          <h2 className="max-w-[24ch] text-[1.875rem] font-light leading-[1.45] tracking-[-0.02em] text-ink sm:text-[2.25rem]">
-            表を、外に出さずに済ませる
-          </h2>
-          <div className="mt-8 flex max-w-[52ch] flex-col gap-6 text-base font-light leading-[2] text-ink">
-            <p>
-              売上や取引先の一覧をチャットに貼るのが気持ち悪い、というのは正しい感覚です。
-              <span className="text-ink-faint">
-                　上のデモに置いたファイルは、実際にどこにも送っていません。読み取りも
-                集計も、すべてお使いの端末の中で終わっています。ページの読み込み後は
-                通信も発生していないので、開発者ツールの通信欄で確かめられます。
-              </span>
-            </p>
-            <p>
-              登録して使う場合は、取り込んだデータを保管します。
-              <span className="text-ink-faint">
-                　所有権はお客様のもので、いつでも Excel に書き出せます。囲い込みません。
-              </span>
-            </p>
-          </div>
-        </section>
-      </div>
-
-      {/* ───────────────────── 何をしているか ───────────────────── */}
-      {/*
-       * `id="features"` はヘッダの「機能」の行き先。LP を書き直したときに
-       * 元の節ごと消してしまい、**押しても何も起きないリンク**になっていた。
-       * 押した人には「壊れている」としか見えないので、id を持たせ直す。
-       */}
-      <div id="features" className="scroll-mt-16 border-y border-ink-line bg-paper-raised">
+      <div id="features" className="scroll-mt-16 border-y border-ink-line bg-paper-sunken">
         <div className="mx-auto max-w-content border-ink-line px-5 py-16 sm:border-x sm:px-10 sm:py-24 lg:px-14">
-          <h2 className="max-w-[24ch] text-[1.875rem] font-light leading-[1.45] tracking-[-0.02em] text-ink sm:text-[2.25rem]">
-            置いたあと、何をしているか
-          </h2>
-
-          <div className="mt-10 grid gap-x-14 gap-y-10 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-            <div className="flex max-w-[52ch] flex-col gap-6 text-base font-light leading-[2] text-ink">
-              <p>
-                まず1列ずつ中身を読みます。
-                <span className="text-ink-faint">
-                  「受注日」は日付、「金額」は通貨、「担当」は繰り返しの少ない分類。
-                  列名だけで決めると、案件IDでドーナツを描いて全部1件のスライスにしたり、
-                  空の数式列を合計してゼロを並べたりします。1行読めば分かることを、
-                  読まずに推測しないようにしています。
-                </span>
-              </p>
-              <p>
-                そのうえで、この表で意味を持つ図表だけを選びます。
-                <span className="text-ink-faint">
-                  {WIDGET_TYPES.length}種類ありますが、全部は出しません。日付が無ければ
-                  推移は描かないし、当たらない図表は枠ごと出しません——空の枠は、
-                  無いより悪いからです。
-                </span>
-              </p>
-              <p>
-                同じファイルなら、何度置いても同じ画面になります。
-                <span className="text-ink-faint">
-                  生成のたびに答えが変わる道具は、経営の判断には使えません。
-                </span>
-              </p>
-            </div>
-
-            <div className="lg:pt-2">
-              <h3 className="font-mono text-2xs uppercase tracking-wider text-ink-faint">
-                できること / できないこと
-              </h3>
-              <dl className="mt-5 flex flex-col">
-                {[
-                  ["取り込み", "Excel（.xlsx / .xls）と CSV。1ファイル 4MB まで"],
-                  ["書き出し", "Excel（.xlsx）。取り込んだデータは持ち出し自由"],
-                  ["共有", "ログイン不要の公開リンク。社外の方にそのまま渡せます"],
-                  ["通知", "しきい値を超えたら Slack かアプリ内へ"],
-                  ["定期の集計", "15分ごとに自動で評価"],
-                ].map(([k, v]) => (
-                  <div
-                    key={k}
-                    className="grid gap-1 border-t border-ink-line py-4 sm:grid-cols-[7.5rem_1fr] sm:gap-4"
-                  >
-                    <dt className="text-sm text-ink">{k}</dt>
-                    <dd className="text-sm leading-relaxed text-ink-faint">{v}</dd>
-                  </div>
-                ))}
-              </dl>
-              <p className="mt-6 max-w-[34ch] text-sm leading-relaxed text-ink-faint">
-                リアルタイム連携、権限の細かい設計、BIツール並みの自由なグラフ作成は
-                ありません。そこが必要な規模になったら、データを持ち出して
-                別の道具へ移ってください。
-              </p>
-            </div>
+          <Reveal>
+            <h2 className="max-w-[20ch] text-[1.875rem] font-light leading-[1.4] tracking-[-0.025em] text-ink sm:text-[2.5rem]">
+              置いたあと、何が起きるか
+            </h2>
+          </Reveal>
+          <div className="mt-10 sm:mt-12">
+            <Highlights />
           </div>
+
+          {/*
+           * できないことは、隠さず短く置く。書かないと約束が勝手に膨らみ、
+           * 期待した機能が無いと分かった時点で信用ごと落ちる。
+           */}
+          <Reveal delay={120}>
+            <p className="mt-10 max-w-[46ch] text-sm leading-[1.9] text-ink-faint">
+              <span className="text-ink">ありません：</span>
+              リアルタイム連携、権限の細かい設計、BIツール並みの自由なグラフ作成。
+              そこが必要な規模になったら、データを持ち出して別の道具へ移ってください。
+              書き出しは Excel（.xlsx）で、いつでも自由です。
+            </p>
+          </Reveal>
         </div>
       </div>
 
