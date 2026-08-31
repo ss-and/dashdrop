@@ -40,6 +40,22 @@ const REPS = ["境野", "中村", "小林", "大西"];
 
 const CHANNELS = ["直販", "代理店", "Web"];
 
+/**
+ * 得意先の所在地。
+ *
+ * これを足すまで、見本から出るのは棒とドーナツと表だけだった。中身が県名だと
+ * 分かると**日本地図**が出る（列名では判定していない。auto-layout.ts の
+ * looksLikePrefecture）。「23種類ありますが」と書いておきながら、
+ * 一番地味な3種類しか見せていないのでは、書いてあることの証明にならない。
+ */
+const PREFS = [
+  "東京都", "大阪府", "愛知県", "神奈川県", "福岡県",
+  "北海道", "兵庫県", "静岡県", "広島県", "宮城県",
+];
+
+/** 受注の段階。名前が「ステータス」系だと、段階ごとの図（ファネル）が出る。 */
+const STATUSES = ["見積", "受注", "出荷", "検収済"];
+
 /** 線形合同法。乱数ではなく「毎回同じ、それらしい散らばり」を作るための道具。 */
 function seeded(seed: number): () => number {
   let s = seed >>> 0;
@@ -57,6 +73,8 @@ export const DEMO_FIELDS: DemoSheet["fields"] = [
   { key: "qty", name: "数量", type: "number" as FieldType },
   { key: "amount", name: "金額", type: "currency" as FieldType },
   { key: "rep", name: "担当", type: "text" as FieldType },
+  { key: "pref", name: "所在地", type: "text" as FieldType },
+  { key: "status", name: "ステータス", type: "text" as FieldType },
 ];
 
 /** 何行の見本を作るか。多すぎると重く、少なすぎると図表が痩せる。 */
@@ -91,6 +109,15 @@ export function demoSheet(asOf: Date = new Date()): DemoSheet {
       const item = ITEMS[Math.floor(rnd() * ITEMS.length)];
       const rep = REPS[Math.floor(rnd() * REPS.length)];
       const channel = CHANNELS[Math.floor(rnd() * CHANNELS.length)];
+      /*
+       * 県は一様にしない。実際の中小企業の台帳は取引先が地域に偏るので、
+       * 一様に散らすと地図が「全部同じ色」になって何も読めない。
+       * 先頭ほど濃くなるよう二乗で寄せる。
+       */
+      const pref = PREFS[Math.floor(rnd() * rnd() * PREFS.length)];
+      // 古い受注ほど先に進んでいる。段階の図が階段状になる。
+      const stage = Math.min(3, Math.floor((5 - back) / 1.6 + rnd() * 1.4));
+      const status = STATUSES[3 - stage];
       const qty = 1 + Math.floor(rnd() * 24);
       // 単価は品名ごとに固定し、数量で金額が動くようにする。
       const unit = 2400 + ITEMS.indexOf(item) * 3100 + Math.floor(rnd() * 800);
@@ -103,6 +130,8 @@ export function demoSheet(asOf: Date = new Date()): DemoSheet {
         数量: qty,
         金額: unit * qty,
         担当: rep,
+        所在地: pref,
+        ステータス: status,
       });
     }
   }

@@ -21,13 +21,26 @@ describe("① 見本から、値の入った図表が組める", () => {
   const r = buildDemoDashboard(demoSheet(ASOF), undefined, ASOF);
 
   /**
-   * 枚数は意図（DEMO_INTENT = 上に見せる）で 7枚に絞ってある。
-   * 既定の 15枚だとトップページに長すぎ、その先の説明まで誰も辿り着かない。
+   * 枚数は製品の既定（team = 15枚）そのまま。トップページのために絞ると
+   * 「本物と同じ」が嘘になる。一度 exec（7枚）に絞ったら、残ったのは
+   * 棒とドーナツと表だけで、地図・ファネル・サンキー・箱ひげ・折れ線は
+   * 重みの順に落ちていた。長さは画面側の枠で抑える。
    */
-  it("図表が組める（トップページ向けに絞った枚数）", () => {
+  it("図表が組める（製品の既定と同じ枚数）", () => {
     expect(r.reason).toBeNull();
-    expect(r.computed.length).toBeGreaterThan(4);
-    expect(r.computed.length, '長すぎるとページの先まで読まれない').toBeLessThanOrEqual(7);
+    expect(r.computed.length).toBeGreaterThan(10);
+  });
+
+  /**
+   * 見本から、地味な3種類以外も実際に出ること。
+   * 「23種類あります」と書きながら棒とドーナツしか見せないのでは、
+   * 書いてあることの証明にならない。
+   */
+  it("棒・ドーナツ・表以外の図表が出ている", () => {
+    const types = new Set(r.computed.map((c) => c.widget.type));
+    const striking = ["japanmap", "funnel", "sankey", "boxplot", "line", "heatmap", "waterfall"];
+    const hit = striking.filter((t) => types.has(t as never));
+    expect(hit.length, `出ているのは ${[...types].join(",")}`).toBeGreaterThan(1);
   });
 
   it("行と列が揃っている", () => {

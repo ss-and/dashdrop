@@ -27,9 +27,11 @@
  * ファイルが置かれた瞬間に動的 import する。見本は最初からサーバーで
  * 組んで渡してあるので、JavaScript が動く前から画面に出ている。
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, useTransition } from "react";
 import { DashboardGrid } from "@/components/dashboard/DashboardGrid";
 import type { WidgetSpec, WidgetData } from "@/lib/widgets";
+import { LENS_META, DEFAULT_INTENT, type Lens } from "@/lib/dashboard-intent";
+import type { DemoSheet } from "@/lib/demo-pipeline";
 
 type Computed = Array<{ widget: WidgetSpec; data: WidgetData }>;
 
@@ -40,6 +42,11 @@ interface Loaded {
   computed: Computed;
   rowCount: number;
   fieldCount: number;
+  /**
+   * 読み込んだ表そのもの。見せ方を切り替えたときに**もう一度組み立て直す**ため、
+   * 結果だけでなく材料を持っておく。見本は毎回作れるので null でよい。
+   */
+  sheet: DemoSheet | null;
 }
 
 /** 4MB。製品の取り込み上限（MAX_IMPORT_BYTES）と同じにしてある。 */
@@ -60,7 +67,11 @@ export function LiveDemo({
     computed: initial,
     rowCount: initialRowCount,
     fieldCount: initialFieldCount,
+    sheet: null,
   });
+  const [lens, setLens] = useState<Lens>("auto");
+  const [pending, startTransition] = useTransition();
+  const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [over, setOver] = useState(false);
@@ -93,11 +104,14 @@ export function LiveDemo({
         name: f.name,
         type: f.type,
       }));
-      const result = buildDemoDashboard({
-        name: sheet.sheetName || file.name.replace(/\.[^.]+$/, ""),
-        fields,
-        rows: sheet.rows,
-      });
+      const result = buildDemoDashboard(
+        {
+          name: sheet.sheetName || file.name.replace(/\.[^.]+$/, ""),
+          fields,
+          rows: sheet.rows,
+        },
+        { ...DEFAULT_INTENT, lens },
+      );
       if (result.reason) {
         setError(result.reason);
         return;
@@ -108,6 +122,7 @@ export function LiveDemo({
         computed: result.computed,
         rowCount: result.rowCount,
         fieldCount: result.fieldCount,
+        sheet: { name: sheet.sheetName || file.name, fields, rows: sheet.rows },
       });
     } catch {
       setError(
@@ -116,7 +131,38 @@ export function LiveDemo({
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [lens]);
+
+  /**
+   * 見せ方（lens）を切り替えて、その場で組み直す。
+   *
+   * ここが「触ってみたい」の核。押すと**実際に図表が入れ替わる**——
+   * 棒とドーナツしか無かった画面に、日本地図やファネルや箱ひげが出る。
+   * 組み立ては純粋関数なので、サーバーに聞きに行かずに終わる。
+   *
+   * 見本のときは材料を持っていないが、`demoSheet()` は決定的なので
+   * その場で作り直せば同じ表になる。
+   */
+  const changeLens = useCallback(
+    async (next: Lens) => {
+      setLens(next);
+      setError(null);
+      const [{ buildDemoDashboard }, { demoSheet }] = await Promise.all([
+        import("@/lib/demo-pipeline"),
+        import("@/lib/demo-sample"),
+      ]);
+      const sheet = loaded.sheet ?? demoSheet();
+      const r = buildDemoDashboard(sheet, { ...DEFAULT_INTENT, lens: next });
+      if (r.reason) {
+        setError(r.reason);
+        return;
+      }
+      startTransition(() => {
+        setLoaded((prev) => ({ ...prev, computed: r.computed }));
+      });
+    },
+    [loaded.sheet],
+  );
 
   const onDrop = useCallback(
     (e: React.DragEvent) => {
@@ -181,15 +227,17 @@ export function LiveDemo({
         {loaded.source === "file" && (
           <button
             type="button"
-            onClick={() =>
+            onClick={() => {
+              setLens("auto");
               setLoaded({
                 source: "sample",
                 label: "売上台帳（見本）",
                 computed: initial,
                 rowCount: initialRowCount,
                 fieldCount: initialFieldCount,
-              })
-            }
+                sheet: null,
+              });
+            }}
             className="rounded px-1.5 py-1 text-2xs text-ink-muted underline underline-offset-2 hover:text-ink"
           >
             見本に戻す
@@ -206,9 +254,64 @@ export function LiveDemo({
         </p>
       )}
 
+      {/* ─── 見せ方の切り替え ─────────────────────────────── */}
+      {/*
+       * 押すと図表がその場で入れ替わる。棒とドーナツしか無かった画面に
+       * 日本地図やファネルや箱ひげが出る。これは説明用の飾りではなく、
+       * 製品にある設定そのもの（src/lib/dashboard-intent.ts）。
+       */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 font-mono text-2xs text-ink-faint">見せ方</span>
+        {LENS_META.map((m) => {
+          const on = m.key === lens;
+          return (
+            <button
+              key={m.key}
+              type="button"
+              onClick={() => void changeLens(m.key)}
+              aria-pressed={on}
+              className={`rounded border px-2.5 py-1 text-2xs font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-khaki-500 ${
+                on
+                  ? "border-khaki-500 bg-khaki-500 text-white"
+                  : "border-ink-line bg-paper-raised text-ink-soft hover:bg-paper-sunken"
+              }`}
+            >
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* ─── 本物のダッシュボード ─────────────────────────── */}
-      <div className="rounded-lg border border-ink-line bg-paper p-3 shadow-raised sm:p-4">
-        <DashboardGrid computed={loaded.computed} />
+      <div className="relative">
+        <div
+          className={`overflow-hidden rounded-lg border border-ink-line bg-paper p-3 shadow-raised transition-[max-height] duration-300 sm:p-4 ${
+            expanded ? "max-h-none" : "max-h-[560px] sm:max-h-[1020px]"
+          }`}
+          style={{ opacity: pending ? 0.6 : 1 }}
+        >
+          <DashboardGrid computed={loaded.computed} />
+        </div>
+        {!expanded && (
+          <>
+            {/*
+             * 下端をぼかして「続きがある」ことを見せる。枚数を減らして
+             * 短くするのではなく、見せ方で抑える——減らすと本物と違うものに
+             * なってしまう。
+             */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 bottom-0 h-28 rounded-b-lg bg-gradient-to-t from-paper-raised to-transparent"
+            />
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded border border-ink-rule bg-paper-raised px-4 py-1.5 text-2xs font-medium text-ink-soft shadow-raised transition-colors hover:bg-paper-sunken focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-khaki-500"
+            >
+              残り {Math.max(0, loaded.computed.length - 9)} 点を表示
+            </button>
+          </>
+        )}
       </div>
 
       <p className="text-2xs leading-relaxed text-ink-faint">
