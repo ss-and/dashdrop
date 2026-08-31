@@ -112,6 +112,63 @@ export function passwordResetMail(url: string, expiresInMinutes: number): Omit<M
   };
 }
 
+/**
+ * お問い合わせの通知（運営者宛）と、受け付けた旨の控え（送信者宛）。
+ *
+ * ## 控えに、本文をそのまま載せない
+ *
+ * 控えは「あなたのアドレス宛に、あなたが書いた内容を返す」形にも書けるが、
+ * **送信元アドレスを詐称した第三者宛の迷惑メール送信**に使われうる。
+ * 差出人が自ドメインになるぶん、こちらのドメインの評判が落ちる。
+ * 控えには**受け付けたことと、こちらの連絡先**だけを書く。
+ *
+ * 運営者宛のほうには本文をそのまま載せる。読むのは運営者だけで、
+ * 内容が要る側だから。
+ */
+export function contactNoticeMail(input: {
+  name: string;
+  company: string;
+  email: string;
+  topic: string;
+  message: string;
+}): Omit<MailInput, "to"> {
+  return {
+    subject: `【DashDrop】お問い合わせ：${input.topic}`,
+    text: [
+      "DashDrop のサイトからお問い合わせがありました。",
+      "",
+      `お名前   : ${input.name}`,
+      `会社名   : ${input.company || "（未記入）"}`,
+      `メール   : ${input.email}`,
+      `ご用件   : ${input.topic}`,
+      "",
+      "── 本文 ──",
+      input.message,
+      "── ここまで ──",
+      "",
+      "返信は上のメールアドレス宛に直接お送りください。",
+    ].join("\n"),
+  };
+}
+
+/** 送信者への控え。本文は載せない（上のコメントを参照）。 */
+export function contactAckMail(name: string): Omit<MailInput, "to"> {
+  return {
+    subject: "【DashDrop】お問い合わせを受け付けました",
+    text: [
+      `${name} 様`,
+      "",
+      "お問い合わせいただきありがとうございます。内容を確認のうえ、",
+      "2営業日以内に担当者よりご返信いたします。",
+      "",
+      "このメールは送信の控えです。返信は不要です。",
+      "お急ぎの場合は、このメールにそのままご返信ください。",
+      "",
+      "DashDrop（S&S合同会社）",
+    ].join("\n"),
+  };
+}
+
 export function emailVerifyMail(url: string, expiresInHours: number): Omit<MailInput, "to"> {
   return {
     subject: "【DashDrop】メールアドレスの確認",

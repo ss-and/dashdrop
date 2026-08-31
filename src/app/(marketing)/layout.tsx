@@ -34,6 +34,12 @@ export default function MarketingLayout({
               >
                 料金
               </Link>
+              <Link
+                href="/contact"
+                className="text-sm font-medium text-ink-soft transition-colors hover:text-ink"
+              >
+                お問い合わせ
+              </Link>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -76,6 +82,12 @@ export default function MarketingLayout({
                   className="text-sm text-ink-soft transition-colors hover:text-ink"
                 >
                   料金
+                </Link>
+                <Link
+                  href="/contact"
+                  className="text-sm text-ink-soft transition-colors hover:text-ink"
+                >
+                  お問い合わせ
                 </Link>
                 <Link
                   href="/login"

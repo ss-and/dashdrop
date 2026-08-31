@@ -212,7 +212,12 @@ export default function LandingPage() {
       </div>
 
       {/* ───────────────────── 何をしているか ───────────────────── */}
-      <div className="border-y border-ink-line bg-paper-raised">
+      {/*
+       * `id="features"` はヘッダの「機能」の行き先。LP を書き直したときに
+       * 元の節ごと消してしまい、**押しても何も起きないリンク**になっていた。
+       * 押した人には「壊れている」としか見えないので、id を持たせ直す。
+       */}
+      <div id="features" className="scroll-mt-16 border-y border-ink-line bg-paper-raised">
         <div className="mx-auto max-w-content border-ink-line px-5 py-16 sm:border-x sm:px-10 sm:py-24 lg:px-14">
           <h2 className="max-w-[24ch] text-[1.875rem] font-light leading-[1.45] tracking-[-0.02em] text-ink sm:text-[2.25rem]">
             置いたあと、何をしているか

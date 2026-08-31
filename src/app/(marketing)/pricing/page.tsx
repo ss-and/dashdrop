@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { cn } from "@/lib/utils";
+import { Aurora } from "@/components/marketing/Aurora";
 
 /**
  * 料金ページ。
@@ -111,32 +112,56 @@ const FAQ = [
 export default function PricingPage() {
   return (
     <div className="animate-fade-in">
-      {/* Header */}
-      <section className="mx-auto max-w-content px-4 pb-10 pt-16 text-center sm:px-6 sm:pt-20 lg:px-8">
-        <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
-          シンプルで、わかりやすい料金
-        </h1>
-        <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-ink-soft">
-          今ご利用いただけるのは、無料の Free プランです。Pro・Business
-          は準備中で、お申し込みの受付はまだ行っていません。
-        </p>
-        {/*
-          Free の線引きは決まっているが、まだ効かせていない。
-          「Pro が必要です」と出したところで申し込む先が無い以上、
-          隠すのは行き止まりを作るだけなので、開始日まで開けてある。
-          隠すことと、いくらで何ができるかを先に決めて見せることは別。
-        */}
-        {!plansEnforced && (
-          <p className="mx-auto mt-4 max-w-xl rounded-md border border-ink-line bg-paper-raised px-4 py-3 text-sm leading-relaxed text-ink-soft">
-            <strong className="font-semibold text-ink">
-              下の Free の上限は、Pro の提供開始に合わせて適用します。
-            </strong>
-            <br />
-            それまでは、Free のまますべての機能を上限なくお試しいただけます。
-            適用の前には必ずご連絡します。
-          </p>
-        )}
-      </section>
+      {/* ───────────────────── 冒頭 ───────────────────── */}
+      {/*
+       * 中央寄せの太い見出しをやめ、トップページと同じ組みにする。
+       * サイトの中でここだけ別の言葉づかいだと、同じ製品の続きに見えない。
+       */}
+      <div className="relative overflow-hidden">
+        <Aurora
+          tone="calm"
+          className="-right-[26%] -top-[55%] h-[190%] w-[86%] sm:-right-[12%] sm:w-[54%]"
+          opacity={0.7}
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "linear-gradient(100deg, var(--paper,#f4f4f2) 0%, var(--paper,#f4f4f2) 38%, rgba(244,244,242,0.86) 50%, rgba(244,244,242,0.3) 62%, transparent 76%)",
+          }}
+        />
+        <div className="relative mx-auto max-w-content border-ink-line px-5 sm:border-x sm:px-10 lg:px-14">
+          <section className="pb-14 pt-20 sm:pb-16 sm:pt-28">
+            <h1 className="max-w-[16ch] text-[2.25rem] font-light leading-[1.3] tracking-[-0.03em] text-ink sm:text-[3rem]">
+              使う分だけ、無理なく。
+            </h1>
+            <p className="mt-7 max-w-[46ch] text-base font-light leading-[1.95] text-ink">
+              いまご利用いただけるのは、無料の Free プランです。
+              <span className="text-ink-faint">
+                　Pro と Business は準備中で、お申し込みの受付はまだ行っていません。
+                値付けだけ先にお伝えします。
+              </span>
+            </p>
+            {/*
+              Free の線引きは決まっているが、まだ効かせていない。
+              「Pro が必要です」と出したところで申し込む先が無い以上、
+              隠すのは行き止まりを作るだけなので、開始日まで開けてある。
+              隠すことと、いくらで何ができるかを先に決めて見せることは別。
+            */}
+            {!plansEnforced && (
+              <p className="mt-8 max-w-[52ch] rounded border-l-2 border-khaki-500 bg-paper-raised px-4 py-3.5 text-sm leading-relaxed text-ink-soft">
+                <strong className="font-medium text-ink">
+                  下の Free の上限は、Pro の提供開始に合わせて適用します。
+                </strong>
+                <br />
+                それまでは、Free のまますべての機能を上限なくお試しいただけます。
+                適用の前には必ずご連絡します。
+              </p>
+            )}
+          </section>
+        </div>
+      </div>
 
       {/* Plan grid */}
       <section className="mx-auto max-w-content px-4 pb-8 sm:px-6 lg:px-8">
@@ -246,30 +271,39 @@ export default function PricingPage() {
 
       {/* FAQ */}
       <section className="mx-auto max-w-content px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
-        <div className="mx-auto max-w-3xl">
-          <h2 className="text-center text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
+        <div className="max-w-3xl">
+          <h2 className="text-[1.875rem] font-light leading-[1.45] tracking-[-0.02em] text-ink sm:text-[2.25rem]">
             よくあるご質問
           </h2>
           <dl className="mt-10 divide-y divide-ink-line border-y border-ink-line">
             {FAQ.map((item) => (
               <div key={item.q} className="py-5">
-                <dt className="text-base font-semibold text-ink">{item.q}</dt>
-                <dd className="mt-2 text-sm leading-relaxed text-ink-soft">
+                <dt className="text-base font-medium text-ink">{item.q}</dt>
+                <dd className="mt-2 text-sm leading-relaxed text-ink-faint">
                   {item.a}
                 </dd>
               </div>
             ))}
           </dl>
 
-          <div className="mt-10 text-center">
-            <p className="text-sm text-ink-soft">
-              まずは無料で、DashDrop を試してみませんか？
-            </p>
-            <div className="mt-4">
-              <Link href="/signup">
-                <Button size="lg">無料で始める</Button>
+          {/*
+           * ここを「無料で始める」だけにすると、迷っている人の行き先が
+           * 無くなる。値段のページで止まる人は、たいてい聞きたいことがある。
+           */}
+          <div className="mt-12 flex flex-wrap items-center gap-4">
+            <Link href="/signup">
+              <Button size="lg">無料で始める</Button>
+            </Link>
+            <p className="text-sm text-ink-faint">
+              判断に迷うところがあれば、
+              <Link
+                href="/contact"
+                className="mx-0.5 text-khaki-700 underline underline-offset-2 hover:text-khaki-600"
+              >
+                お問い合わせ
               </Link>
-            </div>
+              ください。2営業日以内にご返信します。
+            </p>
           </div>
         </div>
       </section>
