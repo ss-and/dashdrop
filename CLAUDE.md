@@ -128,3 +128,16 @@ Playwright で**撮って目で見る**。iPhone 13（390px）で必ず1周す�
 - `vercel.json` の cron は **Vercel Hobby ではデプロイが失敗する**（1日1回まで）
 - `ANTHROPIC_API_KEY` を入れるなら、Console で月次上限を設定すること
   （上限が無いと1ワークスペースで月5万円まで理論上到達しうる）
+
+## Vercel の CLI が作る `.env.local` に注意
+
+`vercel link` と `vercel integration add` は `.env.local` を**勝手に作る・上書きする**。
+中には Neon の `DATABASE_URL`（本番の接続先）が入る。Next.js は `.env.local` を
+`.env` より**優先して**読むので、置いたままにすると手元の `npm run dev` が
+本番のDBを見に行く。CLI を叩いたあとは消すこと。
+
+  rm -f .env.local
+
+必要なら `vercel env pull <別名>` で、Next.js が読まない名前に出す。
+同じ理由で本番用の値は `.env.vercel` に置いている（`.env.production` は
+Next.js が本番ビルド時に自動で読む予約名）。
