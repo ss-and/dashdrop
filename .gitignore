@@ -65,3 +65,8 @@ tests/*.scratch.test.ts
 
 # Vercel
 .vercel
+
+# Vercel Marketplace が入れる agent skills（ツールの生成物）
+.agents/
+.claude/skills/
+skills-lock.json
