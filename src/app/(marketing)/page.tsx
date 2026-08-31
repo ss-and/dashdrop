@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { LiveDemo } from "@/components/marketing/LiveDemo";
+import { Aurora } from "@/components/marketing/Aurora";
 import { demoSheet } from "@/lib/demo-sample";
 import { buildDemoDashboard } from "@/lib/demo-pipeline";
 import { WIDGET_TYPES } from "@/lib/widget-builder";
@@ -46,9 +47,33 @@ export default function LandingPage() {
 
   return (
     <div className="animate-fade-in">
-      {/* カラムの左右に通す細罫。この製品は表の道具なので、罫線は借り物ではない。 */}
-      <div className="mx-auto max-w-content border-ink-line px-5 sm:border-x sm:px-10 lg:px-14">
-        {/* ───────────────────── 冒頭 ───────────────────── */}
+      {/* ───────────────────── 冒頭 ───────────────────── */}
+      <div className="relative overflow-hidden">
+        {/*
+         * 色の面。紙面の右側を大きく覆い、上下に食み出させる。
+         * 使っているのは製品が実際に配っている配色（夕景・葡萄）なので、
+         * 借り物ではない。src/components/marketing/Aurora.tsx を参照。
+         */}
+        <Aurora
+          tone="warm"
+          className="-right-[26%] -top-[45%] h-[180%] w-[92%] sm:-right-[10%] sm:w-[58%]"
+          opacity={0.85}
+        />
+        {/*
+         * 本文の側に紙の膜を掛ける。色の面をここまで強くすると、
+         * 見出しと段落が帯の上に乗って読みにくくなる（実際にそうなった）。
+         * 左から右へ、文字のある範囲だけ紙の色に戻す。
+         */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "linear-gradient(100deg, var(--paper,#f4f4f2) 0%, var(--paper,#f4f4f2) 34%, rgba(244,244,242,0.86) 46%, rgba(244,244,242,0.35) 58%, transparent 72%)",
+          }}
+        />
+        {/* カラムの左右に通す細罫。この製品は表の道具なので、罫線は借り物ではない。 */}
+        <div className="relative mx-auto max-w-content border-ink-line px-5 sm:border-x sm:px-10 lg:px-14">
         <section className="pb-20 pt-24 sm:pb-32 sm:pt-40">
           <p className="font-mono text-2xs tabular-nums tracking-wide text-ink-faint">
             {demo.rowCount.toLocaleString("ja-JP")} 行を読み、
@@ -96,11 +121,17 @@ export default function LandingPage() {
             </Link>
           </div>
         </section>
+        </div>
       </div>
 
       {/* ───────────────────── 実物 ───────────────────── */}
-      <div className="border-y border-ink-line bg-paper-raised">
-        <div className="mx-auto max-w-content border-ink-line px-5 py-12 sm:border-x sm:px-10 sm:py-16 lg:px-14">
+      <div className="relative overflow-hidden border-y border-ink-line bg-paper-sunken">
+        <Aurora
+          tone="calm"
+          className="-left-[22%] -top-[45%] h-[175%] w-[75%] rounded-[50%]"
+          opacity={0.6}
+        />
+        <div className="relative mx-auto max-w-content border-ink-line px-5 py-12 sm:border-x sm:px-10 sm:py-16 lg:px-14">
           <LiveDemo
             initial={demo.computed}
             initialRowCount={demo.rowCount}
@@ -109,24 +140,74 @@ export default function LandingPage() {
         </div>
       </div>
 
-      {/* ───────────────────── 実測の数字 ───────────────────── */}
+      {/* ───────────────────── 実測の数字（暗い帯） ───────────────────── */}
+      {/*
+       * 紙面に明暗の動きを作る。参考にした紙面は、白い面が続いたあとに
+       * 濃い面へ落ちて、そこで数字を大きく見せていた。ずっと同じ明るさだと
+       * 「1枚の長い文書」に見えて、どこが節目か分からなくなる。
+       */}
+      <div className="relative overflow-hidden bg-ink">
+        <Aurora
+          tone="deep"
+          className="-right-[16%] -top-[85%] h-[250%] w-[78%] rounded-[50%]"
+          opacity={0.75}
+        />
+        <div className="relative mx-auto max-w-content border-white/10 px-5 sm:border-x sm:px-10 lg:px-14">
+          <section className="grid gap-10 py-16 sm:grid-cols-2 sm:py-24 lg:grid-cols-4">
+            {[
+              ["5万行", "1つのシートに取り込める行数"],
+              [`${WIDGET_TYPES.length}種類`, "選べる図表。当たらないものは出しません"],
+              ["15分", "しきい値を確認する間隔"],
+              ["0件", "デモでファイルを置いたときの通信"],
+            ].map(([n, note]) => (
+              <div key={note} className="flex flex-col gap-2.5">
+                <span className="text-[2.25rem] font-light leading-none tracking-[-0.03em] text-paper">
+                  {n}
+                </span>
+                <span className="max-w-[22ch] text-sm leading-relaxed text-paper/55">
+                  {note}
+                </span>
+              </div>
+            ))}
+          </section>
+        </div>
+      </div>
+
+      {/* ───────────────────── 外に出さない ───────────────────── */}
+      {/*
+       * ここには一度、実画面を切り取って色の地に重ねた「場面カード」を4枚
+       * 並べた。参考にした紙面がそうしていたため。**外した。**
+       *
+       * 理由は出来。KPIの見出しが幅不足で1文字ずつ縦に折り返し、色の地は
+       * 濁った染みになり、白いカードが白い地の上に浮いて構図が成立しなかった。
+       * あちらの場面が成立するのは、1枚ごとに絵を作り込んでいるからで、
+       * 断片を置けば同じになるものではない。
+       *
+       * この製品には、切り取った絵より強いものが既にある——上で本当に
+       * 動いているダッシュボード。作り込めていない飾りを足すより、
+       * そちらに寄せるほうが正しい。
+       */}
       <div className="mx-auto max-w-content border-ink-line px-5 sm:border-x sm:px-10 lg:px-14">
-        <section className="grid gap-10 py-16 sm:grid-cols-2 sm:py-20 lg:grid-cols-4">
-          {[
-            ["5万行", "1つのシートに取り込める行数"],
-            [`${WIDGET_TYPES.length}種類`, "選べる図表。当たらないものは出しません"],
-            ["15分", "しきい値の確認の間隔"],
-            ["0件", "デモでファイルを置いたときの通信"],
-          ].map(([n, note]) => (
-            <div key={note} className="flex flex-col gap-2">
-              <span className="text-[2rem] font-light leading-none tracking-[-0.02em] text-ink">
-                {n}
+        <section className="py-16 sm:py-24">
+          <h2 className="max-w-[24ch] text-[1.875rem] font-light leading-[1.45] tracking-[-0.02em] text-ink sm:text-[2.25rem]">
+            表を、外に出さずに済ませる
+          </h2>
+          <div className="mt-8 flex max-w-[52ch] flex-col gap-6 text-base font-light leading-[2] text-ink">
+            <p>
+              売上や取引先の一覧をチャットに貼るのが気持ち悪い、というのは正しい感覚です。
+              <span className="text-ink-faint">
+                　上のデモに置いたファイルは、実際にどこにも送っていません。読み取りも
+                集計も、すべてお使いの端末の中で終わっています。ページの読み込み後は
+                通信も発生していないので、開発者ツールの通信欄で確かめられます。
               </span>
-              <span className="max-w-[22ch] text-sm leading-relaxed text-ink-faint">
-                {note}
+            </p>
+            <p>
+              登録して使う場合は、取り込んだデータを保管します。
+              <span className="text-ink-faint">
+                　所有権はお客様のもので、いつでも Excel に書き出せます。囲い込みません。
               </span>
-            </div>
-          ))}
+            </p>
+          </div>
         </section>
       </div>
 
@@ -193,31 +274,6 @@ export default function LandingPage() {
             </div>
           </div>
         </div>
-      </div>
-
-      {/* ───────────────────── 外に出さない ───────────────────── */}
-      <div className="mx-auto max-w-content border-ink-line px-5 sm:border-x sm:px-10 lg:px-14">
-        <section className="py-16 sm:py-24">
-          <h2 className="max-w-[24ch] text-[1.875rem] font-light leading-[1.45] tracking-[-0.02em] text-ink sm:text-[2.25rem]">
-            表を、外に出さずに済ませる
-          </h2>
-          <div className="mt-8 flex max-w-[52ch] flex-col gap-6 text-base font-light leading-[2] text-ink">
-            <p>
-              売上や取引先の一覧をチャットに貼るのが気持ち悪い、というのは正しい感覚です。
-              <span className="text-ink-faint">
-                　上のデモに置いたファイルは、実際にどこにも送っていません。読み取りも
-                集計も、すべてお使いの端末の中で終わっています。ページの読み込み後は
-                通信も発生していないので、開発者ツールの通信欄で確かめられます。
-              </span>
-            </p>
-            <p>
-              登録して使う場合は、取り込んだデータを保管します。
-              <span className="text-ink-faint">
-                　所有権はお客様のもので、いつでも Excel に書き出せます。囲い込みません。
-              </span>
-            </p>
-          </div>
-        </section>
       </div>
 
       {/* ───────────────────── 締め ───────────────────── */}
