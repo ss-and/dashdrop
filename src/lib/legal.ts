@@ -29,7 +29,7 @@ export const SERVICE_NAME = "DashDrop";
 export const COMMERCE_ENTRIES: LegalEntry[] = [
   { label: "販売事業者", value: "S&S合同会社", required: true },
   { label: "運営統括責任者", value: "境野 竣介", required: true },
-  { label: "所在地", value: "", required: true, note: "請求があれば遅滞なく開示する旨の記載でも可" },
+  { label: "所在地", value: "東京都渋谷区道玄坂1丁目10番8号 渋谷道玄坂東急ビル2F-C", required: true },
   { label: "電話番号", value: "", required: true, note: "請求があれば遅滞なく開示する旨の記載でも可" },
   { label: "メールアドレス", value: "ssakaino@ss-and.com", required: true },
   { label: "販売価格", value: "料金ページに記載の金額（消費税込み）", required: true },
