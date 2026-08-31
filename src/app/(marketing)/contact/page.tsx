@@ -40,7 +40,7 @@ export default function ContactPage() {
         <div className="relative mx-auto max-w-content border-ink-line px-5 sm:border-x sm:px-10 lg:px-14">
           <div className="grid gap-12 pb-20 pt-20 sm:pb-28 sm:pt-28 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)] lg:gap-16">
             <div>
-              <h1 className="max-w-[16ch] text-[2.25rem] font-light leading-[1.3] tracking-[-0.03em] text-ink sm:text-[3rem]">
+              <h1 className="max-w-[16ch] font-display text-[2.25rem] font-light leading-[1.3] tracking-[-0.03em] text-ink sm:text-[3rem]">
                 まず、聞いてください。
               </h1>
               <p className="mt-7 max-w-[38ch] text-base font-light leading-[1.95] text-ink">

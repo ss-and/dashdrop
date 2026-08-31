@@ -85,6 +85,19 @@ const config: Config = {
         xl: "8px",
       },
       fontFamily: {
+        /*
+         * 見出し用。Inter は日本語を持たないので、大きく組むほど端末まかせの
+         * ゴシックが出て、設計した顔にならなかった（Mac はヒラギノ、
+         * Windows は游ゴシック）。Zen Kaku Gothic New は日本語を持つ。
+         * **見出しにだけ**当てる。本文まで替えると読む速さが落ちる。
+         */
+        display: [
+          "var(--font-display)",
+          "Zen Kaku Gothic New",
+          "Hiragino Kaku Gothic ProN",
+          "Yu Gothic",
+          "sans-serif",
+        ],
         sans: [
           "var(--font-sans)",
           "Inter",

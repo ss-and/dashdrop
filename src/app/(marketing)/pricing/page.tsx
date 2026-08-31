@@ -133,7 +133,7 @@ export default function PricingPage() {
         />
         <div className="relative mx-auto max-w-content border-ink-line px-5 sm:border-x sm:px-10 lg:px-14">
           <section className="pb-14 pt-20 sm:pb-16 sm:pt-28">
-            <h1 className="max-w-[16ch] text-[2.25rem] font-light leading-[1.3] tracking-[-0.03em] text-ink sm:text-[3rem]">
+            <h1 className="max-w-[16ch] font-display text-[2.25rem] font-light leading-[1.3] tracking-[-0.03em] text-ink sm:text-[3rem]">
               使う分だけ、無理なく。
             </h1>
             <p className="mt-7 max-w-[46ch] text-base font-light leading-[1.95] text-ink">
@@ -272,7 +272,7 @@ export default function PricingPage() {
       {/* FAQ */}
       <section className="mx-auto max-w-content px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
         <div className="max-w-3xl">
-          <h2 className="text-[1.875rem] font-light leading-[1.45] tracking-[-0.02em] text-ink sm:text-[2.25rem]">
+          <h2 className="font-display text-[1.875rem] font-light leading-[1.45] tracking-[-0.02em] text-ink sm:text-[2.25rem]">
             よくあるご質問
           </h2>
           <dl className="mt-10 divide-y divide-ink-line border-y border-ink-line">

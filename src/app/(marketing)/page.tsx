@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { LiveDemo } from "@/components/marketing/LiveDemo";
 import { Aurora } from "@/components/marketing/Aurora";
+import { GridField } from "@/components/marketing/GridField";
 import { Highlights } from "@/components/marketing/Highlights";
 import { Reveal } from "@/components/marketing/Reveal";
 import { demoSheet } from "@/lib/demo-sample";
@@ -41,87 +42,92 @@ import { buildDemoDashboard } from "@/lib/demo-pipeline";
 export const revalidate = 3600;
 
 export default function LandingPage() {
-  // 組み立てにかかった時間を実測する。主張ではなく計測値を先に出すため。
-  const t0 = performance.now();
   const demo = buildDemoDashboard(demoSheet());
-  const ms = Math.max(1, Math.round(performance.now() - t0));
 
   return (
     <div className="animate-fade-in">
       {/* ───────────────────── 冒頭 ───────────────────── */}
       <div className="relative overflow-hidden">
         {/*
-         * 色の面。紙面の右側を大きく覆い、上下に食み出させる。
-         * 使っているのは製品が実際に配っている配色（夕景・葡萄）なので、
-         * 借り物ではない。src/components/marketing/Aurora.tsx を参照。
+         * 色の面。**藍・青緑・藤**に寄せた。前は錆びた赤橙で、指摘のとおり
+         * 温かいが古く見えた。使っているのは src/lib/palette.ts の「藍」の
+         * 実値なので、借り物ではない。
          */}
         <Aurora
-          tone="warm"
-          className="-right-[26%] -top-[45%] h-[180%] w-[92%] sm:-right-[10%] sm:w-[58%]"
-          opacity={0.85}
+          tone="cool"
+          className="-right-[24%] -top-[48%] h-[185%] w-[92%] sm:-right-[8%] sm:w-[60%]"
+          opacity={0.8}
         />
         {/*
-         * 本文の側に紙の膜を掛ける。色の面をここまで強くすると、
-         * 見出しと段落が帯の上に乗って読みにくくなる（実際にそうなった）。
-         * 左から右へ、文字のある範囲だけ紙の色に戻す。
+         * 細い方眼。ぼかしだけだと拡大した写真のようで、何の製品の紙面か
+         * 分からない。輪郭のはっきりした直線が入ると精度の印象が出る。
+         * 表計算の道具なので、方眼は借り物ではない。
          */}
+        <GridField
+          className="inset-0"
+          size={64}
+          color="rgba(28,27,23,0.085)"
+        />
+        {/* 本文の側に紙の膜。色を強くすると見出しが帯に乗って読めなくなる。 */}
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "linear-gradient(100deg, var(--paper,#f4f4f2) 0%, var(--paper,#f4f4f2) 34%, rgba(244,244,242,0.86) 46%, rgba(244,244,242,0.35) 58%, transparent 72%)",
+              "linear-gradient(100deg, var(--paper,#f4f4f2) 0%, var(--paper,#f4f4f2) 32%, rgba(244,244,242,0.88) 46%, rgba(244,244,242,0.36) 60%, transparent 76%)",
           }}
         />
-        {/* カラムの左右に通す細罫。この製品は表の道具なので、罫線は借り物ではない。 */}
         <div className="relative mx-auto max-w-content border-ink-line px-5 sm:border-x sm:px-10 lg:px-14">
-        <section className="pb-20 pt-24 sm:pb-32 sm:pt-40">
-          <p className="font-mono text-2xs tabular-nums tracking-wide text-ink-faint">
-            {demo.rowCount.toLocaleString("ja-JP")} 行を読み、
-            {demo.computed.length} 点の図表を選ぶまで： {ms} ミリ秒
-          </p>
-
-          {/*
-           * 右側の余白を、飾りではなく**文字**で埋める。Stripe はここに
-           * 大きなグラデーションを置いているが、それを持ち込むと
-           * 「AI感が強い」と言われた元の問題（中身と無関係の器）に戻る。
-           * 見出しの級数を上げて、字そのものに面を持たせる。
-           */}
-          <h1 className="mt-8 text-[2.5rem] font-light leading-[1.24] tracking-[-0.035em] text-ink sm:text-[3.5rem] lg:text-[4.25rem]">
-            その Excel を、
-            <br />
-            そのまま置いてください。
-          </h1>
-
-          <p className="mt-9 max-w-[54ch] text-lg font-light leading-[1.95] text-ink">
-            列の意味を読み取って、ダッシュボードにします。
-            <span className="text-ink-faint">
-              　設定も、学習も、テンプレート選びも要りません。下にあるのは
-              説明用の絵ではなく、いま組み立てた実物です。
-            </span>
-          </p>
-
-          <div className="mt-12 flex flex-wrap items-center gap-3">
-            <Link
-              href="/signup"
-              className="inline-flex items-center gap-1.5 rounded bg-khaki-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-khaki-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-khaki-500"
-            >
-              無料で始める
-              <span aria-hidden="true" className="text-ink-line">
-                ›
+          <section className="pb-20 pt-24 sm:pb-32 sm:pt-40">
+            {/*
+             * ここには「217行を読み、7点の図表を選ぶまで 19ミリ秒」と
+             * 出していた。**伝わらない**——相手は従業員20〜50人の会社の
+             * 経営者と事務で、ミリ秒は速さの単位として身体に入っていない。
+             * 数字を捨てて、いま何が起きているかだけを書く。
+             */}
+            <p className="inline-flex items-center gap-2 rounded-full border border-ink-line bg-paper-raised/80 py-1 pl-2.5 pr-3.5 text-2xs text-ink-soft backdrop-blur">
+              <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-khaki-500 opacity-60 motion-reduce:hidden" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-khaki-500" />
               </span>
-            </Link>
-            <Link
-              href="/pricing"
-              className="inline-flex items-center gap-1.5 rounded border border-ink-rule bg-paper-raised px-5 py-2.5 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-khaki-500"
-            >
-              料金を見る
-              <span aria-hidden="true" className="text-ink-faint">
-                ›
+              下の画面は、いま動いています
+            </p>
+
+            <h1 className="mt-8 font-display text-[2.5rem] font-normal leading-[1.26] tracking-[-0.045em] text-ink sm:text-[3.5rem] lg:text-[4.25rem]">
+              その Excel を、
+              <br />
+              そのまま置いてください。
+            </h1>
+
+            <p className="mt-9 max-w-[54ch] text-lg font-light leading-[1.95] text-ink">
+              列の意味を読み取って、ダッシュボードにします。
+              <span className="text-ink-faint">
+                　設定も、学習も、テンプレート選びも要りません。
+                登録もインストールも不要で、いますぐ下で試せます。
               </span>
-            </Link>
-          </div>
-        </section>
+            </p>
+
+            <div className="mt-12 flex flex-wrap items-center gap-3">
+              <Link
+                href="/signup"
+                className="inline-flex items-center gap-1.5 rounded bg-khaki-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-khaki-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-khaki-500"
+              >
+                無料で始める
+                <span aria-hidden="true" className="text-ink-line">
+                  ›
+                </span>
+              </Link>
+              <Link
+                href="/pricing"
+                className="inline-flex items-center gap-1.5 rounded border border-ink-rule bg-paper-raised px-5 py-2.5 text-sm font-medium text-ink-soft transition-colors hover:bg-paper-sunken focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-khaki-500"
+              >
+                料金を見る
+                <span aria-hidden="true" className="text-ink-faint">
+                  ›
+                </span>
+              </Link>
+            </div>
+          </section>
         </div>
       </div>
 
@@ -158,7 +164,7 @@ export default function LandingPage() {
         <div className="relative mx-auto max-w-content border-white/10 px-5 sm:border-x sm:px-10 lg:px-14">
           <section className="py-16 sm:py-28">
             <Reveal>
-              <h2 className="max-w-[22ch] text-[1.875rem] font-light leading-[1.4] tracking-[-0.025em] text-paper sm:text-[2.5rem]">
+              <h2 className="max-w-[22ch] font-display text-[1.875rem] font-light leading-[1.4] tracking-[-0.025em] text-paper sm:text-[2.5rem]">
                 表を、外に出さずに済ませる
               </h2>
             </Reveal>
@@ -197,7 +203,7 @@ export default function LandingPage() {
       <div id="features" className="scroll-mt-16 border-y border-ink-line bg-paper-sunken">
         <div className="mx-auto max-w-content border-ink-line px-5 py-16 sm:border-x sm:px-10 sm:py-24 lg:px-14">
           <Reveal>
-            <h2 className="max-w-[20ch] text-[1.875rem] font-light leading-[1.4] tracking-[-0.025em] text-ink sm:text-[2.5rem]">
+            <h2 className="max-w-[20ch] font-display text-[1.875rem] font-light leading-[1.4] tracking-[-0.025em] text-ink sm:text-[2.5rem]">
               置いたあと、何が起きるか
             </h2>
           </Reveal>
@@ -223,7 +229,7 @@ export default function LandingPage() {
       {/* ───────────────────── 締め ───────────────────── */}
       <div className="border-t border-ink-line bg-paper-raised">
         <div className="mx-auto max-w-content border-ink-line px-5 py-16 sm:border-x sm:px-10 sm:py-20 lg:px-14">
-          <h2 className="max-w-[20ch] text-[1.875rem] font-light leading-[1.45] tracking-[-0.02em] text-ink sm:text-[2.25rem]">
+          <h2 className="max-w-[20ch] font-display text-[1.875rem] font-light leading-[1.45] tracking-[-0.02em] text-ink sm:text-[2.25rem]">
             今の管理表のまま、はじめられます
           </h2>
           <p className="mt-5 max-w-[44ch] text-base font-light leading-[1.95] text-ink-faint">

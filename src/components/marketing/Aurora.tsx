@@ -23,17 +23,29 @@
 /** src/lib/palette.ts の実際の値。ここを変えるならあちらも見ること。 */
 const SUNSET = ["#a8452f", "#c9772f", "#96773a"] as const;
 const BERRY = ["#6b3a6b", "#a34a7a", "#8a5aa8"] as const;
-const OCEAN = ["#1f4e6b", "#3f9aa8"] as const;
+const OCEAN = ["#1f4e6b", "#3f9aa8", "#6b7fae", "#2f7d6b"] as const;
+/** 「標準」の配色から。ブランド色（khaki）と同系で、地とボタンを結ぶ。 */
+const STANDARD = ["#8a8250", "#4a6d80", "#6b6a8c"] as const;
 
-type Tone = "warm" | "deep" | "calm";
+type Tone = "warm" | "deep" | "calm" | "cool";
 
 const TONES: Record<Tone, readonly string[]> = {
-  // 冒頭。いちばん彩度を上げる場所。
+  /*
+   * 冒頭。指摘は「赤色なのも（微妙）」で、正しかった。錆びた赤橙は
+   * 温かいが**古く**見える。ここは藍・青緑・藤へ寄せる。
+   * どれも src/lib/palette.ts の「藍」の実値で、借り物ではない。
+   */
+  /*
+   * 冷たい側を主にしつつ、khaki と同系の1色（#8a8250）を混ぜる。
+   * 全部を青にすると、ブランド色のボタンだけが地から浮いて見えた。
+   */
+  cool: [OCEAN[1], OCEAN[2], STANDARD[0], OCEAN[3], STANDARD[2]],
+  // 暖色。いまは使っていないが、季節の差し替え用に残す。
   warm: [SUNSET[1], SUNSET[0], BERRY[1], SUNSET[2], BERRY[2]],
   // 濃い帯の上。暗い地に沈まない明度のものだけ。
-  deep: [BERRY[2], OCEAN[1], BERRY[1], SUNSET[1]],
-  // 場面カードの地。1枚だけ強く、あとは淡く。
-  calm: [OCEAN[1], SUNSET[2], OCEAN[0]],
+  deep: [OCEAN[1], BERRY[2], OCEAN[2], OCEAN[3]],
+  // 淡い地。
+  calm: [OCEAN[1], OCEAN[2], OCEAN[0]],
 };
 
 /**
