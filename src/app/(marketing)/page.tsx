@@ -2,7 +2,7 @@ import Link from "next/link";
 import { LiveDemo } from "@/components/marketing/LiveDemo";
 import { Aurora } from "@/components/marketing/Aurora";
 import { GridField } from "@/components/marketing/GridField";
-import { DashboardGrid } from "@/components/dashboard/DashboardGrid";
+import { DropScene } from "@/components/marketing/DropScene";
 import { Highlights } from "@/components/marketing/Highlights";
 import { Reveal } from "@/components/marketing/Reveal";
 import { demoSheet } from "@/lib/demo-sample";
@@ -79,7 +79,7 @@ export default function LandingPage() {
           }}
         />
         <div className="relative mx-auto max-w-content border-ink-line px-5 sm:border-x sm:px-10 lg:px-14">
-          <section className="grid items-center gap-12 pb-14 pt-12 sm:pb-28 sm:pt-24 lg:grid-cols-[minmax(0,1.18fr)_minmax(0,1fr)] lg:gap-10 lg:pb-32 lg:pt-28">
+          <section className="grid items-center gap-10 pb-14 pt-10 sm:pb-24 sm:pt-16 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] lg:gap-14 lg:pb-28 lg:pt-24">
             <div>
             {/*
              * ここには「217行を読み、7点の図表を選ぶまで 19ミリ秒」と
@@ -138,21 +138,19 @@ export default function LandingPage() {
             </div>
 
             {/*
-             * 右の列。長らく**空**で、左に文字・右に色の面だけという偏った
-             * 紙面だった。飾りの絵を足すと最初に言われた「中身と無関係の器」に
-             * 戻るので、置くのは**下のデモと同じ計算結果**——実物そのもの。
+             * 右の列。
              *
-             * 絶対配置で重ねたら見出しの上に乗って文字が読めなくなったので、
-             * 2段組にした。画面の外へ食み出させるのは、全部を見せないことで
-             * 「続きがある」と伝えるため。
+             * ここには本物のダッシュボードを枠で切って置いていたが、**雑だった**
+             * ——金額が「¥31,302,2」と桁の途中で切れ、図表の縁も中途半端に
+             * 落ちていた。切り取りは「続きがある」を伝える手だが、
+             * **数字を途中で切ってはいけない**。読めない数字は壊れて見える。
              *
-             * 狭い画面では出さない。すぐ下に本物が丸ごと出るので二重になり、
-             * 縦だけが伸びる。
+             * 代わりに、製品の説明そのものを図にした（DropScene）。
+             * 落ちてくる表と、その下で組み上がる画面。本物は、すぐ下に
+             * 丸ごと置いてある。
              */}
-            <div className="pointer-events-none hidden lg:block">
-              <div className="w-[calc(100%+7rem)] rounded-lg border border-ink-line bg-paper-raised/95 p-3 shadow-[0_28px_70px_-24px_rgba(28,27,23,0.32)] backdrop-blur-sm xl:w-[calc(100%+10rem)]">
-                <DashboardGrid computed={demo.computed.slice(0, 6)} />
-              </div>
+            <div className="mx-auto w-full max-w-md lg:max-w-none">
+              <DropScene className="w-full" />
             </div>
           </section>
         </div>
